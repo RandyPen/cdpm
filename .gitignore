@@ -1,0 +1,8 @@
+build/*
+traces/*
+.trace
+.coverage*
+Pub.*.toml
+/tests
+*.md
+Move.lock
