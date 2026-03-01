@@ -4,3 +4,4 @@ traces/*
 .coverage*
 Pub.*.toml
 /tests
+*.md
