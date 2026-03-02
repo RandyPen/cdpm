@@ -2,7 +2,7 @@
 
 ## Architecture Overview
 
-CDPM (Cetus DLMM Position Manager) is a proxy contract that sits between users and the Cetus DLMM protocol, providing additional functionality for liquidity management delegation, fee collection, and emergency handling.
+CDPM (Cetus DLMM Position Manager) is a proxy contract that sits between users and the Cetus DLMM protocol, providing additional functionality for liquidity management delegation, fee collection.
 
 ### System Architecture
 ```
@@ -28,8 +28,7 @@ CDPM (Cetus DLMM Position Manager) is a proxy contract that sits between users a
 1. **Proxy Pattern**: CDPM acts as a proxy, managing user positions in Cetus DLMM
 2. **Permission Separation**: Clear boundaries between different actor types
 3. **Fee Extraction**: Protocol earns fees on managed operations
-4. **Emergency Recovery**: Safety mechanisms for dependency upgrades
-5. **Event-Driven**: Comprehensive event emission for off-chain monitoring
+4. **Event-Driven**: Comprehensive event emission for off-chain monitoring
 
 ## Data Structures
 
@@ -156,7 +155,6 @@ public struct Record has key {
 - Add/remove liquidity (using balance, with protocol fee)
 - Collect fees/rewards (with protocol fee deduction)
 - Transfer fees from fee bag to balance
-- Emergency functions (without fee collection)
 
 **Functions:** All `protocol_*` functions
 
@@ -180,7 +178,6 @@ public struct Record has key {
 | Manage Agents | ✓ | ✗ | ✗ | ✗ |
 | Set Fee Rate | ✗ | ✗ | ✗ | ✓ |
 | Collect Protocol Fees | ✗ | ✗ | ✗ | ✓ |
-| Emergency Functions | ✗ | ✗ | ✓‡ | ✗ |
 
 *With protocol fee deduction
 †To fee bag only
@@ -234,22 +231,6 @@ Agent collects 100 USDC fees
 - **Maximum Fee Rate:** 10000/10000 = 100%
 - **Minimum Fee Rate:** 0/10000 = 0%
 
-## Emergency Functions
-
-### Design Rationale
-CDPM cannot be upgraded (by design). However, its dependency (Cetus DLMM) may need upgrades. Emergency functions allow protocol-managed recovery when Cetus DLMM interfaces change.
-
-### Emergency Operations
-1. **`protocol_close_position_emergency`**: Close position without normal fee collection
-2. **`protocol_collect_fee_emergency`**: Collect fees without protocol fee deduction
-3. **`protocol_collect_reward_emergency`**: Collect rewards without protocol fee deduction
-
-### Security Controls
-- Only accessible by addresses in `AccessList`
-- Bypass normal fee collection logic
-- Designed for dependency upgrade scenarios
-- Ensure user fund safety during transitions
-
 ## Event System
 
 ### Event Categories
@@ -284,16 +265,6 @@ CDPM cannot be upgraded (by design). However, its dependency (Cetus DLMM) may ne
 - `AccessGranted`: Address added to AccessList
 - `AccessRevoked`: Address removed from AccessList
 - `AdminTransferred`: AdminCap transferred
-
-#### 7. Emergency Events
-- `EmergencyPositionClosed`: Position closed via emergency function
-
-### Enhanced Event Data (Recent Improvements)
-All collect-related events now include coin type information:
-- **`FeeCollected`**: Added `coin_type_a`, `coin_type_b`
-- **`ProtocolFeeCollected`**: Added `coin_type_a`, `coin_type_b`
-- **`RewardCollected`**: `reward_type` renamed to `coin_type`
-- **`ProtocolRewardCollected`**: `reward_type` renamed to `coin_type`
 
 ## State Transitions
 
@@ -374,7 +345,7 @@ Suggested categorization:
 
 ### Upgrade Considerations
 1. **Non-Upgradeable**: CDPM contract cannot be upgraded
-2. **Dependency Upgrades**: Handled via emergency functions
+2. **Dependency Upgrades**: Handled via `user_get_position` functions
 3. **Interface Stability**: Cetus DLMM interface changes may break functionality
 4. **Migration Path**: New contract deployment with position migration
 
@@ -397,7 +368,6 @@ Suggested categorization:
 2. **Integration Tests**: Cetus DLMM interaction testing
 3. **Permission Tests**: Boundary testing for all permission levels
 4. **Edge Case Tests**: Fee boundaries, empty states, error conditions
-5. **Emergency Tests**: Dependency upgrade scenario simulation
 
 ### Test Environment
 - Sui testnet/mainnet simulation
