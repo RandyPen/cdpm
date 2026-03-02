@@ -963,6 +963,24 @@ public fun agent_collect_reward<CoinTypeA, CoinTypeB, RewardType>(
     });
 }
 
+public fun agent_transfer_fee_to_balance<T>(
+    pm: &mut PositionManager,
+    amount: u64,
+    clk: &Clock,
+    ctx: &mut TxContext,
+) {
+    assert!(vec_set::contains<address>(&pm.agents, &ctx.sender()), ENotAllow);
+    let fee = withdraw_from_fee<T>(pm, amount, ctx);
+    add_to_balance<T>(pm, fee);
+
+    event::emit(FeeTransferredToBalance {
+        pm_id: object::id(pm),
+        coin_type: type_name::with_defining_ids<T>().into_string(),
+        amount,
+        timestamp: clk.timestamp_ms(),
+    });
+}
+
 // ============ Admin Functions ============
 public fun admin_transfer(
     admin_cap: AdminCap,
