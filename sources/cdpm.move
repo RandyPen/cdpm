@@ -1015,7 +1015,20 @@ public fun admin_set_fee(
     });
 }
 
-public fun admin_collect_fee<T>(
+public fun admin_new_fee_house(
+    _: &AdminCap,
+    fee_rate: u64,
+    ctx: &mut TxContext,
+) {
+    let fee_house = FeeHouse {
+        id: object::new(ctx),
+        fee_rate: fee_rate,
+        fee: bag::new(ctx),
+    };
+    transfer::share_object(fee_house);
+}
+
+public fun admin_collect_fee_return_coin<T>(
     _: &AdminCap,
     fee_house: &mut FeeHouse,
     clk: &Clock,
@@ -1034,6 +1047,28 @@ public fun admin_collect_fee<T>(
     });
     
     coin
+}
+
+#[allow(lint(self_transfer))]
+public fun admin_collect_fee<T>(
+    _: &AdminCap,
+    fee_house: &mut FeeHouse,
+    clk: &Clock,
+    ctx: &mut TxContext,
+) {
+    let coin_type = type_name::with_defining_ids<T>().into_string();
+    let coin: Coin<T> = bag::remove<String, Coin<T>>(&mut fee_house.fee, coin_type);
+    let amount = coin.value();
+    
+    event::emit(AdminFeeCollected {
+        fee_house_id: object::id(fee_house),
+        coin_type,
+        amount,
+        admin: ctx.sender(),
+        timestamp: clk.timestamp_ms(),
+    });
+    
+    transfer::public_transfer(coin, ctx.sender());
 }
 
 public fun admin_insert_access_list(
