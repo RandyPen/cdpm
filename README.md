@@ -1,7 +1,7 @@
 # CDPM - Cetus DLMM Position Manager
 
-published at: 0x73459993897586a961ab95e9b4833bca5ab8a25eaf39155470db9cfb1809467b  
-package immutable: G7P9h3DYg4MoHpPaibG6fZ8kSJ3JrzXumJJUniTuVVMT
+published at: 0xcfae3228852e1d6c5596b8765397dc4bc9dcb98279281e0241020ca296436a6b  
+package immutable: FKgszhU7AXsxmUqHeBzZ9avMHkUHnKFRFmiL8zGjCRdb
 
 ## Overview
 
