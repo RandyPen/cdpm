@@ -44,9 +44,9 @@ async function createPositionWithNewRecord(
     ],
   });
   
-  // Step 3: Share the Record
+  // Step 3: Transfer the Record to sender
   tx.moveCall({
-    target: `${CDPM_PACKAGE}::cdpm::share_record`,
+    target: `${CDPM_PACKAGE}::cdpm::transfer_record`,
     arguments: [record],
   });
   

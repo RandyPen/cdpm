@@ -325,10 +325,11 @@ public fun register_and_return_record(
     record
 }
 
-public fun share_record(
-    record: Record
+public fun transfer_record(
+    record: Record,
+    ctx: &TxContext,
 ) {
-    transfer::share_object(record);
+    transfer::transfer(record, ctx.sender());
 }
 
 public fun unregister_record(
@@ -430,7 +431,7 @@ public fun user_deposit_position(
 }
 
 // in case of Cetus DLMM package upgrade
-public fun user_get_position(
+public fun user_get_and_return_position(
     pm: &mut PositionManager,
     clk: &Clock,
     ctx: &TxContext,
@@ -443,6 +444,16 @@ public fun user_get_position(
     });
 
     option::extract(&mut pm.position)
+}
+
+#[allow(lint(self_transfer))]
+public fun user_get_position(
+    pm: &mut PositionManager,
+    clk: &Clock,
+    ctx: &TxContext,
+) {
+    let position = user_get_and_return_position(pm, clk, ctx);
+    transfer::public_transfer(position, ctx.sender());
 }
 
 public fun user_add_liquidity_to_position<CoinTypeA, CoinTypeB>(

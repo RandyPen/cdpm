@@ -9,7 +9,7 @@ description: TypeScript SDK guide for CDPM (Cetus DLMM Position Manager) end-use
 
 CDPM (Cetus DLMM Position Manager) is a proxy contract for managing Cetus DLMM positions with support for user self-management, agent delegation, and protocol-managed operations.
 
-**Package Address**: `0xcfae3228852e1d6c5596b8765397dc4bc9dcb98279281e0241020ca296436a6b`
+**Package Address**: `0xc280a6679edf7d38b1741c8752fefa22d6aa50510856c63aeeb7d918665d9b85`
 
 ## Quick Start
 
@@ -29,7 +29,7 @@ const client = new SuiGrpcClient({
   baseUrl: 'https://fullnode.mainnet.sui.io:443',
   network: 'mainnet',
 });
-const CDPM_PACKAGE = '0xcfae3228852e1d6c5596b8765397dc4bc9dcb98279281e0241020ca296436a6b';
+const CDPM_PACKAGE = '0xc280a6679edf7d38b1741c8752fefa22d6aa50510856c63aeeb7d918665d9b85';
 ```
 
 ## Topics
