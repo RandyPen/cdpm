@@ -30,6 +30,7 @@ import { BinUtils, FeeUtils } from '@cetusprotocol/dlmm-sdk/utils'
 - **[Bin Price Calculations](reference/bin-price-calculations.md)** - Bin ID from price, price from bin ID, Q64x64 price
 - **[Position Management](reference/position-management.md)** - Position count, split bins into positions
 - **[Fee Calculations](reference/fee-calculations.md)** - Variable fee, protocol fee, composition fee
+- **[Position Query](reference/position-query.md)** - Query PositionManager assets, fees, and rewards
 
 ### Advanced Topics
 - **[Price Conversion](reference/price-conversion.md)** - Compare CDPM prices with external exchanges
