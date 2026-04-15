@@ -22,7 +22,6 @@ async function createPositionWithNewRecord(
     target: `${CDPM_PACKAGE}::cdpm::register_and_return_record`,
     arguments: [
       tx.object(globalRecordId), // GlobalRecord shared object
-      tx.object(clockId),        // Clock shared object
     ],
   });
   
@@ -112,7 +111,7 @@ async function getUserRecordId(
     const records = await client.listOwnedObjects({
       owner: userAddress,
       filter: {
-        StructType: '0x88eeadf8fda6381096b12b5c37afef9505f48ab5624fc407e8d80039e8f60035::cdpm::Record',
+        StructType: `${CDPM_PACKAGE}::cdpm::Record`,
       },
       include: { content: false },
     });
@@ -178,23 +177,27 @@ async function closePosition(
 
 ### Monitor User Events
 
+> Event timestamps are available on `SuiEvent.timestampMs`; the on-chain payload no longer includes a `timestamp` field.
+
 ```typescript
 // Position created
 interface PositionManagerCreated {
   pm_id: string;
   owner: string;
-  timestamp: number;
+  pool_id: string;
+  lower_bin_id: { bits: number };
+  upper_bin_id: { bits: number };
+  liquidity_shares: string[];
 }
 
-// Liquidity added
+// Liquidity added (scalar actual amounts consumed by the pool)
 interface LiquidityAdded {
   pm_id: string;
   pool_id: string;
   bins: number[];
-  amounts_a: string[];
-  amounts_b: string[];
+  amount_a: string;  // Actual amount A consumed
+  amount_b: string;  // Actual amount B consumed
   by: string;
-  timestamp: number;
 }
 
 // Subscribe to events

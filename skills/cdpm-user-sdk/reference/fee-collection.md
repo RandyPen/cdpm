@@ -19,7 +19,6 @@ async function collectFees(
       tx.object(poolId),
       tx.object(globalConfigId),
       tx.object(versionedId),
-      tx.object(clockId),
     ],
   });
   
@@ -50,7 +49,6 @@ async function collectRewards(
       tx.object(poolId),
       tx.object(globalConfigId),
       tx.object(versionedId),
-      tx.object(clockId),
     ],
   });
   
@@ -90,7 +88,7 @@ async function withdrawFromFeeBag(
 ## Fee Events
 
 ```typescript
-// Fees collected
+// Fees collected (timestamp available on SuiEvent.timestampMs envelope)
 interface FeeCollected {
   pm_id: string;
   pool_id: string;
@@ -99,7 +97,6 @@ interface FeeCollected {
   amount_a: string;
   amount_b: string;
   by: string;
-  timestamp: number;
 }
 
 // Subscribe to fee events

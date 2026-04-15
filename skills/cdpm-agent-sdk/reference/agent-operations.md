@@ -151,7 +151,6 @@ async function agentCollectFees(
       tx.object(poolId),
       tx.object(globalConfigId),
       tx.object(versionedId),
-      tx.object(clockId),
     ],
   });
   
@@ -194,7 +193,6 @@ async function agentCollectRewards(
       tx.object(poolId),
       tx.object(globalConfigId),
       tx.object(versionedId),
-      tx.object(clockId),
     ],
   });
   
@@ -236,7 +234,6 @@ async function agentTransferFeeToBalance(
     arguments: [
       tx.object(pmId),
       tx.pure.u64(amount),
-      tx.object(clockId),
     ],
   });
   

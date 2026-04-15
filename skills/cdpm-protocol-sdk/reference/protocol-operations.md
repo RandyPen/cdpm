@@ -105,7 +105,6 @@ async function protocolCollectFees(
       tx.object(poolId),
       tx.object(globalConfigId),
       tx.object(versionedId),
-      tx.object(clockId),
     ],
   });
   

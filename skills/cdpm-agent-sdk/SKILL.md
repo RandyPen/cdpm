@@ -9,7 +9,7 @@ description: TypeScript SDK guide for AI agents managing CDPM positions. Defines
 
 This guide is for AI agents authorized to manage CDPM positions on behalf of users. Agents have limited permissions and operate within specific boundaries.
 
-**Package Address**: `0xc280a6679edf7d38b1741c8752fefa22d6aa50510856c63aeeb7d918665d9b85`
+**Package Address**: `0xb77692e0e6bc5f0ac5239cf2e11efccc4bcbcf7129f972f661a63f4afffb8faa`
 
 ```typescript
 import { Transaction } from '@mysten/sui/transactions';

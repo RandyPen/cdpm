@@ -19,7 +19,7 @@ import { normalizeStructTag, parseStructTag } from '@mysten/sui/utils';
 import { dlmmMainnet } from '@cetusprotocol/dlmm-sdk';
 
 // Constants
-const CDPM_PACKAGE = '0xc280a6679edf7d38b1741c8752fefa22d6aa50510856c63aeeb7d918665d9b85';
+const CDPM_PACKAGE = '0xb77692e0e6bc5f0ac5239cf2e11efccc4bcbcf7129f972f661a63f4afffb8faa';
 const CETUS_MAINNET = {
   VERSIONED_ID: '0x05370b2d656612dd5759cbe80463de301e3b94a921dfc72dd9daa2ecdeb2d0a8',
 };

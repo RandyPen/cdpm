@@ -54,7 +54,6 @@ async function batchOperations(
             tx.object(op.params.poolId),
             tx.object(globalConfigId),
             tx.object(versionedId),
-            tx.object(clockId),
           ],
         });
         break;
