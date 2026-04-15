@@ -56,7 +56,7 @@ public struct GlobalRecord has key {
 
 public struct Record has key {
     id: UID,
-    record: VecSet<ID>,
+    record: Table<ID, bool>,
 }
 
 // ============ Event Structures ============
@@ -287,7 +287,7 @@ public fun register_and_return_record(
 ): Record {
     let record = Record {
         id: object::new(ctx),
-        record: vec_set::empty<ID>(),
+        record: table::new<ID, bool>(ctx),
     };
     let record_id = object::id(&record);
     table::add(&mut global_record.record, ctx.sender(), record_id);
@@ -313,7 +313,7 @@ public fun unregister_record(
     ctx: &TxContext,
 ) {
     let Record { id, record } = record;
-    assert!(vec_set::is_empty(&record), ENotAllow);
+    record.destroy_empty();
     id.delete();
     let record_id = table::remove(&mut global_record.record, ctx.sender());
 
@@ -371,7 +371,7 @@ public fun user_deposit_liquidity<CoinTypeA, CoinTypeB>(
         fee: bag::new(ctx),
     };
     let pm_id = object::id(&pm);
-    vec_set::insert(&mut record.record, pm_id);
+    table::add(&mut record.record, pm_id, true);
     transfer::share_object(pm);
     
     event::emit(PositionManagerCreated {
@@ -402,7 +402,7 @@ public fun user_deposit_position(
         fee: bag::new(ctx),
     };
     let pm_id = object::id(&pm);
-    vec_set::insert(&mut record.record, pm_id);
+    table::add(&mut record.record, pm_id, true);
     transfer::share_object(pm);
 
     event::emit(PositionManagerCreated {
@@ -661,7 +661,7 @@ public fun user_close_pm<CoinTypeA, CoinTypeB>(
 ) {
     assert!(pm.owner == ctx.sender(), ENotOwner);
     let pm_id = object::id(&pm);
-    vec_set::remove(&mut record.record, &pm_id);
+    table::remove<ID, bool>(&mut record.record, pm_id);
 
     let PositionManager { id, owner, agents: _, position, balance, fee } = pm;
 
