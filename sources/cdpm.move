@@ -12,14 +12,17 @@ use sui::table::{Self, Table};
 use sui::clock::Clock;
 
 use cetusdlmm::pool::{Self, Pool};
-use cetusdlmm::position::{Position};
+use cetusdlmm::position::{Self, Position};
 use cetusdlmm::versioned::Versioned;
 use cetusdlmm::config::GlobalConfig;
 
+use integer_mate::i32::I32;
+
 const FEE_DENOMINATOR: u128 = 10000;
 
-const ENotOwner: u64 =  1001;
-const ENotAllow: u64 =  1002;
+const ENotOwner: u64        = 1001;
+const ENotAllow: u64        = 1002;
+const EInvalidFeeRate: u64  = 1003;
 
 // ============ Data Structures ============
 public struct AccessList has key {
@@ -31,14 +34,12 @@ public struct AdminCap has key {
     id: UID,
 }
 
-#[allow(unused_field)]
 public struct FeeHouse has key {
     id: UID,
     fee_rate: u64,
     fee: Bag,
 }
 
-#[allow(unused_field)]
 public struct PositionManager has key {
     id: UID,
     owner: address,
@@ -55,36 +56,36 @@ public struct GlobalRecord has key {
 
 public struct Record has key {
     id: UID,
-    record: Table<ID, bool>,
+    record: VecSet<ID>,
 }
 
 // ============ Event Structures ============
 public struct PositionManagerCreated has copy, drop {
     pm_id: ID,
     owner: address,
-    timestamp: u64,
+    pool_id: ID,
+    lower_bin_id: I32,
+    upper_bin_id: I32,
+    liquidity_shares: vector<u128>,
 }
 
 public struct PositionExtract has copy, drop {
     pm_id: ID,
     owner: address,
-    timestamp: u64,
 }
 
 public struct PositionManagerClosed has copy, drop {
     pm_id: ID,
     owner: address,
-    timestamp: u64,
 }
 
 public struct LiquidityAdded has copy, drop {
     pm_id: ID,
     pool_id: ID,
     bins: vector<u32>,
-    amounts_a: vector<u64>,
-    amounts_b: vector<u64>,
+    amount_a: u64,
+    amount_b: u64,
     by: address,
-    timestamp: u64,
 }
 
 public struct LiquidityRemoved has copy, drop {
@@ -93,7 +94,6 @@ public struct LiquidityRemoved has copy, drop {
     bins: vector<u32>,
     liquidity_shares: vector<u128>,
     by: address,
-    timestamp: u64,
 }
 
 public struct FeeCollected has copy, drop {
@@ -104,7 +104,6 @@ public struct FeeCollected has copy, drop {
     amount_a: u64,
     amount_b: u64,
     by: address,
-    timestamp: u64,
 }
 
 public struct RewardCollected has copy, drop {
@@ -113,7 +112,6 @@ public struct RewardCollected has copy, drop {
     coin_type: String,
     amount: u64,
     by: address,
-    timestamp: u64,
 }
 
 public struct ProtocolFeeCollected has copy, drop {
@@ -125,7 +123,6 @@ public struct ProtocolFeeCollected has copy, drop {
     amount_b: u64,
     fee_a: u64,
     fee_b: u64,
-    timestamp: u64,
 }
 
 public struct ProtocolRewardCollected has copy, drop {
@@ -134,28 +131,24 @@ public struct ProtocolRewardCollected has copy, drop {
     coin_type: String,
     amount: u64,
     fee_amount: u64,
-    timestamp: u64,
 }
 
 public struct BalanceDeposited has copy, drop {
     pm_id: ID,
     coin_type: String,
     amount: u64,
-    timestamp: u64,
 }
 
 public struct BalanceWithdrawn has copy, drop {
     pm_id: ID,
     coin_type: String,
     amount: u64,
-    timestamp: u64,
 }
 
 public struct UserFeeWithdrawn has copy, drop {
     pm_id: ID,
     coin_type: String,
     amount: u64,
-    timestamp: u64,
 }
 
 public struct AdminFeeCollected has copy, drop {
@@ -163,73 +156,62 @@ public struct AdminFeeCollected has copy, drop {
     coin_type: String,
     amount: u64,
     admin: address,
-    timestamp: u64,
 }
 
 public struct FeeTransferredToBalance has copy, drop {
     pm_id: ID,
     coin_type: String,
     amount: u64,
-    timestamp: u64,
 }
 
 public struct AgentAdded has copy, drop {
     pm_id: ID,
     agent: address,
-    timestamp: u64,
 }
 
 public struct AgentRemoved has copy, drop {
     pm_id: ID,
     agent: address,
-    timestamp: u64,
 }
 
 public struct FeeRateUpdated has copy, drop {
     fee_house_id: ID,
     old_fee_rate: u64,
     new_fee_rate: u64,
-    timestamp: u64,
 }
 
 public struct AccessGranted has copy, drop {
     access_list_id: ID,
     address: address,
-    timestamp: u64,
 }
 
 public struct AccessRevoked has copy, drop {
     access_list_id: ID,
     address: address,
-    timestamp: u64,
 }
 
 public struct AdminTransferred has copy, drop {
     from: address,
     to: address,
-    timestamp: u64,
 }
 
 public struct RecordCreated has copy, drop {
     record_id: ID,
     owner: address,
-    timestamp: u64,
 }
 
 public struct RecordDeleted has copy, drop {
     record_id: ID,
     owner: address,
-    timestamp: u64,
 }
 
 public struct ProtocolLiquidityAdded has copy, drop {
     pm_id: ID,
     pool_id: ID,
     bins: vector<u32>,
-    amounts_a: vector<u64>,
-    amounts_b: vector<u64>,
+    amount_a: u64,
+    amount_b: u64,
     by: address,
-    timestamp: u64,
 }
 
 public struct ProtocolLiquidityRemoved has copy, drop {
@@ -238,17 +220,15 @@ public struct ProtocolLiquidityRemoved has copy, drop {
     bins: vector<u32>,
     liquidity_shares: vector<u128>,
     by: address,
-    timestamp: u64,
 }
 
 public struct AgentLiquidityAdded has copy, drop {
     pm_id: ID,
     pool_id: ID,
     bins: vector<u32>,
-    amounts_a: vector<u64>,
-    amounts_b: vector<u64>,
+    amount_a: u64,
+    amount_b: u64,
     by: address,
-    timestamp: u64,
 }
 
 public struct AgentLiquidityRemoved has copy, drop {
@@ -257,7 +237,6 @@ public struct AgentLiquidityRemoved has copy, drop {
     bins: vector<u32>,
     liquidity_shares: vector<u128>,
     by: address,
-    timestamp: u64,
 }
 
 public struct AgentFeeCollected has copy, drop {
@@ -268,7 +247,6 @@ public struct AgentFeeCollected has copy, drop {
     amount_a: u64,
     amount_b: u64,
     by: address,
-    timestamp: u64,
 }
 
 public struct AgentRewardCollected has copy, drop {
@@ -277,7 +255,6 @@ public struct AgentRewardCollected has copy, drop {
     coin_type: String,
     amount: u64,
     by: address,
-    timestamp: u64,
 }
 
 fun init(ctx: &mut TxContext) {
@@ -306,22 +283,20 @@ fun init(ctx: &mut TxContext) {
 
 public fun register_and_return_record(
     global_record: &mut GlobalRecord,
-    clk: &Clock,
     ctx: &mut TxContext,
 ): Record {
     let record = Record {
         id: object::new(ctx),
-        record: table::new<ID, bool>(ctx),
+        record: vec_set::empty<ID>(),
     };
     let record_id = object::id(&record);
     table::add(&mut global_record.record, ctx.sender(), record_id);
-    
+
     event::emit(RecordCreated {
         record_id,
         owner: ctx.sender(),
-        timestamp: clk.timestamp_ms(),
     });
-    
+
     record
 }
 
@@ -335,18 +310,16 @@ public fun transfer_record(
 public fun unregister_record(
     global_record: &mut GlobalRecord,
     record: Record,
-    clk: &Clock,
     ctx: &TxContext,
 ) {
     let Record { id, record } = record;
-    record.destroy_empty();
+    assert!(vec_set::is_empty(&record), ENotAllow);
     id.delete();
     let record_id = table::remove(&mut global_record.record, ctx.sender());
 
     event::emit(RecordDeleted {
         record_id,
         owner: ctx.sender(),
-        timestamp: clk.timestamp_ms(),
     });
 }
 
@@ -386,6 +359,9 @@ public fun user_deposit_liquidity<CoinTypeA, CoinTypeB>(
         balance_b,
         versioned,
     );
+    let lower_bin_id = position::lower_bin_id(&position);
+    let upper_bin_id = position::upper_bin_id(&position);
+    let liquidity_shares = position::liquidity_shares(&position);
     let pm = PositionManager {
         id: object::new(ctx),
         owner: ctx.sender(),
@@ -395,22 +371,28 @@ public fun user_deposit_liquidity<CoinTypeA, CoinTypeB>(
         fee: bag::new(ctx),
     };
     let pm_id = object::id(&pm);
-    table::add(&mut record.record, pm_id, true);
+    vec_set::insert(&mut record.record, pm_id);
     transfer::share_object(pm);
     
     event::emit(PositionManagerCreated {
         pm_id,
         owner: ctx.sender(),
-        timestamp: clk.timestamp_ms(),
+        pool_id: object::id(pool),
+        lower_bin_id,
+        upper_bin_id,
+        liquidity_shares,
     });
 }
 
 public fun user_deposit_position(
     record: &mut Record,
     position: Position,
-    clk: &Clock,
     ctx: &mut TxContext,
 ) {
+    let lower_bin_id = position::lower_bin_id(&position);
+    let upper_bin_id = position::upper_bin_id(&position);
+    let liquidity_shares = position::liquidity_shares(&position);
+    let pool_id = position::pool_id(&position);
     let pm = PositionManager {
         id: object::new(ctx),
         owner: ctx.sender(),
@@ -420,27 +402,28 @@ public fun user_deposit_position(
         fee: bag::new(ctx),
     };
     let pm_id = object::id(&pm);
-    table::add(&mut record.record, pm_id, true);
+    vec_set::insert(&mut record.record, pm_id);
     transfer::share_object(pm);
 
     event::emit(PositionManagerCreated {
         pm_id,
         owner: ctx.sender(),
-        timestamp: clk.timestamp_ms(),
+        pool_id,
+        lower_bin_id,
+        upper_bin_id,
+        liquidity_shares,
     });
 }
 
 // in case of Cetus DLMM package upgrade
 public fun user_get_and_return_position(
     pm: &mut PositionManager,
-    clk: &Clock,
     ctx: &TxContext,
 ): Position {
     assert!(pm.owner == ctx.sender(), ENotOwner);
     event::emit(PositionExtract {
         pm_id: object::id(pm),
         owner: ctx.sender(),
-        timestamp: clk.timestamp_ms(),
     });
 
     option::extract(&mut pm.position)
@@ -449,10 +432,9 @@ public fun user_get_and_return_position(
 #[allow(lint(self_transfer))]
 public fun user_get_position(
     pm: &mut PositionManager,
-    clk: &Clock,
     ctx: &TxContext,
 ) {
-    let position = user_get_and_return_position(pm, clk, ctx);
+    let position = user_get_and_return_position(pm, ctx);
     transfer::public_transfer(position, ctx.sender());
 }
 
@@ -471,9 +453,7 @@ public fun user_add_liquidity_to_position<CoinTypeA, CoinTypeB>(
 ) {
     assert!(pm.owner == ctx.sender(), ENotOwner);
     let bins_copy = bins;
-    let amounts_a_copy = amounts_a;
-    let amounts_b_copy = amounts_b;
-    add_liquidity_private(
+    let (amount_a, amount_b) = add_liquidity_private(
         pm,
         pool,
         coin_a,
@@ -486,15 +466,14 @@ public fun user_add_liquidity_to_position<CoinTypeA, CoinTypeB>(
         clk,
         ctx,
     );
-    
+
     event::emit(LiquidityAdded {
         pm_id: object::id(pm),
         pool_id: object::id(pool),
         bins: bins_copy,
-        amounts_a: amounts_a_copy,
-        amounts_b: amounts_b_copy,
+        amount_a,
+        amount_b,
         by: ctx.sender(),
-        timestamp: clk.timestamp_ms(),
     });
 }
 
@@ -506,12 +485,11 @@ public fun user_add_liquidity_to_balance<T>(
     assert!(pm.owner == ctx.sender(), ENotOwner);
     let amount = coin.value();
     add_to_balance(pm, coin);
-    
+
     event::emit(BalanceDeposited {
         pm_id: object::id(pm),
         coin_type: type_name::with_defining_ids<T>().into_string(),
         amount,
-        timestamp: tx_context::epoch_timestamp_ms(ctx),
     });
 }
 
@@ -543,9 +521,8 @@ public fun user_remove_liquidity_from_position<CoinTypeA, CoinTypeB>(
         bins,
         liquidity_shares,
         by: ctx.sender(),
-        timestamp: clk.timestamp_ms(),
     });
-    
+
     (balance_a.into_coin(ctx), balance_b.into_coin(ctx))
 }
 
@@ -554,7 +531,6 @@ public fun user_collect_fee<CoinTypeA, CoinTypeB>(
     pool: &mut Pool<CoinTypeA, CoinTypeB>,
     config: &GlobalConfig,
     versioned: &Versioned,
-    clk: &Clock,
     ctx: &mut TxContext,
 ): (Coin<CoinTypeA>, Coin<CoinTypeB>) {
     assert!(pm.owner == ctx.sender(), ENotOwner);
@@ -567,7 +543,7 @@ public fun user_collect_fee<CoinTypeA, CoinTypeB>(
     );
     let amount_a = balance_a.value();
     let amount_b = balance_b.value();
-    
+
     event::emit(FeeCollected {
         pm_id: object::id(pm),
         pool_id: object::id(pool),
@@ -576,9 +552,8 @@ public fun user_collect_fee<CoinTypeA, CoinTypeB>(
         amount_a,
         amount_b,
         by: ctx.sender(),
-        timestamp: clk.timestamp_ms(),
     });
-    
+
     (balance_a.into_coin(ctx), balance_b.into_coin(ctx))
 }
 
@@ -587,7 +562,6 @@ public fun user_collect_reward<CoinTypeA, CoinTypeB, RewardType>(
     pool: &mut Pool<CoinTypeA, CoinTypeB>,
     config: &GlobalConfig,
     versioned: &Versioned,
-    clk: &Clock,
     ctx: &mut TxContext,
 ): (Coin<RewardType>) {
     assert!(pm.owner == ctx.sender(), ENotOwner);
@@ -599,16 +573,15 @@ public fun user_collect_reward<CoinTypeA, CoinTypeB, RewardType>(
         ctx,
     );
     let amount = balance_reward.value();
-    
+
     event::emit(RewardCollected {
         pm_id: object::id(pm),
         pool_id: object::id(pool),
         coin_type: type_name::with_defining_ids<RewardType>().into_string(),
         amount,
         by: ctx.sender(),
-        timestamp: clk.timestamp_ms(),
     });
-    
+
     balance_reward.into_coin(ctx)
 }
 
@@ -618,15 +591,15 @@ public fun user_remove_liquidity_from_balance<T>(
     ctx: &mut TxContext,
 ): (Coin<T>) {
     assert!(pm.owner == ctx.sender(), ENotOwner);
-    let coin = withdraw_from_balance(pm, amount, ctx);
-    
+    let coin = withdraw_from_balance<T>(pm, amount, ctx);
+    let actual_amount = coin.value();
+
     event::emit(BalanceWithdrawn {
         pm_id: object::id(pm),
         coin_type: type_name::with_defining_ids<T>().into_string(),
-        amount,
-        timestamp: tx_context::epoch_timestamp_ms(ctx),
+        amount: actual_amount,
     });
-    
+
     coin
 }
 
@@ -636,47 +609,43 @@ public fun user_withdraw_fee<T>(
     ctx: &mut TxContext,
 ): (Coin<T>) {
     assert!(pm.owner == ctx.sender(), ENotOwner);
-    let coin = withdraw_from_fee(pm, amount, ctx);
-    
+    let coin = withdraw_from_fee<T>(pm, amount, ctx);
+    let actual_amount = coin.value();
+
     event::emit(UserFeeWithdrawn {
         pm_id: object::id(pm),
         coin_type: type_name::with_defining_ids<T>().into_string(),
-        amount,
-        timestamp: tx_context::epoch_timestamp_ms(ctx),
+        amount: actual_amount,
     });
-    
+
     coin
 }
 
 public fun user_insert_agent(
     pm: &mut PositionManager,
     agent: address,
-    clk: &Clock,
     ctx: &TxContext,
 ) {
     assert!(pm.owner == ctx.sender(), ENotOwner);
     vec_set::insert(&mut pm.agents, agent);
-    
+
     event::emit(AgentAdded {
         pm_id: object::id(pm),
         agent,
-        timestamp: clk.timestamp_ms(),
     });
 }
 
 public fun user_remove_agent(
     pm: &mut PositionManager,
     agent: address,
-    clk: &Clock,
     ctx: &TxContext,
 ) {
     assert!(pm.owner == ctx.sender(), ENotOwner);
     vec_set::remove(&mut pm.agents, &agent);
-    
+
     event::emit(AgentRemoved {
         pm_id: object::id(pm),
         agent,
-        timestamp: clk.timestamp_ms(),
     });
 }
 
@@ -692,7 +661,7 @@ public fun user_close_pm<CoinTypeA, CoinTypeB>(
 ) {
     assert!(pm.owner == ctx.sender(), ENotOwner);
     let pm_id = object::id(&pm);
-    table::remove<ID, bool>(&mut record.record, pm_id);
+    vec_set::remove(&mut record.record, &pm_id);
 
     let PositionManager { id, owner, agents: _, position, balance, fee } = pm;
 
@@ -719,7 +688,6 @@ public fun user_close_pm<CoinTypeA, CoinTypeB>(
     event::emit(PositionManagerClosed {
         pm_id,
         owner,
-        timestamp: clk.timestamp_ms(),
     });
 }
 
@@ -741,7 +709,8 @@ public fun protocol_add_liquidity<CoinTypeA, CoinTypeB>(
     assert!(vec_set::is_empty<address>(&pm.agents), ENotAllow);
     let mut coin_a = withdraw_from_balance<CoinTypeA>(pm, amount_a, ctx);
     let mut coin_b = withdraw_from_balance<CoinTypeB>(pm, amount_b, ctx);
-    add_liquidity_private(
+    let bins_copy = bins;
+    let (used_a, used_b) = add_liquidity_private(
         pm,
         pool,
         &mut coin_a,
@@ -760,11 +729,10 @@ public fun protocol_add_liquidity<CoinTypeA, CoinTypeB>(
     event::emit(ProtocolLiquidityAdded {
         pm_id: object::id(pm),
         pool_id: object::id(pool),
-        bins,
-        amounts_a,
-        amounts_b,
+        bins: bins_copy,
+        amount_a: used_a,
+        amount_b: used_b,
         by: ctx.sender(),
-        timestamp: clk.timestamp_ms(),
     });
 }
 
@@ -800,7 +768,6 @@ public fun protocol_remove_liquidity<CoinTypeA, CoinTypeB>(
         bins,
         liquidity_shares,
         by: ctx.sender(),
-        timestamp: clk.timestamp_ms(),
     });
 }
 
@@ -811,7 +778,6 @@ public fun protocol_collect_fee<CoinTypeA, CoinTypeB>(
     pool: &mut Pool<CoinTypeA, CoinTypeB>,
     config: &GlobalConfig,
     versioned: &Versioned,
-    clk: &Clock,
     ctx: &mut TxContext,
 ) {
     assert!(vec_set::contains<address>(&access.allow, &ctx.sender()), ENotAllow);
@@ -843,7 +809,6 @@ public fun protocol_collect_fee<CoinTypeA, CoinTypeB>(
         amount_b,
         fee_a,
         fee_b,
-        timestamp: clk.timestamp_ms(),
     });
 }
 
@@ -854,7 +819,6 @@ public fun protocol_collect_reward<CoinTypeA, CoinTypeB, RewardType>(
     pool: &mut Pool<CoinTypeA, CoinTypeB>,
     config: &GlobalConfig,
     versioned: &Versioned,
-    clk: &Clock,
     ctx: &mut TxContext,
 ) {
     assert!(vec_set::contains<address>(&access.allow, &ctx.sender()), ENotAllow);
@@ -878,7 +842,6 @@ public fun protocol_collect_reward<CoinTypeA, CoinTypeB, RewardType>(
         coin_type: type_name::with_defining_ids<RewardType>().into_string(),
         amount,
         fee_amount,
-        timestamp: clk.timestamp_ms(),
     });
 }
 
@@ -886,19 +849,18 @@ public fun protocol_transfer_fee_to_balance<T>(
     access: &AccessList,
     pm: &mut PositionManager,
     amount: u64,
-    clk: &Clock,
     ctx: &mut TxContext,
 ) {
     assert!(vec_set::contains<address>(&access.allow, &ctx.sender()), ENotAllow);
     assert!(vec_set::is_empty<address>(&pm.agents), ENotAllow);
     let fee = withdraw_from_fee<T>(pm, amount, ctx);
+    let actual_amount = fee.value();
     add_to_balance<T>(pm, fee);
-    
+
     event::emit(FeeTransferredToBalance {
         pm_id: object::id(pm),
         coin_type: type_name::with_defining_ids<T>().into_string(),
-        amount,
-        timestamp: clk.timestamp_ms(),
+        amount: actual_amount,
     });
 }
 
@@ -918,7 +880,8 @@ public fun agent_add_liquidity<CoinTypeA, CoinTypeB>(
     assert!(vec_set::contains<address>(&pm.agents, &ctx.sender()), ENotAllow);
     let mut coin_a = withdraw_from_balance<CoinTypeA>(pm, amount_a, ctx);
     let mut coin_b = withdraw_from_balance<CoinTypeB>(pm, amount_b, ctx);
-    add_liquidity_private(
+    let bins_copy = bins;
+    let (used_a, used_b) = add_liquidity_private(
         pm,
         pool,
         &mut coin_a,
@@ -937,11 +900,10 @@ public fun agent_add_liquidity<CoinTypeA, CoinTypeB>(
     event::emit(AgentLiquidityAdded {
         pm_id: object::id(pm),
         pool_id: object::id(pool),
-        bins,
-        amounts_a,
-        amounts_b,
+        bins: bins_copy,
+        amount_a: used_a,
+        amount_b: used_b,
         by: ctx.sender(),
-        timestamp: clk.timestamp_ms(),
     });
 }
 
@@ -975,7 +937,6 @@ public fun agent_remove_liquidity<CoinTypeA, CoinTypeB>(
         bins,
         liquidity_shares,
         by: ctx.sender(),
-        timestamp: clk.timestamp_ms(),
     });
 }
 
@@ -984,7 +945,6 @@ public fun agent_collect_fee<CoinTypeA, CoinTypeB>(
     pool: &mut Pool<CoinTypeA, CoinTypeB>,
     config: &GlobalConfig,
     versioned: &Versioned,
-    clk: &Clock,
     ctx: &mut TxContext,
 ) {
     assert!(vec_set::contains<address>(&pm.agents, &ctx.sender()), ENotAllow);
@@ -1008,7 +968,6 @@ public fun agent_collect_fee<CoinTypeA, CoinTypeB>(
         amount_a,
         amount_b,
         by: ctx.sender(),
-        timestamp: clk.timestamp_ms(),
     });
 }
 
@@ -1017,7 +976,6 @@ public fun agent_collect_reward<CoinTypeA, CoinTypeB, RewardType>(
     pool: &mut Pool<CoinTypeA, CoinTypeB>,
     config: &GlobalConfig,
     versioned: &Versioned,
-    clk: &Clock,
     ctx: &mut TxContext,
 ) {
     assert!(vec_set::contains<address>(&pm.agents, &ctx.sender()), ENotAllow);
@@ -1037,25 +995,23 @@ public fun agent_collect_reward<CoinTypeA, CoinTypeB, RewardType>(
         coin_type: type_name::with_defining_ids<RewardType>().into_string(),
         amount,
         by: ctx.sender(),
-        timestamp: clk.timestamp_ms(),
     });
 }
 
 public fun agent_transfer_fee_to_balance<T>(
     pm: &mut PositionManager,
     amount: u64,
-    clk: &Clock,
     ctx: &mut TxContext,
 ) {
     assert!(vec_set::contains<address>(&pm.agents, &ctx.sender()), ENotAllow);
     let fee = withdraw_from_fee<T>(pm, amount, ctx);
+    let actual_amount = fee.value();
     add_to_balance<T>(pm, fee);
 
     event::emit(FeeTransferredToBalance {
         pm_id: object::id(pm),
         coin_type: type_name::with_defining_ids<T>().into_string(),
-        amount,
-        timestamp: clk.timestamp_ms(),
+        amount: actual_amount,
     });
 }
 
@@ -1063,16 +1019,14 @@ public fun agent_transfer_fee_to_balance<T>(
 public fun admin_transfer(
     admin_cap: AdminCap,
     to: address,
-    clk: &Clock,
     ctx: &TxContext,
 ) {
     let from = ctx.sender();
     transfer::transfer(admin_cap, to);
-    
+
     event::emit(AdminTransferred {
         from,
         to,
-        timestamp: clk.timestamp_ms(),
     });
 }
 
@@ -1080,16 +1034,15 @@ public fun admin_set_fee(
     _: &AdminCap,
     fee_house: &mut FeeHouse,
     fee_rate: u64,
-    clk: &Clock,
 ) {
+    assert!((fee_rate as u128) <= FEE_DENOMINATOR, EInvalidFeeRate);
     let old_fee_rate = fee_house.fee_rate;
     fee_house.fee_rate = fee_rate;
-    
+
     event::emit(FeeRateUpdated {
         fee_house_id: object::id(fee_house),
         old_fee_rate,
         new_fee_rate: fee_rate,
-        timestamp: clk.timestamp_ms(),
     });
 }
 
@@ -1098,6 +1051,7 @@ public fun admin_new_fee_house(
     fee_rate: u64,
     ctx: &mut TxContext,
 ) {
+    assert!((fee_rate as u128) <= FEE_DENOMINATOR, EInvalidFeeRate);
     let fee_house = FeeHouse {
         id: object::new(ctx),
         fee_rate: fee_rate,
@@ -1109,21 +1063,19 @@ public fun admin_new_fee_house(
 public fun admin_collect_fee_return_coin<T>(
     _: &AdminCap,
     fee_house: &mut FeeHouse,
-    clk: &Clock,
     ctx: &mut TxContext,
 ): Coin<T> {
     let coin_type = type_name::with_defining_ids<T>().into_string();
     let coin: Coin<T> = bag::remove<String, Coin<T>>(&mut fee_house.fee, coin_type);
     let amount = coin.value();
-    
+
     event::emit(AdminFeeCollected {
         fee_house_id: object::id(fee_house),
         coin_type,
         amount,
         admin: ctx.sender(),
-        timestamp: clk.timestamp_ms(),
     });
-    
+
     coin
 }
 
@@ -1131,21 +1083,19 @@ public fun admin_collect_fee_return_coin<T>(
 public fun admin_collect_fee<T>(
     _: &AdminCap,
     fee_house: &mut FeeHouse,
-    clk: &Clock,
     ctx: &mut TxContext,
 ) {
     let coin_type = type_name::with_defining_ids<T>().into_string();
     let coin: Coin<T> = bag::remove<String, Coin<T>>(&mut fee_house.fee, coin_type);
     let amount = coin.value();
-    
+
     event::emit(AdminFeeCollected {
         fee_house_id: object::id(fee_house),
         coin_type,
         amount,
         admin: ctx.sender(),
-        timestamp: clk.timestamp_ms(),
     });
-    
+
     transfer::public_transfer(coin, ctx.sender());
 }
 
@@ -1153,14 +1103,12 @@ public fun admin_insert_access_list(
     _: &AdminCap,
     access: &mut AccessList,
     bot: address,
-    clk: &Clock,
 ) {
     vec_set::insert(&mut access.allow, bot);
-    
+
     event::emit(AccessGranted {
         access_list_id: object::id(access),
         address: bot,
-        timestamp: clk.timestamp_ms(),
     });
 }
 
@@ -1168,14 +1116,12 @@ public fun admin_remove_access_list(
     _: &AdminCap,
     access: &mut AccessList,
     bot: address,
-    clk: &Clock,
 ) {
     vec_set::remove(&mut access.allow, &bot);
-    
+
     event::emit(AccessRevoked {
         access_list_id: object::id(access),
         address: bot,
-        timestamp: clk.timestamp_ms(),
     });
 }
 
@@ -1191,7 +1137,7 @@ fun add_liquidity_private<CoinTypeA, CoinTypeB>(
     versioned: &Versioned,
     clk: &Clock,
     ctx: &mut TxContext,
-) {
+): (u64, u64) {
     let add_liquidity_cert = pool::add_liquidity(
         pool,
         option::borrow_mut(&mut pm.position),
@@ -1216,6 +1162,7 @@ fun add_liquidity_private<CoinTypeA, CoinTypeB>(
         balance_b,
         versioned,
     );
+    (amount_a, amount_b)
 }
 
 fun add_to_balance<T>(
