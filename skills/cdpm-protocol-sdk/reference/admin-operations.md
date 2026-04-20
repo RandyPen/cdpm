@@ -1,5 +1,8 @@
 # Admin Operations
 
+> **Note — FeeHouse lifecycle**
+> `FeeHouse` is a single shared object created during `init`; there is no runtime creation function. Admin workflows only read/update the existing `FeeHouse` (e.g. `admin_set_fee`, `admin_collect_fee_return_coin`) — they never construct a new one.
+
 ## Set Fee Rate
 
 ```typescript

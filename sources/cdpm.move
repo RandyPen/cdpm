@@ -19,6 +19,7 @@ use cetusdlmm::config::GlobalConfig;
 use integer_mate::i32::I32;
 
 const FEE_DENOMINATOR: u128 = 10000;
+const MAX_FEE_RATE: u128 = 3000;
 
 const ENotOwner: u64        = 1001;
 const ENotAllow: u64        = 1002;
@@ -93,6 +94,8 @@ public struct LiquidityRemoved has copy, drop {
     pool_id: ID,
     bins: vector<u32>,
     liquidity_shares: vector<u128>,
+    amount_a: u64,
+    amount_b: u64,
     by: address,
 }
 
@@ -219,6 +222,8 @@ public struct ProtocolLiquidityRemoved has copy, drop {
     pool_id: ID,
     bins: vector<u32>,
     liquidity_shares: vector<u128>,
+    amount_a: u64,
+    amount_b: u64,
     by: address,
 }
 
@@ -236,6 +241,8 @@ public struct AgentLiquidityRemoved has copy, drop {
     pool_id: ID,
     bins: vector<u32>,
     liquidity_shares: vector<u128>,
+    amount_a: u64,
+    amount_b: u64,
     by: address,
 }
 
@@ -514,12 +521,16 @@ public fun user_remove_liquidity_from_position<CoinTypeA, CoinTypeB>(
         clk,
         ctx,
     );
-    
+    let amount_a = balance_a.value();
+    let amount_b = balance_b.value();
+
     event::emit(LiquidityRemoved {
         pm_id: object::id(pm),
         pool_id: object::id(pool),
         bins,
         liquidity_shares,
+        amount_a,
+        amount_b,
         by: ctx.sender(),
     });
 
@@ -759,6 +770,8 @@ public fun protocol_remove_liquidity<CoinTypeA, CoinTypeB>(
         clk,
         ctx,
     );
+    let amount_a = balance_a.value();
+    let amount_b = balance_b.value();
     add_to_balance<CoinTypeA>(pm, balance_a.into_coin(ctx));
     add_to_balance<CoinTypeB>(pm, balance_b.into_coin(ctx));
 
@@ -767,6 +780,8 @@ public fun protocol_remove_liquidity<CoinTypeA, CoinTypeB>(
         pool_id: object::id(pool),
         bins,
         liquidity_shares,
+        amount_a,
+        amount_b,
         by: ctx.sender(),
     });
 }
@@ -928,6 +943,8 @@ public fun agent_remove_liquidity<CoinTypeA, CoinTypeB>(
         clk,
         ctx,
     );
+    let amount_a = balance_a.value();
+    let amount_b = balance_b.value();
     add_to_balance<CoinTypeA>(pm, balance_a.into_coin(ctx));
     add_to_balance<CoinTypeB>(pm, balance_b.into_coin(ctx));
 
@@ -936,6 +953,8 @@ public fun agent_remove_liquidity<CoinTypeA, CoinTypeB>(
         pool_id: object::id(pool),
         bins,
         liquidity_shares,
+        amount_a,
+        amount_b,
         by: ctx.sender(),
     });
 }
@@ -1035,7 +1054,7 @@ public fun admin_set_fee(
     fee_house: &mut FeeHouse,
     fee_rate: u64,
 ) {
-    assert!((fee_rate as u128) <= FEE_DENOMINATOR, EInvalidFeeRate);
+    assert!((fee_rate as u128) <= MAX_FEE_RATE, EInvalidFeeRate);
     let old_fee_rate = fee_house.fee_rate;
     fee_house.fee_rate = fee_rate;
 
@@ -1046,27 +1065,13 @@ public fun admin_set_fee(
     });
 }
 
-public fun admin_new_fee_house(
-    _: &AdminCap,
-    fee_rate: u64,
-    ctx: &mut TxContext,
-) {
-    assert!((fee_rate as u128) <= FEE_DENOMINATOR, EInvalidFeeRate);
-    let fee_house = FeeHouse {
-        id: object::new(ctx),
-        fee_rate: fee_rate,
-        fee: bag::new(ctx),
-    };
-    transfer::share_object(fee_house);
-}
-
 public fun admin_collect_fee_return_coin<T>(
     _: &AdminCap,
     fee_house: &mut FeeHouse,
     ctx: &mut TxContext,
 ): Coin<T> {
     let coin_type = type_name::with_defining_ids<T>().into_string();
-    let coin: Coin<T> = bag::remove<String, Coin<T>>(&mut fee_house.fee, coin_type);
+    let coin: Coin<T> = bag::remove<String, Balance<T>>(&mut fee_house.fee, coin_type).into_coin(ctx);
     let amount = coin.value();
 
     event::emit(AdminFeeCollected {
@@ -1086,7 +1091,7 @@ public fun admin_collect_fee<T>(
     ctx: &mut TxContext,
 ) {
     let coin_type = type_name::with_defining_ids<T>().into_string();
-    let coin: Coin<T> = bag::remove<String, Coin<T>>(&mut fee_house.fee, coin_type);
+    let coin: Coin<T> = bag::remove<String, Balance<T>>(&mut fee_house.fee, coin_type).into_coin(ctx);
     let amount = coin.value();
 
     event::emit(AdminFeeCollected {
