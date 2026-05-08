@@ -321,9 +321,9 @@ fun init(ctx: &mut TxContext) {
 
 public fun register_and_return_record(
     global_record: &mut GlobalRecord,
+    clk: &Clock,
     ctx: &mut TxContext,
 ): Record {
-    ): Record {
     let record = Record {
         id: object::new(ctx),
         record: table::new<ID, bool>(ctx),
@@ -334,15 +334,9 @@ public fun register_and_return_record(
     event::emit(RecordCreated {
         record_id,
         owner: ctx.sender(),
-        timestamp: tx_context::epoch_timestamp_ms(ctx),
+        timestamp: clk.timestamp_ms(),
     });
     
-    record
-}
-        id: object::new(ctx),
-        record: table::new<ID, bool>(ctx),
-    };
-    table::add(&mut global_record.record, ctx.sender(), object::id(&record));
     record
 }
 
@@ -350,34 +344,6 @@ public fun share_record(
     record: Record
 ) {
     let record_id = object::id(&record);
-    transfer::share_object(record);
-    
-    event::emit(RecordShared {
-        record_id,
-        timestamp: tx_context::epoch_timestamp_ms(ctx),
-    });
-}
-
-public fun share_record_v2(
-    record: Record,
-    ctx: &TxContext
-) {
-    let record_id = object::id(&record);
-    transfer::share_object(record);
-    
-    event::emit(RecordShared {
-        record_id,
-        timestamp: tx_context::epoch_timestamp_ms(ctx),
-    });
-}
-    let record_id = object::id(&record);
-    transfer::share_object(record);
-    
-    event::emit(RecordShared {
-        record_id,
-        timestamp: tx_context::epoch_timestamp_ms(ctx),
-    });
-}
     transfer::share_object(record);
 }
 
