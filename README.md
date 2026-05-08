@@ -1,5 +1,8 @@
 # CDPM - Cetus DLMM Position Manager
 
+published at: 0x0000000000000000000000000000000000000000000000000000000000000000
+package immutable: DpvZTR2ikjDETQ9jmjK2nF4PikG9aYfqpd3XMXyXUD5u
+
 ## Overview
 
 CDPM (Cetus DLMM Position Manager) is a Sui Move smart contract that enables proxy liquidity management on Cetus DLMM (Discrete Liquidity Market Maker). The contract allows users to manage their liquidity positions directly or delegate management to the protocol or custom AI agents, with the protocol collecting fees on managed operations.
