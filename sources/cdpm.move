@@ -1,13 +1,13 @@
 module cdpm::cdpm;
 
 use std::type_name;
-use std::ascii::{Self, String};
+use std::ascii::String;
 
 use sui::event;
 use sui::vec_set::{Self, VecSet};
 use sui::bag::{Self, Bag};
 use sui::balance::{Self, Balance};
-use sui::coin::{Self, Coin};
+use sui::coin::Coin;
 use sui::table::{Self, Table};
 use sui::clock::Clock;
 
@@ -210,11 +210,6 @@ public struct RecordCreated has copy, drop {
     timestamp: u64,
 }
 
-public struct RecordShared has copy, drop {
-    record_id: ID,
-    timestamp: u64,
-}
-
 public struct ProtocolLiquidityAdded has copy, drop {
     pm_id: ID,
     pool_id: ID,
@@ -230,26 +225,6 @@ public struct ProtocolLiquidityRemoved has copy, drop {
     pool_id: ID,
     bins: vector<u32>,
     liquidity_shares: vector<u128>,
-    by: address,
-    timestamp: u64,
-}
-
-public struct EmergencyFeeCollected has copy, drop {
-    pm_id: ID,
-    pool_id: ID,
-    coin_type_a: String,
-    coin_type_b: String,
-    amount_a: u64,
-    amount_b: u64,
-    by: address,
-    timestamp: u64,
-}
-
-public struct EmergencyRewardCollected has copy, drop {
-    pm_id: ID,
-    pool_id: ID,
-    coin_type: String,
-    amount: u64,
     by: address,
     timestamp: u64,
 }
@@ -289,13 +264,6 @@ public struct AgentRewardCollected has copy, drop {
     pool_id: ID,
     coin_type: String,
     amount: u64,
-    by: address,
-    timestamp: u64,
-}
-
-public struct EmergencyPositionClosed has copy, drop {
-    pm_id: ID,
-    pool_id: ID,
     by: address,
     timestamp: u64,
 }
@@ -343,7 +311,6 @@ public fun register_and_return_record(
 public fun share_record(
     record: Record
 ) {
-    let record_id = object::id(&record);
     transfer::share_object(record);
 }
 
@@ -400,6 +367,15 @@ public fun user_deposit<CoinTypeA, CoinTypeB>(
         owner: ctx.sender(),
         timestamp: clk.timestamp_ms(),
     });
+}
+
+// in case of Cetus DLMM package upgrade
+public fun user_get_position(
+    pm: &mut PositionManager,
+    ctx: &TxContext,
+): Position {
+    assert!(pm.owner == ctx.sender(), ENotOwner);
+    option::extract(&mut pm.position)
 }
 
 public fun user_add_liquidity_to_position<CoinTypeA, CoinTypeB>(
@@ -844,102 +820,6 @@ public fun protocol_transfer_fee_to_balance<T>(
         pm_id: object::id(pm),
         coin_type: type_name::with_defining_ids<T>().into_string(),
         amount,
-        timestamp: clk.timestamp_ms(),
-    });
-}
-
-// ============ Emergency Functions ============
-public fun protocol_close_position_emergency<CoinTypeA, CoinTypeB>(
-    access: &AccessList,
-    pm: &mut PositionManager,
-    pool: &mut Pool<CoinTypeA, CoinTypeB>,
-    config: &GlobalConfig,
-    versioned: &Versioned,
-    clk: &Clock,
-    ctx: &mut TxContext,
-) {
-    assert!(vec_set::contains<address>(&access.allow, &ctx.sender()), ENotAllow);
-    let p = option::extract<Position>(&mut pm.position);
-    let (cert, balance_a, balance_b) = pool::close_position<CoinTypeA, CoinTypeB>(
-        pool,
-        p,
-        config,
-        versioned,
-        clk,
-        ctx,
-    );
-    pool::destroy_close_position_cert(cert, versioned);
-    add_to_balance<CoinTypeA>(pm, balance_a.into_coin(ctx));
-    add_to_balance<CoinTypeB>(pm, balance_b.into_coin(ctx));
-    
-    event::emit(EmergencyPositionClosed {
-        pm_id: object::id(pm),
-        pool_id: object::id(pool),
-        by: ctx.sender(),
-        timestamp: clk.timestamp_ms(),
-    });
-}
-
-public fun protocol_collect_fee_emergency<CoinTypeA, CoinTypeB>(
-    access: &AccessList,
-    pm: &mut PositionManager,
-    pool: &mut Pool<CoinTypeA, CoinTypeB>,
-    config: &GlobalConfig,
-    versioned: &Versioned,
-    clk: &Clock,
-    ctx: &mut TxContext,
-) {
-    assert!(vec_set::contains<address>(&access.allow, &ctx.sender()), ENotAllow);
-    let (balance_a, balance_b) = pool::collect_position_fee<CoinTypeA, CoinTypeB>(
-        pool,
-        option::borrow_mut(&mut pm.position),
-        config,
-        versioned,
-        ctx,
-    );
-    let amount_a = balance_a.value();
-    let amount_b = balance_b.value();
-    add_to_fee<CoinTypeA>(pm, balance_a.into_coin(ctx));
-    add_to_fee<CoinTypeB>(pm, balance_b.into_coin(ctx));
-
-    event::emit(EmergencyFeeCollected {
-        pm_id: object::id(pm),
-        pool_id: object::id(pool),
-        coin_type_a: type_name::with_defining_ids<CoinTypeA>().into_string(),
-        coin_type_b: type_name::with_defining_ids<CoinTypeB>().into_string(),
-        amount_a,
-        amount_b,
-        by: ctx.sender(),
-        timestamp: clk.timestamp_ms(),
-    });
-}
-
-public fun protocol_collect_reward_emergency<CoinTypeA, CoinTypeB, RewardType>(
-    access: &AccessList,
-    pm: &mut PositionManager,
-    pool: &mut Pool<CoinTypeA, CoinTypeB>,
-    config: &GlobalConfig,
-    versioned: &Versioned,
-    clk: &Clock,
-    ctx: &mut TxContext,
-) {
-    assert!(vec_set::contains<address>(&access.allow, &ctx.sender()), ENotAllow);
-    let balance_reward = pool::collect_position_reward<CoinTypeA, CoinTypeB, RewardType>(
-        pool,
-        option::borrow_mut(&mut pm.position),
-        config,
-        versioned,
-        ctx,
-    );
-    let amount = balance_reward.value();
-    add_to_fee<RewardType>(pm, balance_reward.into_coin(ctx));
-
-    event::emit(EmergencyRewardCollected {
-        pm_id: object::id(pm),
-        pool_id: object::id(pool),
-        coin_type: type_name::with_defining_ids<RewardType>().into_string(),
-        amount,
-        by: ctx.sender(),
         timestamp: clk.timestamp_ms(),
     });
 }

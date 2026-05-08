@@ -24,11 +24,6 @@ CDPM (Cetus DLMM Position Manager) is a Sui Move smart contract that enables pro
 - **Agent Operations**: Agents can perform liquidity management operations
 - **Permission Control**: Agents have limited permissions (cannot withdraw funds)
 
-### 4. Emergency Functions
-- **Emergency Position Closure**: Close positions without normal fee collection
-- **Emergency Fee Collection**: Collect fees without protocol cut
-- **Use Case**: Handle Cetus DLMM contract upgrades when the proxy contract cannot be upgraded
-
 ## Architecture
 
 ### Core Data Structures
@@ -172,24 +167,18 @@ Where `FEE_DENOMINATOR = 10000` (100%).
 - Agent-limited operations (cannot withdraw funds)
 - Protocol access controlled by admin-managed allow list
 
-### 2. Emergency Recovery
-- Emergency functions for dependency contract upgrades
-- Protocol-controlled emergency access
-- Fund safety during Cetus DLMM upgrades
-
-### 3. Input Validation
+### 2. Input Validation
 - Fee rate bounds checking (0-100%)
 - Permission validation on all operations
 - Safe mathematical operations (u128 for fee calculations)
 
-### 4. Event System
+### 3. Event System
 Comprehensive event emission for all operations:
 - Position creation/closing
 - Liquidity addition/removal
 - Fee/reward collection
 - Agent management
 - Admin operations
-- Emergency actions
 
 ## Event System
 
