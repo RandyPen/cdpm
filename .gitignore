@@ -4,5 +4,3 @@ traces/*
 .coverage*
 Pub.*.toml
 /tests
-*.md
-Move.lock
