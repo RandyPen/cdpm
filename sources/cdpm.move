@@ -314,7 +314,18 @@ public fun share_record(
     transfer::share_object(record);
 }
 
-public fun user_deposit<CoinTypeA, CoinTypeB>(
+public fun unregister_record(
+    global_record: &mut GlobalRecord,
+    record: Record,
+    ctx: &TxContext,
+) {
+    let Record { id, record } = record;
+    record.destroy_empty();
+    id.delete();
+    table::remove(&mut global_record.record, ctx.sender());
+}
+
+public fun user_deposit_liquidity<CoinTypeA, CoinTypeB>(
     record: &mut Record,
     pool: &mut Pool<CoinTypeA, CoinTypeB>,
     coin_a: &mut Coin<CoinTypeA>,
@@ -362,6 +373,31 @@ public fun user_deposit<CoinTypeA, CoinTypeB>(
     table::add(&mut record.record, pm_id, true);
     transfer::share_object(pm);
     
+    event::emit(PositionManagerCreated {
+        pm_id,
+        owner: ctx.sender(),
+        timestamp: clk.timestamp_ms(),
+    });
+}
+
+public fun user_deposit_position(
+    record: &mut Record,
+    position: Position,
+    clk: &Clock,
+    ctx: &mut TxContext,
+) {
+    let pm = PositionManager {
+        id: object::new(ctx),
+        owner: ctx.sender(),
+        agents: vec_set::empty(),
+        position: option::some(position),
+        balance: bag::new(ctx),
+        fee: bag::new(ctx),
+    };
+    let pm_id = object::id(&pm);
+    table::add(&mut record.record, pm_id, true);
+    transfer::share_object(pm);
+
     event::emit(PositionManagerCreated {
         pm_id,
         owner: ctx.sender(),
@@ -634,9 +670,9 @@ public fun user_close_pm<CoinTypeA, CoinTypeB>(
     } else {
         option::destroy_none<Position>(position);
     };
-    bag::destroy_empty(balance);
-    bag::destroy_empty(fee);
-    object::delete(id);
+    balance.destroy_empty();
+    fee.destroy_empty();
+    id.delete();
     
     event::emit(PositionManagerClosed {
         pm_id,
