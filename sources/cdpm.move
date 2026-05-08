@@ -702,6 +702,16 @@ public fun protocol_add_liquidity<CoinTypeA, CoinTypeB>(
     );
     add_to_balance<CoinTypeA>(pm, coin_a);
     add_to_balance<CoinTypeB>(pm, coin_b);
+
+    event::emit(ProtocolLiquidityAdded {
+        pm_id: object::id(pm),
+        pool_id: object::id(pool),
+        bins,
+        amounts_a,
+        amounts_b,
+        by: ctx.sender(),
+        timestamp: clk.timestamp_ms(),
+    });
 }
 
 public fun protocol_remove_liquidity<CoinTypeA, CoinTypeB>(
@@ -729,6 +739,15 @@ public fun protocol_remove_liquidity<CoinTypeA, CoinTypeB>(
     );
     add_to_balance<CoinTypeA>(pm, balance_a.into_coin(ctx));
     add_to_balance<CoinTypeB>(pm, balance_b.into_coin(ctx));
+
+    event::emit(ProtocolLiquidityRemoved {
+        pm_id: object::id(pm),
+        pool_id: object::id(pool),
+        bins,
+        liquidity_shares,
+        by: ctx.sender(),
+        timestamp: clk.timestamp_ms(),
+    });
 }
 
 public fun protocol_collect_fee<CoinTypeA, CoinTypeB>(
@@ -878,8 +897,21 @@ public fun protocol_collect_fee_emergency<CoinTypeA, CoinTypeB>(
         versioned,
         ctx,
     );
+    let amount_a = balance_a.value();
+    let amount_b = balance_b.value();
     add_to_fee<CoinTypeA>(pm, balance_a.into_coin(ctx));
     add_to_fee<CoinTypeB>(pm, balance_b.into_coin(ctx));
+
+    event::emit(EmergencyFeeCollected {
+        pm_id: object::id(pm),
+        pool_id: object::id(pool),
+        coin_type_a: type_name::with_defining_ids<CoinTypeA>().into_string(),
+        coin_type_b: type_name::with_defining_ids<CoinTypeB>().into_string(),
+        amount_a,
+        amount_b,
+        by: ctx.sender(),
+        timestamp: clk.timestamp_ms(),
+    });
 }
 
 public fun protocol_collect_reward_emergency<CoinTypeA, CoinTypeB, RewardType>(
@@ -899,7 +931,17 @@ public fun protocol_collect_reward_emergency<CoinTypeA, CoinTypeB, RewardType>(
         versioned,
         ctx,
     );
+    let amount = balance_reward.value();
     add_to_fee<RewardType>(pm, balance_reward.into_coin(ctx));
+
+    event::emit(EmergencyRewardCollected {
+        pm_id: object::id(pm),
+        pool_id: object::id(pool),
+        coin_type: type_name::with_defining_ids<RewardType>().into_string(),
+        amount,
+        by: ctx.sender(),
+        timestamp: clk.timestamp_ms(),
+    });
 }
 
 public fun agent_add_liquidity<CoinTypeA, CoinTypeB>(
@@ -933,6 +975,16 @@ public fun agent_add_liquidity<CoinTypeA, CoinTypeB>(
     );
     add_to_balance<CoinTypeA>(pm, coin_a);
     add_to_balance<CoinTypeB>(pm, coin_b);
+
+    event::emit(AgentLiquidityAdded {
+        pm_id: object::id(pm),
+        pool_id: object::id(pool),
+        bins,
+        amounts_a,
+        amounts_b,
+        by: ctx.sender(),
+        timestamp: clk.timestamp_ms(),
+    });
 }
 
 public fun agent_remove_liquidity<CoinTypeA, CoinTypeB>(
@@ -958,6 +1010,15 @@ public fun agent_remove_liquidity<CoinTypeA, CoinTypeB>(
     );
     add_to_balance<CoinTypeA>(pm, balance_a.into_coin(ctx));
     add_to_balance<CoinTypeB>(pm, balance_b.into_coin(ctx));
+
+    event::emit(AgentLiquidityRemoved {
+        pm_id: object::id(pm),
+        pool_id: object::id(pool),
+        bins,
+        liquidity_shares,
+        by: ctx.sender(),
+        timestamp: clk.timestamp_ms(),
+    });
 }
 
 public fun agent_collect_fee<CoinTypeA, CoinTypeB>(
@@ -976,8 +1037,21 @@ public fun agent_collect_fee<CoinTypeA, CoinTypeB>(
         versioned,
         ctx,
     );
+    let amount_a = balance_a.value();
+    let amount_b = balance_b.value();
     add_to_fee<CoinTypeA>(pm, balance_a.into_coin(ctx));
     add_to_fee<CoinTypeB>(pm, balance_b.into_coin(ctx));
+
+    event::emit(AgentFeeCollected {
+        pm_id: object::id(pm),
+        pool_id: object::id(pool),
+        coin_type_a: type_name::with_defining_ids<CoinTypeA>().into_string(),
+        coin_type_b: type_name::with_defining_ids<CoinTypeB>().into_string(),
+        amount_a,
+        amount_b,
+        by: ctx.sender(),
+        timestamp: clk.timestamp_ms(),
+    });
 }
 
 public fun agent_collect_reward<CoinTypeA, CoinTypeB, RewardType>(
@@ -996,7 +1070,17 @@ public fun agent_collect_reward<CoinTypeA, CoinTypeB, RewardType>(
         versioned,
         ctx,
     );
+    let amount = balance_reward.value();
     add_to_fee<RewardType>(pm, balance_reward.into_coin(ctx));
+
+    event::emit(AgentRewardCollected {
+        pm_id: object::id(pm),
+        pool_id: object::id(pool),
+        coin_type: type_name::with_defining_ids<RewardType>().into_string(),
+        amount,
+        by: ctx.sender(),
+        timestamp: clk.timestamp_ms(),
+    });
 }
 
 // ============ Admin Functions ============
