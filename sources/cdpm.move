@@ -65,6 +65,12 @@ public struct PositionManagerCreated has copy, drop {
     timestamp: u64,
 }
 
+public struct PositionExtract has copy, drop {
+    pm_id: ID,
+    owner: address,
+    timestamp: u64,
+}
+
 public struct PositionManagerClosed has copy, drop {
     pm_id: ID,
     owner: address,
@@ -210,6 +216,12 @@ public struct RecordCreated has copy, drop {
     timestamp: u64,
 }
 
+public struct RecordDeleted has copy, drop {
+    record_id: ID,
+    owner: address,
+    timestamp: u64,
+}
+
 public struct ProtocolLiquidityAdded has copy, drop {
     pm_id: ID,
     pool_id: ID,
@@ -317,12 +329,19 @@ public fun share_record(
 public fun unregister_record(
     global_record: &mut GlobalRecord,
     record: Record,
+    clk: &Clock,
     ctx: &TxContext,
 ) {
     let Record { id, record } = record;
     record.destroy_empty();
     id.delete();
-    table::remove(&mut global_record.record, ctx.sender());
+    let record_id = table::remove(&mut global_record.record, ctx.sender());
+
+    event::emit(RecordDeleted {
+        record_id,
+        owner: ctx.sender(),
+        timestamp: clk.timestamp_ms(),
+    });
 }
 
 public fun user_deposit_liquidity<CoinTypeA, CoinTypeB>(
@@ -408,9 +427,16 @@ public fun user_deposit_position(
 // in case of Cetus DLMM package upgrade
 public fun user_get_position(
     pm: &mut PositionManager,
+    clk: &Clock,
     ctx: &TxContext,
 ): Position {
     assert!(pm.owner == ctx.sender(), ENotOwner);
+    event::emit(PositionExtract {
+        pm_id: object::id(pm),
+        owner: ctx.sender(),
+        timestamp: clk.timestamp_ms(),
+    });
+
     option::extract(&mut pm.position)
 }
 
