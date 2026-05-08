@@ -297,6 +297,11 @@ fun init(ctx: &mut TxContext) {
         allow: vec_set::empty(),
     };
     transfer::share_object(access);
+    let global_record = GlobalRecord {
+        id: object::new(ctx),
+        record: table::new(ctx),
+    };
+    transfer::share_object(global_record);
 }
 
 public fun register_and_return_record(
