@@ -5,7 +5,7 @@
 version = 4
 
 [pinned.mainnet.CetusDlmm]
-source = { git = "https://github.com/CetusProtocol/cetus-dlmm-interface.git", subdir = "packages/dlmm", rev = "a92a1a15fb4b194c2484bac065dac060c519c44c" }
+source = { git = "https://github.com/CetusProtocol/cetus-dlmm-interface.git", subdir = "packages/dlmm", rev = "31ac289f0d35118c2e39bd37e177dd4afaa3a1df" }
 use_environment = "mainnet"
 manifest_digest = "1E932E9C4C15B3E671C5AACEE3107A26421CD5F431977EB48BE64EF5BE1AD9CA"
 deps = { IntegerMate = "IntegerMate", MoveSTL = "MoveSTL", std = "MoveStdlib", sui = "Sui" }
@@ -23,13 +23,13 @@ manifest_digest = "E41BBD67BE8940D26C79D78B028477EF5B33BA217A1282C78ACB344CF8A5E
 deps = { std = "MoveStdlib", sui = "Sui" }
 
 [pinned.mainnet.MoveStdlib]
-source = { git = "https://github.com/MystenLabs/sui.git", subdir = "crates/sui-framework/packages/move-stdlib", rev = "655576caa3d7faaed39ebbc15d1bcc91d0761aee" }
+source = { git = "https://github.com/MystenLabs/sui.git", subdir = "crates/sui-framework/packages/move-stdlib", rev = "b38bca86f0323b3fe8b6b7f4ca0cd7ae7faebe4b" }
 use_environment = "mainnet"
 manifest_digest = "C4FE4C91DE74CBF223B2E380AE40F592177D21870DC2D7EB6227D2D694E05363"
 deps = {}
 
 [pinned.mainnet.Sui]
-source = { git = "https://github.com/MystenLabs/sui.git", subdir = "crates/sui-framework/packages/sui-framework", rev = "655576caa3d7faaed39ebbc15d1bcc91d0761aee" }
+source = { git = "https://github.com/MystenLabs/sui.git", subdir = "crates/sui-framework/packages/sui-framework", rev = "b38bca86f0323b3fe8b6b7f4ca0cd7ae7faebe4b" }
 use_environment = "mainnet"
 manifest_digest = "CD547CB1ACCE0880C835DAED2D8FFCB91D56C833AE5240D3AA5B918398263195"
 deps = { MoveStdlib = "MoveStdlib" }
@@ -37,5 +37,5 @@ deps = { MoveStdlib = "MoveStdlib" }
 [pinned.mainnet.cdpm]
 source = { root = true }
 use_environment = "mainnet"
-manifest_digest = "BF086A948B90F78B0A2A9CDDC333A26DA86B40F120ACE8BCD332ED8806145D7B"
+manifest_digest = "F4885AF8F72BA9667794CC23CE531BB23EF144223E150AA40DBB4F3EA08B2FEE"
 deps = { cetusdlmm = "CetusDlmm", integer_mate = "IntegerMate", move_stl = "MoveSTL", std = "MoveStdlib", sui = "Sui" }
