@@ -15,6 +15,7 @@ To query a PositionManager's assets and fees, you need to:
 import { SuiGrpcClient } from '@mysten/sui/grpc';
 import { Transaction } from '@mysten/sui/transactions';
 import { bcs } from '@mysten/sui/bcs';
+import { normalizeStructTag, parseStructTag } from '@mysten/sui/utils';
 import { dlmmMainnet } from '@cetusprotocol/dlmm-sdk';
 
 // Constants
@@ -85,37 +86,47 @@ export async function fetchPositionManagerData(
     throw new Error(`Failed to extract position info from PositionManager ${pmId}`);
   }
 
-  // Normalize coin types
-  const normalizeCoinType = (coinType: string): string => {
-    return coinType.replace(/^0x0+/, '0x');
+  // Helper function to extract base coin type from possibly full coin type
+  const getBaseCoinType = (type: string): string => {
+    try {
+      // Try to parse as struct tag
+      const parsed = parseStructTag(type);
+      // If it's a Coin<T> type, extract the inner type
+      if (parsed.address === '0x2' && parsed.module === 'coin' && parsed.name === 'Coin' && parsed.typeParams.length === 1) {
+        const innerType = parsed.typeParams[0];
+        return normalizeStructTag(typeof innerType === 'string' ? innerType : innerType);
+      }
+      // Otherwise, normalize the type as-is
+      return normalizeStructTag(type);
+    } catch {
+      // If parsing fails, normalize as-is
+      return normalizeStructTag(type);
+    }
   };
-  
-  coinTypeA = normalizeCoinType(coinTypeA);
-  coinTypeB = normalizeCoinType(coinTypeB);
 
-  // Get token info (implement based on your token registry)
-  const getTokenDecimals = (coinType: string): number => {
-    // Default to 9 for unknown tokens
-    return 9;
-  };
-  
-  const getTokenSymbol = (coinType: string): string => {
-    // Return 'Unknown' for unknown tokens
-    return 'Unknown';
-  };
+  // Extract and normalize base coin types
+  const baseCoinTypeA = getBaseCoinType(coinTypeA);
+  const baseCoinTypeB = getBaseCoinType(coinTypeB);
 
-  const decimalsA = getTokenDecimals(coinTypeA);
-  const decimalsB = getTokenDecimals(coinTypeB);
-  const symbolA = getTokenSymbol(coinTypeA);
-  const symbolB = getTokenSymbol(coinTypeB);
+  // Get token metadata using client.getCoinMetadata
+  const [metadataA, metadataB] = await Promise.all([
+    client.getCoinMetadata({ coinType: baseCoinTypeA }),
+    client.getCoinMetadata({ coinType: baseCoinTypeB }),
+  ]);
+
+  // Extract decimals and symbols from metadata
+  const decimalsA = metadataA.coinMetadata?.decimals ?? 9;
+  const decimalsB = metadataB.coinMetadata?.decimals ?? 9;
+  const symbolA = metadataA.coinMetadata?.symbol ?? 'Unknown';
+  const symbolB = metadataB.coinMetadata?.symbol ?? 'Unknown';
 
   return {
     pmId,
     owner,
     positionId,
     poolId,
-    coinTypeA,
-    coinTypeB,
+    coinTypeA: baseCoinTypeA,
+    coinTypeB: baseCoinTypeB,
     symbolA,
     symbolB,
     decimalsA,
