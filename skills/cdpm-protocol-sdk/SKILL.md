@@ -154,7 +154,7 @@ async function validateProtocolOperation(
 const ERROR_CODES = {
   ENotOwner: 1001,        // Caller is not owner
   ENotAllow: 1002,        // Caller not authorized
-  EInvalidFeeRate: 2001,  // Fee rate exceeds FEE_DENOMINATOR
+  EInvalidFeeRate: 1003,  // Fee rate exceeds FEE_DENOMINATOR
 };
 
 function parseError(error: string): string {

@@ -1,17 +1,18 @@
 # Event Monitoring
 
+> Event timestamps are available on the `SuiEvent.timestampMs` envelope at query time — the on-chain payload no longer duplicates a `timestamp` field.
+
 ## Agent Events
 
 ```typescript
-// Agent added liquidity
+// Agent added liquidity (scalar actual amounts consumed by the pool)
 interface AgentLiquidityAdded {
   pm_id: string;
   pool_id: string;
   bins: number[];
-  amounts_a: string[];
-  amounts_b: string[];
+  amount_a: string;  // Actual amount A consumed
+  amount_b: string;  // Actual amount B consumed
   by: string;        // Agent address
-  timestamp: number;
 }
 
 // Agent removed liquidity
@@ -21,7 +22,6 @@ interface AgentLiquidityRemoved {
   bins: number[];
   liquidity_shares: string[];
   by: string;
-  timestamp: number;
 }
 
 // Agent collected fees
@@ -33,7 +33,6 @@ interface AgentFeeCollected {
   amount_a: string;
   amount_b: string;
   by: string;
-  timestamp: number;
 }
 
 // Agent collected rewards
@@ -43,7 +42,6 @@ interface AgentRewardCollected {
   coin_type: string;
   amount: string;
   by: string;
-  timestamp: number;
 }
 ```
 

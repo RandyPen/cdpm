@@ -26,7 +26,6 @@ async function setFeeRate(
       tx.object(adminCapId),
       tx.object(feeHouseId),
       tx.pure.u64(newFeeRate),
-      tx.object(clockId),
     ],
   });
   
@@ -59,7 +58,6 @@ async function addProtocolAddress(
       tx.object(adminCapId),
       tx.object(accessListId),
       tx.pure.address(protocolAddress),
-      tx.object(clockId),
     ],
   });
   
@@ -90,7 +88,6 @@ async function removeProtocolAddress(
       tx.object(adminCapId),
       tx.object(accessListId),
       tx.pure.address(protocolAddress),
-      tx.object(clockId),
     ],
   });
   
@@ -121,7 +118,6 @@ async function collectProtocolFees(
     arguments: [
       tx.object(adminCapId),
       tx.object(feeHouseId),
-      tx.object(clockId),
     ],
   });
   
@@ -147,7 +143,6 @@ async function transferAdminCap(
     arguments: [
       tx.object(adminCapId),  // AdminCap (consumed)
       tx.pure.address(newAdminAddress),
-      tx.object(clockId),
     ],
   });
   

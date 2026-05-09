@@ -1,5 +1,7 @@
 # Events
 
+> Event timestamps are available on the `SuiEvent.timestampMs` envelope at query time — the on-chain payload no longer duplicates a `timestamp` field.
+
 ## Admin Events
 
 ```typescript
@@ -8,28 +10,24 @@ interface FeeRateUpdated {
   fee_house_id: string;
   old_fee_rate: number;
   new_fee_rate: number;
-  timestamp: number;
 }
 
 // Access granted
 interface AccessGranted {
   access_list_id: string;
   address: string;
-  timestamp: number;
 }
 
 // Access revoked
 interface AccessRevoked {
   access_list_id: string;
   address: string;
-  timestamp: number;
 }
 
 // Admin transferred
 interface AdminTransferred {
   from: string;
   to: string;
-  timestamp: number;
 }
 
 // Protocol fees collected
@@ -38,13 +36,31 @@ interface AdminFeeCollected {
   coin_type: string;
   amount: string;
   admin: string;
-  timestamp: number;
 }
 ```
 
 ## Protocol Operation Events
 
 ```typescript
+// Protocol added liquidity (scalar actual amounts consumed by the pool)
+interface ProtocolLiquidityAdded {
+  pm_id: string;
+  pool_id: string;
+  bins: number[];
+  amount_a: string;      // Actual amount A consumed
+  amount_b: string;      // Actual amount B consumed
+  by: string;
+}
+
+// Protocol removed liquidity
+interface ProtocolLiquidityRemoved {
+  pm_id: string;
+  pool_id: string;
+  bins: number[];
+  liquidity_shares: string[];
+  by: string;
+}
+
 // Protocol collected fees (with fee split)
 interface ProtocolFeeCollected {
   pm_id: string;
@@ -55,7 +71,6 @@ interface ProtocolFeeCollected {
   amount_b: string;      // User portion
   fee_a: string;         // Protocol portion
   fee_b: string;         // Protocol portion
-  timestamp: number;
 }
 
 // Protocol collected rewards (with fee split)
@@ -65,7 +80,6 @@ interface ProtocolRewardCollected {
   coin_type: string;
   amount: string;        // User portion
   fee_amount: string;    // Protocol portion
-  timestamp: number;
 }
 ```
 

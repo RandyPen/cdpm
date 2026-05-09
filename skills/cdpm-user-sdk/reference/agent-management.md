@@ -16,7 +16,6 @@ async function authorizeAgent(
     arguments: [
       tx.object(pmId),
       tx.pure.address(agentAddress),
-      tx.object(clockId),
     ],
   });
   
@@ -40,7 +39,6 @@ async function revokeAgent(
     arguments: [
       tx.object(pmId),
       tx.pure.address(agentAddress),
-      tx.object(clockId),
     ],
   });
   
