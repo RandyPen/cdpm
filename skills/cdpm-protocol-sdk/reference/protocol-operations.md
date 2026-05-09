@@ -82,6 +82,76 @@ async function protocolAddLiquidityAuto(
 }
 ```
 
+## Remove Liquidity (Protocol)
+
+> Signature keeps `clk: &Clock` because it is forwarded to `pool::remove_liquidity` in the Cetus DLMM SDK.
+
+Removed assets are returned to the PositionManager's internal balance bag (not to the caller). Use `protocol_transfer_fee_to_balance` or other balance helpers to move funds afterward.
+
+```typescript
+async function protocolRemoveLiquidity(
+  client: SuiGrpcClient,
+  signer: any,  // Must be in AccessList
+  accessListId: string,
+  pmId: string,
+  poolId: string,  // Can be fetched from PositionManager
+  bins: number[],
+  liquidityShares: bigint[]
+) {
+  const tx = new Transaction();
+
+  tx.moveCall({
+    target: `${CDPM_PACKAGE}::cdpm::protocol_remove_liquidity`,
+    typeArguments: [coinTypeA, coinTypeB],
+    arguments: [
+      tx.object(accessListId),
+      tx.object(pmId),
+      tx.object(poolId),
+      tx.pure.vector('u32', bins),
+      tx.pure.vector('u128', liquidityShares),
+      tx.object(globalConfigId),
+      tx.object(versionedId),
+      tx.object(clockId),
+    ],
+  });
+
+  return await client.signAndExecuteTransaction({ signer, transaction: tx });
+}
+```
+
+## Transfer Fee to Balance (Protocol)
+
+Move accumulated fee bag funds back into the PositionManager's balance bag so they can be used by subsequent protocol operations.
+
+> Signature: `protocol_transfer_fee_to_balance<T>(access, pm, amount, ctx)` — **does not take Clock**.
+
+The emitted `FeeTransferredToBalance.amount` reflects the actual coin value moved (which may be smaller than the requested `amount` when the fee bag holds less than requested).
+
+```typescript
+async function protocolTransferFeeToBalance(
+  client: SuiGrpcClient,
+  signer: any,  // Must be in AccessList
+  accessListId: string,
+  pmId: string,
+  coinType: string,
+  amount: bigint
+) {
+  const tx = new Transaction();
+
+  tx.moveCall({
+    target: `${CDPM_PACKAGE}::cdpm::protocol_transfer_fee_to_balance`,
+    typeArguments: [coinType],
+    arguments: [
+      tx.object(accessListId),
+      tx.object(pmId),
+      tx.pure.u64(amount),
+    ],
+  });
+
+  return await client.signAndExecuteTransaction({ signer, transaction: tx });
+}
+```
+
 ## Collect Fees (Protocol)
 
 ```typescript
