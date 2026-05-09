@@ -145,6 +145,16 @@ async function createPositionSmart(
 
 ## Close Position
 
+> **⚠ IMPORTANT — reward safety**
+> `pool::close_position` (used internally by `user_close_pm`) only returns
+> underlying tokens and accumulated trading fees. Any **incentive reward
+> tokens** still held by the position will be destroyed together with the
+> `ClosePositionCert`. Because the contract itself doesn't know which
+> `RewardType`s a pool has, you MUST construct a PTB that first calls
+> `user_collect_reward<CoinTypeA, CoinTypeB, RewardType>` once for each
+> reward token on that pool (typically 1–3 types), then `user_close_pm`
+> in the same transaction.
+
 ```typescript
 async function closePosition(
   client: SuiGrpcClient,
@@ -173,6 +183,56 @@ async function closePosition(
 }
 ```
 
+### Close Position Safely (collect rewards first)
+
+The following variant sweeps every `RewardType` on the pool **before** closing, so no incentive rewards are lost:
+
+```typescript
+async function closePositionSafe(
+  client: SuiGrpcClient,
+  signer: any,
+  recordId: string,
+  pmId: string,
+  poolId: string,
+  rewardCoinTypes: string[],  // e.g. ["0x2::sui::SUI", "0x...::rewardX::RewardX"]
+  coinTypeA: string,
+  coinTypeB: string,
+) {
+  const tx = new Transaction();
+
+  // Step 1: collect every reward type BEFORE close
+  for (const rewardType of rewardCoinTypes) {
+    const [rewardCoin] = tx.moveCall({
+      target: `${CDPM_PACKAGE}::cdpm::user_collect_reward`,
+      typeArguments: [coinTypeA, coinTypeB, rewardType],
+      arguments: [
+        tx.object(pmId),
+        tx.object(poolId),
+        tx.object(globalConfigId),
+        tx.object(versionedId),
+      ],
+    });
+    tx.transferObjects([rewardCoin], signer.toSuiAddress());
+  }
+
+  // Step 2: close
+  tx.moveCall({
+    target: `${CDPM_PACKAGE}::cdpm::user_close_pm`,
+    typeArguments: [coinTypeA, coinTypeB],
+    arguments: [
+      tx.object(recordId),
+      tx.object(pmId),
+      tx.object(poolId),
+      tx.object(globalConfigId),
+      tx.object(versionedId),
+      tx.object(clockId),
+    ],
+  });
+
+  return await client.signAndExecuteTransaction({ signer, transaction: tx });
+}
+```
+
 ## Events
 
 ### Monitor User Events
@@ -197,6 +257,17 @@ interface LiquidityAdded {
   bins: number[];
   amount_a: string;  // Actual amount A consumed
   amount_b: string;  // Actual amount B consumed
+  by: string;
+}
+
+// Liquidity removed
+interface LiquidityRemoved {
+  pm_id: string;
+  pool_id: string;
+  bins: number[];
+  liquidity_shares: string[];
+  amount_a: string;   // Actual token A returned
+  amount_b: string;   // Actual token B returned
   by: string;
 }
 

@@ -58,6 +58,8 @@ interface ProtocolLiquidityRemoved {
   pool_id: string;
   bins: number[];
   liquidity_shares: string[];
+  amount_a: string;   // Actual token A returned
+  amount_b: string;   // Actual token B returned
   by: string;
 }
 

@@ -105,6 +105,14 @@ async function executeWithGasOptimization(
 }
 ```
 
+## Surfacing Close-Position Warnings
+
+Agents do **not** call `user_close_pm` themselves — only the position owner can close a PositionManager. However, many agent UIs drive the owner's wallet through a "close" action, so the agent layer should surface the following warning whenever it initiates or hints at a close flow:
+
+> `pool::close_position` (used internally by `user_close_pm`) only returns underlying tokens and accumulated trading fees. Any **incentive reward tokens** still held by the position will be destroyed together with the `ClosePositionCert`. The owner's PTB must call `user_collect_reward<CoinTypeA, CoinTypeB, RewardType>` once for each reward token on the pool (typically 1–3 types) **before** `user_close_pm`, in the same transaction.
+
+See the user-sdk workflow (`cdpm-user-sdk/reference/workflows.md`, section "Close Position Safely") for the complete PTB example to reuse when building the owner-facing transaction.
+
 ## Security Guidelines
 
 ### Agent Security Checklist

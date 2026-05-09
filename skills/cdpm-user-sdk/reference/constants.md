@@ -6,6 +6,7 @@
 const CDPM_PACKAGE = '0x0000000000000000000000000000000000000000000000000000000000000000';
 const FEE_DENOMINATOR = 10000;
 const DEFAULT_FEE_RATE = 2000; // 20%
+const MAX_FEE_RATE = 3000;     // 30% — enforced cap in admin_set_fee
 ```
 
 ## CDPM Object IDs (Mainnet)
