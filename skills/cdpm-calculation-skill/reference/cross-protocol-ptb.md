@@ -280,9 +280,21 @@ const MAX_U64 = (1n << 64n) - 1n;
 // === Off-chain prediction: how much underlying will land in pm.balance[T]
 //     after the drain leg. We size the supply leg to this exact figure. ===
 //
-// reserve / vault snapshots come from §1 + §8 of scallop-lending-math.md;
-// re-snapshot AFTER a dev-inspect of accrue_interest_for_market for freshness.
-const drain = predictRedeem(reserve, vault, vault.scoinTotal, feeRateBp);
+// `reserve` is a ReserveSnapshot of Scallop's on-chain reserve container
+// (cash/debt/revenue/supply, see scallop-lending-math.md §1).
+// `pmVault` is a VaultSnapshot of the cdpm-PM ScallopVault entry pulled out
+// of `pm.lending` (scoinTotal/principalTotal, see scallop-lending-math.md
+// §6); it is NOT Scallop's `market::vault(market)` reserve container — same
+// word, different objects. Re-snapshot both AFTER a dev-inspect of
+// accrue_interest_for_market for freshness.
+//
+// We pass `pmVault.scoinTotal` to predictRedeem for the off-chain prediction
+// (the helper takes a real number, not a sentinel). On chain we send
+// `MAX_U64` instead — both trigger the full-drain branch in
+// pull_from_scallop_lending (any value >= scoinTotal works), and `MAX_U64` is
+// defensive against off-chain/on-chain skew that could let the live
+// scoinTotal drift up between snapshot and signing.
+const drain = predictRedeem(reserve, pmVault, pmVault.scoinTotal, feeRateBp);
 const reSupplyAmount = drain.toBalance;          // post-fee underlying
 
 const tx = new Transaction();
@@ -421,7 +433,7 @@ The decision must be resolved off-chain *before* assembling the PTB — Move PTB
 
 - **Authorization.** `scallop_start_*` / `kai_start_*` require owner / authorized agent / whitelisted protocol bot (when `pm.agents.is_empty()`). The most natural harvest driver is a protocol bot on PMs without agents, or an agent on PMs that authorize one. The owner can always run harvest manually.
 - **Who pays gas, who collects fee.** The harvest gas is paid by the signing entity (agent / protocol bot / owner); the crystallized yield-fee accrues to `fee_house.fee[T]`, which is owned by the cdpm protocol's admin tier — not the harvest signer. From the **user's** vantage no harvest is required: their fee bill on a single big redeem at exit is identical to the sum of fees crystallized by intermediate harvests. Harvest is therefore an operation paid for and consumed by the **fee recipient** (or a bot operating on their behalf), not by the user. Tune cadence accordingly: at 5% APR and 20% fee rate, the bot operator's break-even is `gas_cost / (apr / 365 × fee_rate)`; a position smaller than that on a daily cadence loses gas faster than it crystallizes fee. Larger positions or weekly cadences shift the math the other way.
-- **Predicted vs live residual.** `reSupplyAmount = drain.toBalance` is the floor of the post-fee underlying. The live redeem may pay 1-2 units more (per `scallop-lending-math.md` §7.2 for Scallop and `kai-lending-math.md` §10.5 for Kai's `muldiv_round_up`); the residual stays in `pm.balance[T]` and is collected on the next harvest. This is benign.
+- **Predicted vs live residual.** `reSupplyAmount = drain.toBalance` is the floor of the post-fee underlying. The live redeem may pay 1-2 units more (per `scallop-lending-math.md` §7.2 for Scallop's per-step floor; per `kai-lending-math.md` §3 for Kai's `muldiv_round_up` asymmetry); the residual stays in `pm.balance[T]` and is collected on the next harvest. This is benign.
 - **Drain sentinel and `user_close_pm`.** Inside the PTB after leg 1 with `MAX_U64`, the harvested key has been removed from `pm.lending`. If this PM has *no other* lending entries (Scallop or Kai), `bag::is_empty(&pm.lending)` is now true and `user_close_pm`'s `ELendingNotEmpty (1004)` would pass at this mid-PTB point — but PTBs do not branch and `user_close_pm` is not part of the harvest. Leg 2 immediately repopulates the bag; if leg 2 aborts the whole PTB rolls back, restoring the entry. PMs with multiple lending keys retain their other entries throughout.
 - **Atomicity matters less for security, more for state hygiene.** `user_remove_liquidity_from_balance` is owner-only (`pm.owner == ctx.sender()` is hard-asserted) — splitting harvest into two PTBs does **not** open a window for an unauthorized third party to drain the inter-tx residue. The real reasons to keep harvest atomic are: (a) gas amortization (one base fee, one storage rebate split), (b) rate snapshot freshness across the redeem and supply legs (separate PTBs would re-snapshot in between, leaking into a different `balance_sheet` at the supply side), and (c) avoiding owner-vs-bot front-running races where the owner could intercept the post-redeem residue before the bot's re-park goes through. Always one PTB.
 
@@ -444,7 +456,7 @@ The decision must be resolved off-chain *before* assembling the PTB — Move PTB
 
    Verify with `npm ls @mysten/sui` (or `pnpm why @mysten/sui`) that only one copy resolves.
 
-4. **Don't pass `*Quick` outputs into cdpm hot-potato finishes.** `*Quick` methods (`depositQuick`, `withdrawQuick`) source coins from the **wallet**, not from cdpm. They are useful for the *escape* path (e.g., owner extracts sCoin via `user_extract_scallop_market_coin<T>`, then calls `withdrawQuick`), but feeding their output into `scallop_finish_*` would either short-change the PM (if the `*Quick` output is too small) or breach cdpm's principal accounting.
+4. **Don't pass `*Quick` outputs into cdpm hot-potato finishes.** `*Quick` methods (`depositQuick`, `withdrawQuick`) source coins from the **wallet**, not from cdpm. They are useful for the *escape* path (e.g., owner extracts sCoin via `user_extract_scallop_market_coin<T>`, then calls `withdrawQuick`). Feeding their output into `scallop_finish_*` produces one of two failure modes — neither silent: (a) if the `*Quick` output is below the ticket's `expected_*` value the PTB aborts at `EAmountShortfall (1009)`; (b) if it meets the threshold the PTB succeeds, but the bag's stored `principal` (which `scallop_start_supply` recorded from cdpm's own `coinT` source) no longer matches the underlying actually delivered to Scallop, breaking cdpm's principal accounting on the next redeem. Always source the inner-protocol coin from the cdpm `*_start_*` tx-result, never from a `*Quick` builder.
 
 5. **Re-snapshot inputs before signing.** Both protocols' state (`balance_sheet` for Scallop, `total_available_balance` for Kai) move every block. The picker (`scallop-lending-math.md` §10.4) and the sizing helpers (§7 in either file) rely on snapshots; for a rebalance PTB that does both a redeem and a supply, take a *single* snapshot just before signing and reuse it across both legs to keep the predictions internally consistent.
 
