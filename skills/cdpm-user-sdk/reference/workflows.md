@@ -155,13 +155,19 @@ async function createPositionSmart(
 > reward token on that pool (typically 1-3 types), then `user_close_pm`
 > in the same transaction.
 
-> **IMPORTANT — Scallop lending must be empty**
+> **IMPORTANT — lending bag must be empty (Scallop AND Kai)**
 > `user_close_pm` now asserts `bag::is_empty(&pm.lending)` and aborts with
-> `ELendingNotEmpty (1004)` otherwise. Before closing, drain every
-> `ScallopVault<T>` either by running the full
-> `accrue_interest → scallop_start_redeem → redeem::redeem → scallop_finish_redeem` PTB or
-> by calling `user_extract_scallop_market_coin<T>` (owner-only). See
-> `reference/scallop-lending.md` for the full recipes.
+> `ELendingNotEmpty (1004)` otherwise. The same `lending: Bag` holds both
+> Scallop `ScallopVault<T>` entries (key = `type_name<T>`) and Kai SAV
+> `KaiVault<T, YT>` entries (key = `type_name<YT>`); every entry of either
+> flavor must be drained before close. For Scallop, run the full
+> `accrue_interest → scallop_start_redeem → redeem::redeem → scallop_finish_redeem` PTB
+> or call `user_extract_scallop_market_coin<T>` (owner-only). For Kai, run
+> the equivalent `kai_start_redeem → vault::withdraw → strategy walk →
+> redeem_withdraw_ticket → kai_finish_redeem` PTB or call
+> `user_extract_kai_yt<T, YT>` (owner-only). See
+> `reference/scallop-lending.md` and `reference/kai-lending.md` for the full
+> recipes.
 
 ```typescript
 async function closePosition(

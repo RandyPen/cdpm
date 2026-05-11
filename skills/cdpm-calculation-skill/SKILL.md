@@ -7,7 +7,7 @@ description: CDPM calculation utilities using Cetus DLMM SDK plus the Scallop an
 
 ## Overview
 
-This skill provides calculation utilities for CDPM (Cetus DLMM Position Manager) using the **Cetus DLMM SDK**, plus off-chain twins of the Scallop lending math the cdpm contract performs on-chain. All Cetus calculations should use the SDK for accuracy and to handle edge cases properly; the Scallop formulas mirror the on-chain implementations in `sources/cdpm.move`.
+This skill provides calculation utilities for CDPM (Cetus DLMM Position Manager) using the **Cetus DLMM SDK**, plus off-chain twins of **both** lending integrations' math the cdpm contract performs on-chain — Scallop (`scallop_*`) and Kai SAV (`kai_*`). All Cetus calculations should use the SDK for accuracy and to handle edge cases properly; the Scallop and Kai formulas mirror the on-chain implementations in `sources/cdpm.move`. The two integrations share `pm.lending: Bag`, the hot-potato ticket pattern, and a single `fee_house.fee_rate` knob, so the principal-amortization and yield-fee math is structurally identical — only the `compute_expected_*` predictors differ (Scallop reads `balance_sheet`, Kai reads `total_available_balance` + `total_yt_supply`).
 
 ## Installation
 

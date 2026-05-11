@@ -5,7 +5,7 @@
 
 ## Set Fee Rate
 
-> The contract enforces `fee_rate <= MAX_FEE_RATE = 3000` (30%) — `admin_set_fee` aborts with `EInvalidFeeRate (1003)` for higher values. The default initialised by `init` is `2000` (20%). The same rate is used for both Cetus protocol fee splits (`take_fee` inside `protocol_collect_*`) and the Scallop yield fee inside `scallop_finish_redeem`.
+> The contract enforces `fee_rate <= MAX_FEE_RATE = 3000` (30%) — `admin_set_fee` aborts with `EInvalidFeeRate (1003)` for higher values. The default initialised by `init` is `2000` (20%). The same rate is used for three places: Cetus protocol fee splits (`take_fee` inside `protocol_collect_*`), the Scallop yield fee inside `scallop_finish_redeem`, and the Kai SAV yield fee inside `kai_finish_redeem`. There is no separate Kai or Scallop fee knob.
 
 ```typescript
 import { Transaction } from '@mysten/sui/transactions';

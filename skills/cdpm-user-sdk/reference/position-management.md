@@ -30,9 +30,11 @@ interface PositionManagerInfo {
   agents: string[];
   balance: Record<string, string>;
   fee: Record<string, string>;
-  // Scallop lending vaults keyed by underlying type_name<T>.
-  // Each entry is a ScallopVault<T> with `scoin: Balance<MarketCoin<T>>` and `principal: u64`.
-  lending: Record<string, { scoin: string; principal: string }>;
+  // Lending bag — holds both Scallop and Kai entries on the same PM.
+  //   Scallop: key = type_name<T>, value = ScallopVault<T> { scoin: Balance<MarketCoin<T>>, principal: u64 }
+  //   Kai SAV: key = type_name<YT>, value = KaiVault<T, YT> { yt_balance: Balance<YT>, principal: u64 }
+  // The two value shapes are disambiguated by the bag entry's Move type tag, not the key.
+  lending: Record<string, { scoin?: string; yt_balance?: string; principal: string }>;
 }
 
 async function getPositionManagerInfo(

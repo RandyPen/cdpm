@@ -1,6 +1,6 @@
 # Scallop Lending (Idle Funds)
 
-`PositionManager` exposes a hot-potato lending API that lets the **owner** (and authorized agents / whitelisted protocol bots) park unused balance into Scallop and earn yield while the position is idle.
+`PositionManager` exposes a hot-potato lending API that lets the **owner** (and authorized agents / whitelisted protocol bots) park unused balance into Scallop and earn yield while the position is idle. Scallop is **one of two yield destinations** — the other is Kai SAV, documented in [`kai-lending.md`](./kai-lending.md). Both share the same `pm.lending: Bag`, ticket-shape, and yield-fee math; the disambiguation lives in the function-name prefix (`scallop_*` vs `kai_*`) and the bag key (`type_name<T>` for Scallop, `type_name<YT>` for Kai).
 
 The on-chain shape:
 
@@ -14,7 +14,7 @@ public struct PositionManager has key {
     position: Option<Position>,
     balance: Bag,
     fee: Bag,
-    lending: Bag,                 // <— keyed by `type_name<T>`, value = ScallopVault<T>
+    lending: Bag,                 // shared with Kai; Scallop entries keyed by `type_name<T>`, value = ScallopVault<T>
 }
 
 public struct ScallopVault<phantom T> has store {
@@ -23,7 +23,7 @@ public struct ScallopVault<phantom T> has store {
 }
 ```
 
-There is **at most one vault per underlying type T**. The sCoin type is structurally pinned to `MarketCoin<T>` by the type system — there is no separate `S` generic, so a fake-sCoin variant simply cannot be passed in.
+There is **at most one Scallop vault per underlying type T** (Kai entries for the same `T` live under a different key, `type_name<YT>`, so they cannot collide). The sCoin type is structurally pinned to `MarketCoin<T>` by the type system — there is no separate `S` generic, so a fake-sCoin variant simply cannot be passed in.
 
 ---
 
@@ -291,12 +291,12 @@ async function userExtractMarketCoin(
 
 ## Closing a PositionManager With Active Vaults
 
-`user_close_pm` now asserts `bag::is_empty(&pm.lending)` (`ELendingNotEmpty = 1004`). Before calling it you must, for every `T` vault, either:
+`user_close_pm` now asserts `bag::is_empty(&pm.lending)` (`ELendingNotEmpty = 1004`). The same assertion covers both Scallop and Kai entries — drain every entry of either flavor before close. For every Scallop `T` vault, either:
 
 1. `scallop_finish_redeem` the entire `scoin` balance back into underlying; or
 2. `user_extract_scallop_market_coin` to pull the sCoin out to your wallet.
 
-Either path leaves `pm.lending` empty, after which `user_close_pm` succeeds.
+For every Kai `(T, YT)` entry, run the matching `kai_finish_redeem` or `user_extract_kai_yt` — see [`kai-lending.md`](./kai-lending.md). After every entry is drained `user_close_pm` succeeds.
 
 ---
 
@@ -338,8 +338,8 @@ interface ScallopMarketCoinExtracted {
 |------|----------|------|
 | 1001 | `ENotOwner` | `user_extract_scallop_market_coin` called by non-owner |
 | 1002 | `ENotAllow` | `scallop_start_supply` / `scallop_start_redeem` failed `assert_caller_authorized` |
-| 1004 | `ELendingNotEmpty` | `user_close_pm` while `pm.lending` is non-empty |
-| 1005 | `ENoSuchVault` | `scallop_start_redeem` / `user_extract_scallop_market_coin` for an absent (T) entry |
+| 1004 | `ELendingNotEmpty` | `user_close_pm` while `pm.lending` is non-empty (any Scallop or Kai entry) |
+| 1005 | `ENoSuchVault` | `scallop_start_redeem` / `user_extract_scallop_market_coin` for an absent Scallop (T) entry (the Kai counterparts share this code for absent `(T, YT)` entries — see `kai-lending.md`) |
 | 1006 | `EReserveEmpty` | Scallop reserve has zero supply or zero `(cash+debt−revenue)` |
 | 1007 | `EZeroExpected` | `scallop_start_supply` / `scallop_start_redeem` would yield 0 — amount too small |
 | 1008 | `EWrongPm` | `finish_*` ticket consumed against a different PositionManager |

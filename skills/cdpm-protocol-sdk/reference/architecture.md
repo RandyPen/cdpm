@@ -50,11 +50,15 @@ interface PositionManager {
   position: string | null; // Cetus DLMM Position ID
   balance: Map<string, string>;  // Available funds
   fee: Map<string, string>;      // Accumulated fees
-  // Scallop lending vaults — keyed by `type_name<T>` (underlying coin type only).
-  // Value type: ScallopVault<T> { scoin: Balance<MarketCoin<T>>, principal: u64 }.
-  // At most one vault per T; the sCoin type is structurally pinned to
-  // MarketCoin<T> by the type system, so a fake-sCoin variant cannot be supplied.
-  lending: Map<string, { scoin: string; principal: string }>;
+  // Unified lending bag — holds both Scallop and Kai SAV entries:
+  //   Scallop: key = type_name<T>,  value = ScallopVault<T> { scoin: Balance<MarketCoin<T>>, principal }
+  //   Kai SAV: key = type_name<YT>, value = KaiVault<T, YT>  { yt_balance: Balance<YT>,     principal }
+  // At most one Scallop vault per T (sCoin type is pinned to MarketCoin<T> by the type
+  // system, so a fake-sCoin variant cannot be supplied). At most one Kai vault per YT
+  // (YT's TreasuryCap is held by kai_sav::vault::Vault<T, YT>, so external code cannot
+  // forge Coin<YT>). The same T can have both a Scallop and a Kai entry simultaneously
+  // because the bag keys differ.
+  lending: Map<string, { scoin?: string; yt_balance?: string; principal: string }>;
 }
 ```
 
@@ -63,6 +67,15 @@ interface PositionManager {
 ```typescript
 interface ScallopVault<T> {
   scoin: string;      // Balance<MarketCoin<T>> — Scallop sCoin (yield-bearing market coin)
+  principal: u64;     // Original underlying deposited; used for yield accounting
+}
+```
+
+### KaiVault
+
+```typescript
+interface KaiVault<T, YT> {
+  yt_balance: string; // Balance<YT> — Kai SAV yield token issued by Vault<T, YT>
   principal: u64;     // Original underlying deposited; used for yield accounting
 }
 ```
@@ -76,3 +89,22 @@ cdpm imports only the read-only / hot-potato surface of Scallop:
 - `x::wit_table` (view-only)
 
 It does **NOT** import `protocol::mint`, `protocol::redeem`, `protocol::version::Version`, or `protocol::accrue_interest`. As a consequence, Scallop `Version` bumps no longer break cdpm — callers compose `accrue_interest`, `mint::mint` and `redeem::redeem` themselves inside the same PTB.
+
+## Kai SAV Decoupling
+
+cdpm imports only the read-only surface of Kai SAV:
+
+- `kai_sav::vault as kai_vault` for the `Vault<T, YT>` type and the view functions
+  `total_available_balance(vault, clock)` and `total_yt_supply(vault)`.
+
+It does **NOT** import `kai_sav::vault::deposit`, `kai_sav::vault::withdraw`,
+`kai_sav::vault::redeem_withdraw_ticket`, or any strategy module. The mint/burn
+side is composed by the caller inside the PTB exactly like Scallop's `mint::mint`
+/ `redeem::redeem`. Strategy walks (`<strategy_module>::strategy_withdraw_for_vault`)
+are also caller-composed; cdpm never holds a `WithdrawTicket`.
+
+> **Trust boundary.** Both Scallop and Kai integrations inherit upstream-team-trust
+> assumptions for their respective protocols. cdpm has no admin-side YT whitelist
+> and no Scallop-market whitelist; the mitigation surface is agent / protocol-bot
+> selection by the PM owner. See README D-08 / D-10 and DESIGN for the full
+> trust-boundary discussion.

@@ -9,7 +9,12 @@ To query a PositionManager's assets and fees, you need to:
 2. Simulate a transaction to get position details (assets, fees, rewards)
 3. Parse and normalize the results
 
-> The `PositionManager` Move struct has a fourth bag, `lending: Bag`, keyed by underlying `type_name<T>` and storing per-T `ScallopVault<T> { scoin: Balance<MarketCoin<T>>, principal: u64 }`. The sCoin type is structurally pinned to `MarketCoin<T>` by the type system. To value the lending portion you also need a Scallop reserve snapshot — see `reference/scallop-lending-math.md` for the off-chain twins of `compute_expected_underlying_scallop` and the principal/yield-fee split.
+> The `PositionManager` Move struct has a fourth bag, `lending: Bag`, that holds **two flavors** of vault entries side-by-side:
+>
+> - **Scallop entries** — keyed by `type_name<T>`, value `ScallopVault<T> { scoin: Balance<MarketCoin<T>>, principal: u64 }`. The sCoin type is structurally pinned to `MarketCoin<T>` by the type system. To value, you need a Scallop reserve snapshot — see [`scallop-lending-math.md`](./scallop-lending-math.md) for the off-chain twins of `compute_expected_underlying_scallop` and the principal/yield-fee split.
+> - **Kai SAV entries** — keyed by `type_name<YT>`, value `KaiVault<T, YT> { yt_balance: Balance<YT>, principal: u64 }`. To value, you need a Kai vault snapshot — see [`kai-lending-math.md`](./kai-lending-math.md) for the off-chain twins of `compute_expected_underlying_kai` and the (identical) principal/yield-fee split.
+>
+> The same underlying `T` can simultaneously hold both a `ScallopVault<T>` and a `KaiVault<T, YT>` — the bag keys differ. When parsing the bag JSON, discriminate on the presence of `scoin` vs `yt_balance` in each value.
 
 ## Setup
 

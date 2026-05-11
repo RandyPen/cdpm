@@ -26,11 +26,12 @@ import { SuiGrpcClient } from '@mysten/sui/grpc';
 ### Operations
 - **[Admin Operations](reference/admin-operations.md)** - Set fee rate (cap 30%), manage AccessList, collect fees
 - **[Protocol Operations](reference/protocol-operations.md)** - Protocol-managed liquidity operations and Scallop supply/redeem
+- **[Scallop Lending](reference/scallop-lending.md)** - Protocol-tier `scallop_start_supply` / `scallop_start_redeem` with required accrual prefix, agents-empty gating, shared yield-fee math, trust-boundary discussion
 - **[Kai SAV Lending](reference/kai-lending.md)** - Protocol-tier `kai_start_supply` / `kai_start_redeem` with strategy walk, agents-empty gating, shared yield-fee math
 
 ### Reference
-- **[Events](reference/events.md)** - Admin and protocol operation events
-- **[Constants](reference/../cdpm-user-sdk/reference/constants.md)** - See user-sdk constants
+- **[Events](reference/events.md)** - Admin, protocol, Scallop, and Kai operation events
+- **[Constants](../cdpm-user-sdk/reference/constants.md)** - See user-sdk constants
 
 ## Calculations
 
@@ -152,17 +153,17 @@ async function validateProtocolOperation(
 ## Error Handling
 
 ```typescript
-// Source: sources/cdpm.move, lines 28-36
+// Source: sources/cdpm.move, lines 28-36 — codes are SHARED between Scallop and Kai integrations.
 const ERROR_CODES = {
-  ENotOwner:        1001, // Caller is not pm.owner
+  ENotOwner:        1001, // Caller is not pm.owner (user_extract_scallop_market_coin / user_extract_kai_yt)
   ENotAllow:        1002, // Caller not in agents / access list (or invariant broken)
   EInvalidFeeRate:  1003, // admin_set_fee given rate > MAX_FEE_RATE (3000 / 30%)
-  ELendingNotEmpty: 1004, // user_close_pm called with non-empty lending Bag
-  ENoSuchVault:     1005, // pull_from_scallop_lending called for an absent (T) vault
-  EReserveEmpty:    1006, // Scallop reserve has zero supply or zero (cash+debt-revenue)
-  EZeroExpected:    1007, // scallop_start_supply / scallop_start_redeem would yield 0
-  EWrongPm:         1008, // Hot-potato ticket consumed against a different PM
-  EAmountShortfall: 1009, // finish_* received Coin with value < ticket.expected
+  ELendingNotEmpty: 1004, // user_close_pm called with non-empty lending Bag (any Scallop or Kai entry)
+  ENoSuchVault:     1005, // pull_from_scallop_lending or pull_from_kai_lending for an absent vault entry
+  EReserveEmpty:    1006, // Scallop reserve degenerate (cash+debt-revenue == 0) OR Kai vault total_yt_supply == 0
+  EZeroExpected:    1007, // scallop_start_* / kai_start_* would yield 0 — amount too small
+  EWrongPm:         1008, // Hot-potato ticket consumed against a different PM (Scallop or Kai)
+  EAmountShortfall: 1009, // scallop_finish_* / kai_finish_* received Coin with value < ticket.expected
 };
 
 function parseError(error: string): string {
@@ -173,11 +174,11 @@ function parseError(error: string): string {
   } else if (error.includes('EInvalidFeeRate')) {
     return 'Fee rate must be between 0 and 3000 (30% cap enforced by admin_set_fee)';
   } else if (error.includes('ELendingNotEmpty')) {
-    return 'PositionManager.lending is non-empty; drain ScallopVaults before user_close_pm';
+    return 'PositionManager.lending is non-empty; drain every ScallopVault<T> AND KaiVault<T, YT> entry before user_close_pm';
   } else if (error.includes('EReserveEmpty')) {
-    return 'Scallop reserve has zero supply or zero (cash+debt-revenue) — accrue_interest_for_market first';
+    return 'Underlying reserve degenerate. Scallop: zero supply or zero (cash+debt-revenue) — accrue_interest_for_market first. Kai: total_yt_supply == 0.';
   } else if (error.includes('EAmountShortfall')) {
-    return 'scallop_finish_supply / scallop_finish_redeem Coin value < ticket.expected (likely stale Scallop accrual)';
+    return 'finish_* Coin value < ticket.expected. Scallop: likely stale accrual — run accrue_interest_for_market first. Kai: vault state moved between snapshot and signing — re-snapshot.';
   }
   return 'Unknown error';
 }

@@ -7,7 +7,7 @@ description: TypeScript SDK guide for CDPM (Cetus DLMM Position Manager) end-use
 
 ## Overview
 
-CDPM (Cetus DLMM Position Manager) is a proxy contract for managing Cetus DLMM positions with support for user self-management, agent delegation, protocol-managed operations, and optional Scallop lending integration for idle funds.
+CDPM (Cetus DLMM Position Manager) is a proxy contract for managing Cetus DLMM positions with support for user self-management, agent delegation, protocol-managed operations, and two optional lending integrations for idle funds: **Scallop** (single-generic `<T>` market coin) and **Kai SAV** (two-generic `<T, YT>` strategy-aggregating vault). Both integrations share `pm.lending: Bag`, the hot-potato ticket pattern, and a single `fee_house.fee_rate` knob.
 
 **Package Address**: `0x0000000000000000000000000000000000000000000000000000000000000000`
 
@@ -110,17 +110,17 @@ try {
   } else if (e.message.includes('EInvalidFeeRate')) { // 1003
     console.error('Invalid fee rate configuration (cap is 30% / 3000 bp)');
   } else if (e.message.includes('ELendingNotEmpty')) {// 1004
-    console.error('PositionManager.lending is non-empty — drain Scallop vaults before user_close_pm');
+    console.error('PositionManager.lending is non-empty — drain every Scallop AND Kai vault entry before user_close_pm');
   } else if (e.message.includes('ENoSuchVault')) {    // 1005
-    console.error('No ScallopVault for that underlying coin type');
+    console.error('No ScallopVault<T> or KaiVault<T, YT> entry in pm.lending for the requested key');
   } else if (e.message.includes('EReserveEmpty')) {   // 1006
-    console.error('Scallop reserve has zero supply or zero (cash+debt-revenue) — accrue_interest first?');
+    console.error('Lending reserve degenerate. Scallop: zero supply or zero (cash+debt-revenue) — call accrue_interest_for_market first. Kai: total_yt_supply == 0.');
   } else if (e.message.includes('EZeroExpected')) {   // 1007
-    console.error('scallop_start_supply/scallop_start_redeem amount too small — would yield 0 scoin/underlying');
+    console.error('scallop_start_* / kai_start_* amount too small — would yield 0 scoin / yt / underlying');
   } else if (e.message.includes('EWrongPm')) {        // 1008
-    console.error('Hot-potato ticket consumed against a different PositionManager');
+    console.error('Hot-potato ticket (Scallop or Kai) consumed against a different PositionManager');
   } else if (e.message.includes('EAmountShortfall')) {// 1009
-    console.error('finish_* received Coin with value < ticket.expected — Scallop returned less than predicted');
+    console.error('finish_* received Coin with value < ticket.expected. Scallop: stale accrual. Kai: vault state moved between snapshot and signing.');
   } else {
     console.error('Transaction failed:', e);
   }
