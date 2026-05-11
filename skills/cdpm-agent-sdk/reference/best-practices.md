@@ -120,8 +120,9 @@ Recommended PTB shape for an agent:
 
 Other agent-side notes:
 
-- (T, S) vaults are one-to-one. To switch the sCoin variant `S` for an existing `T`, the **owner** must drain the vault first via `user_extract_market_coin<T, S_old>` (agents cannot call this — see `ENotOwner (1001)`).
+- One vault per underlying `T`. The sCoin type is structurally pinned to `MarketCoin<T>` by the type system, so agents cannot supply a fake or alternate sCoin — there is no `S` generic to mismatch.
 - Agent redeems still pay the protocol yield fee (`fee_house.fee_rate × interest_portion`) just like owner / protocol redeems.
+- Agents cannot short-change the vault: `finish_supply` only accepts `Coin<MarketCoin<T>>` (the only way to obtain a non-zero `Coin<MarketCoin<T>>` is through Scallop's `mint`, since `MarketCoin` has only `drop` and no public constructor) and asserts `actual >= ticket.expected_scoin`.
 
 ## Surfacing Close-Position Warnings
 
@@ -129,7 +130,7 @@ Agents do **not** call `user_close_pm` themselves — only the position owner ca
 
 > `pool::close_position` (used internally by `user_close_pm`) only returns underlying tokens and accumulated trading fees. Any **incentive reward tokens** still held by the position will be destroyed together with the `ClosePositionCert`. The owner's PTB must call `user_collect_reward<CoinTypeA, CoinTypeB, RewardType>` once for each reward token on the pool (typically 1-3 types) **before** `user_close_pm`, in the same transaction.
 
-> Additionally, `user_close_pm` now asserts `bag::is_empty(&pm.lending)` and aborts with `ELendingNotEmpty (1004)` otherwise. Drain every `ScallopVault<T, S>` first — agents can run the full `accrue_interest → start_redeem → redeem::redeem → finish_redeem` PTB, but the **owner-only** `user_extract_market_coin` is the rescue path when Scallop is unreachable.
+> Additionally, `user_close_pm` now asserts `bag::is_empty(&pm.lending)` and aborts with `ELendingNotEmpty (1004)` otherwise. Drain every `ScallopVault<T>` first — agents can run the full `accrue_interest → start_redeem → redeem::redeem → finish_redeem` PTB, but the **owner-only** `user_extract_market_coin` is the rescue path when Scallop is unreachable.
 
 See the user-sdk workflow (`cdpm-user-sdk/reference/workflows.md`, section "Close Position Safely") for the complete PTB example to reuse when building the owner-facing transaction.
 

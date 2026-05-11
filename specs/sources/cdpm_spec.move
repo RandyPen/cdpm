@@ -23,6 +23,7 @@ use cdpm::cdpm::{
 };
 use sui::coin::Coin;
 use sui::tx_context::TxContext;
+use protocol::reserve::MarketCoin;
 
 // MAX_FEE_RATE in cdpm is `30 %` of FEE_DENOMINATOR (10_000) — capped at 3000.
 // EInvalidFeeRate = 1003.
@@ -53,36 +54,37 @@ public fun admin_set_fee_spec(
 // ---------------------------------------------------------------------------
 // P-WrongPm-supply + P-AmountShortfall-supply
 //
-//   finish_supply<T, S>(pm, ticket, scoin) aborts when
+//   finish_supply<T>(pm, ticket, scoin) aborts when
 //     ticket.pm_id   != object::id(pm)             // EWrongPm
 //     scoin.value()  <  ticket.expected_scoin      // EAmountShortfall
 //
-// `ignore_abort` is required because finish_supply calls add_to_lending which
-// uses `bag::contains` + `bag::borrow_mut` — the prover cannot connect those
-// (only `bag::contains_with_type` does — see SPEC.md Limitations). The two
-// `asserts(...)` calls below remain as structural documentation; they are
-// NOT verified as exhaustive abort conditions, but the spec body still
-// proves that finish_supply runs to completion when those preconditions hold
-// (modulo the bag/balance-internal aborts handled by `ignore_abort`).
+// Note (post Option D): `S` was removed from the public surface; sCoin type
+// is now structurally pinned to `protocol::reserve::MarketCoin<T>` by the
+// type system. The fake-S extraction vector that motivated separate ticket
+// audits no longer exists; both asserts below are now type-safe.
+//
+// `ignore_abort` is still required because finish_supply calls add_to_lending
+// which uses `bag::contains` + `bag::borrow_mut` — the prover cannot connect
+// those (only `bag::contains_with_type` does — see SPEC.md Limitations).
 // ---------------------------------------------------------------------------
 #[spec(prove, ignore_abort, target = cdpm::finish_supply)]
-public fun finish_supply_spec<T, S>(
+public fun finish_supply_spec<T>(
     pm: &mut PositionManager,
-    ticket: SupplyTicket<T, S>,
-    scoin: Coin<S>,
+    ticket: SupplyTicket<T>,
+    scoin: Coin<MarketCoin<T>>,
 ) {
     // P-WrongPm (structural assertion, see comment above).
     asserts(cdpm::spec_supply_ticket_pm_id(&ticket) == object::id(pm));
     // P-AmountShortfall (structural assertion, see comment above).
     asserts(scoin.value() >= cdpm::spec_supply_ticket_expected_scoin(&ticket));
 
-    cdpm::finish_supply<T, S>(pm, ticket, scoin);
+    cdpm::finish_supply<T>(pm, ticket, scoin);
 }
 
 // ---------------------------------------------------------------------------
 // P-WrongPm-redeem + P-AmountShortfall-redeem
 //
-//   finish_redeem<T, S>(pm, fee_house, ticket, underlying, ctx) aborts when
+//   finish_redeem<T>(pm, fee_house, ticket, underlying, ctx) aborts when
 //     ticket.pm_id          != object::id(pm)                  // EWrongPm
 //     underlying.value()    <  ticket.expected_underlying      // EAmountShortfall
 //
@@ -91,10 +93,10 @@ public fun finish_supply_spec<T, S>(
 // prover sees as potentially aborting. See SPEC.md Limitations.
 // ---------------------------------------------------------------------------
 #[spec(prove, ignore_abort, target = cdpm::finish_redeem)]
-public fun finish_redeem_spec<T, S>(
+public fun finish_redeem_spec<T>(
     pm: &mut PositionManager,
     fee_house: &mut FeeHouse,
-    ticket: RedeemTicket<T, S>,
+    ticket: RedeemTicket<T>,
     underlying: Coin<T>,
     ctx: &mut TxContext,
 ) {
@@ -103,5 +105,5 @@ public fun finish_redeem_spec<T, S>(
     // P-AmountShortfall (structural assertion).
     asserts(underlying.value() >= cdpm::spec_redeem_ticket_expected_underlying(&ticket));
 
-    cdpm::finish_redeem<T, S>(pm, fee_house, ticket, underlying, ctx);
+    cdpm::finish_redeem<T>(pm, fee_house, ticket, underlying, ctx);
 }

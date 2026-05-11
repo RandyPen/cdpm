@@ -15,7 +15,7 @@ cdpm reads four `u64` values from Scallop's `protocol::reserve::balance_sheet` f
 | `cash`    | `balance_sheet.cash`    | Underlying held by the reserve |
 | `debt`    | `balance_sheet.debt`    | Outstanding borrows |
 | `revenue` | `balance_sheet.revenue` | Protocol-skimmed reserve cut |
-| `supply`  | `balance_sheet.supply`  | sCoin supply (`Balance<S>` total) |
+| `supply`  | `balance_sheet.supply`  | sCoin supply (`Balance<MarketCoin<T>>` total) |
 
 The "lendable underlying" denominator that defines the sCoin↔underlying ratio is:
 
@@ -247,6 +247,6 @@ Because cdpm imports the same view path (`protocol::reserve` + `x::wit_table`), 
 
 When sizing inputs:
 
-- For `start_supply<T, S>`: `coin_amount × supply >= denom_underlying` to avoid `EZeroExpected`. In practice deposit at least a few hundred MIST equivalents.
-- For `start_redeem<T, S>`: `scoin_amount × denom_underlying >= supply` for the same reason.
+- For `start_supply<T>`: `coin_amount × supply >= denom_underlying` to avoid `EZeroExpected`. In practice deposit at least a few hundred MIST equivalents.
+- For `start_redeem<T>`: `scoin_amount × denom_underlying >= supply` for the same reason.
 - For both, build in headroom against `EAmountShortfall` by either calling `accrue_interest_for_market` immediately before, or shaving a small slippage off `expected_*` and verifying live values match before signing.

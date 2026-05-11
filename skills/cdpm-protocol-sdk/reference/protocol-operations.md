@@ -215,9 +215,9 @@ cdpm reads Scallop's `balance_sheet` view-only inside `compute_expected_scoin` /
 
 ```
 1. protocol::accrue_interest::accrue_interest_for_market(version, market, clock)
-2. cdpm::start_supply<T, S>(access, pm, market, amount)        → (coin_t, ticket)
-3. protocol::mint::mint<T>(version, market, coin_t, clock)     → coin_s
-4. cdpm::finish_supply<T, S>(pm, ticket, coin_s)
+2. cdpm::start_supply<T>(access, pm, market, amount)              → (coin_t, ticket)
+3. protocol::mint::mint<T>(version, market, coin_t, clock)        → coin_market<T>
+4. cdpm::finish_supply<T>(pm, ticket, coin_market)
 ```
 
 ```typescript
@@ -227,7 +227,6 @@ async function protocolSupplyToScallop(
   accessListId: string,
   pmId: string,
   underlyingCoinType: string,
-  scoinType: string,
   amount: bigint,
 ) {
   const tx = new Transaction();
@@ -243,7 +242,7 @@ async function protocolSupplyToScallop(
 
   const [coinT, ticket] = tx.moveCall({
     target: `${CDPM_PACKAGE}::cdpm::start_supply`,
-    typeArguments: [underlyingCoinType, scoinType],
+    typeArguments: [underlyingCoinType],
     arguments: [
       tx.object(accessListId),
       tx.object(pmId),
@@ -252,7 +251,7 @@ async function protocolSupplyToScallop(
     ],
   });
 
-  const [coinS] = tx.moveCall({
+  const [coinMarket] = tx.moveCall({
     target: `${SCALLOP_PROTOCOL}::mint::mint`,
     typeArguments: [underlyingCoinType],
     arguments: [
@@ -265,8 +264,8 @@ async function protocolSupplyToScallop(
 
   tx.moveCall({
     target: `${CDPM_PACKAGE}::cdpm::finish_supply`,
-    typeArguments: [underlyingCoinType, scoinType],
-    arguments: [tx.object(pmId), ticket, coinS],
+    typeArguments: [underlyingCoinType],
+    arguments: [tx.object(pmId), ticket, coinMarket],
   });
 
   return await client.signAndExecuteTransaction({ signer, transaction: tx });
@@ -279,9 +278,9 @@ async function protocolSupplyToScallop(
 
 ```
 1. protocol::accrue_interest::accrue_interest_for_market(version, market, clock)
-2. cdpm::start_redeem<T, S>(access, pm, market, scoin_amount)         → (coin_s, ticket)
-3. protocol::redeem::redeem<T>(version, market, coin_s, clock)        → coin_t
-4. cdpm::finish_redeem<T, S>(pm, fee_house, ticket, coin_t)
+2. cdpm::start_redeem<T>(access, pm, market, scoin_amount)            → (coin_market, ticket)
+3. protocol::redeem::redeem<T>(version, market, coin_market, clock)   → coin_t
+4. cdpm::finish_redeem<T>(pm, fee_house, ticket, coin_t)
 ```
 
 ```typescript
@@ -292,7 +291,6 @@ async function protocolRedeemFromScallop(
   feeHouseId: string,
   pmId: string,
   underlyingCoinType: string,
-  scoinType: string,
   scoinAmount: bigint,
 ) {
   const tx = new Transaction();
@@ -306,9 +304,9 @@ async function protocolRedeemFromScallop(
     ],
   });
 
-  const [coinS, ticket] = tx.moveCall({
+  const [coinMarket, ticket] = tx.moveCall({
     target: `${CDPM_PACKAGE}::cdpm::start_redeem`,
-    typeArguments: [underlyingCoinType, scoinType],
+    typeArguments: [underlyingCoinType],
     arguments: [
       tx.object(accessListId),
       tx.object(pmId),
@@ -323,14 +321,14 @@ async function protocolRedeemFromScallop(
     arguments: [
       tx.object(SCALLOP_VERSION_ID),
       tx.object(SCALLOP_MARKET_ID),
-      coinS,
+      coinMarket,
       tx.object('0x6'),
     ],
   });
 
   tx.moveCall({
     target: `${CDPM_PACKAGE}::cdpm::finish_redeem`,
-    typeArguments: [underlyingCoinType, scoinType],
+    typeArguments: [underlyingCoinType],
     arguments: [
       tx.object(pmId),
       tx.object(feeHouseId),
@@ -345,4 +343,4 @@ async function protocolRedeemFromScallop(
 
 ### Protocol Cannot Call `user_extract_market_coin`
 
-`user_extract_market_coin<T, S>` aborts with `ENotOwner (1001)` for anyone other than `pm.owner`. Protocol bots cannot use the escape hatch — they must always go through the full Scallop redeem path.
+`user_extract_market_coin<T>` aborts with `ENotOwner (1001)` for anyone other than `pm.owner`. Protocol bots cannot use the escape hatch — they must always go through the full Scallop redeem path.

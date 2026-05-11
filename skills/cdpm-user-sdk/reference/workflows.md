@@ -158,9 +158,9 @@ async function createPositionSmart(
 > **IMPORTANT — Scallop lending must be empty**
 > `user_close_pm` now asserts `bag::is_empty(&pm.lending)` and aborts with
 > `ELendingNotEmpty (1004)` otherwise. Before closing, drain every
-> `ScallopVault<T, S>` either by running the full
+> `ScallopVault<T>` either by running the full
 > `accrue_interest → start_redeem → redeem::redeem → finish_redeem` PTB or
-> by calling `user_extract_market_coin<T, S>` (owner-only). See
+> by calling `user_extract_market_coin<T>` (owner-only). See
 > `reference/scallop-lending.md` for the full recipes.
 
 ```typescript

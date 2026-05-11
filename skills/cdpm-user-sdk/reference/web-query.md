@@ -63,7 +63,7 @@ interface PositionManagerInfo {
   balance: Record<string, string>;
   fee: Record<string, string>;
   // Scallop vaults keyed by underlying `type_name<T>`.
-  // Each value is a ScallopVault<T, S> { scoin: Balance<S>, principal: u64 }.
+  // Each value is a ScallopVault<T> { scoin: Balance<MarketCoin<T>>, principal: u64 }.
   lending: Record<string, { scoin: string; principal: string }>;
 }
 ```

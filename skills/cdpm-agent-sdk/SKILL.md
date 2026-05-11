@@ -38,7 +38,7 @@ import { SuiGrpcClient } from '@mysten/sui/grpc';
 | Close Position | Only owner can close |
 | Authorize/Revoke Agents | Only owner can manage agents |
 | Modify PositionManager | Cannot change configuration |
-| `user_extract_market_coin<T, S>` | Owner-only escape hatch — agents cannot pull raw sCoin |
+| `user_extract_market_coin<T>` | Owner-only escape hatch — agents cannot pull raw sCoin |
 
 ### Permission Check
 

@@ -19,7 +19,7 @@ use cetusdlmm::config::GlobalConfig;
 use integer_mate::i32::I32;
 
 use protocol::market::{Self, Market};
-use protocol::reserve;
+use protocol::reserve::{Self, MarketCoin};
 use x::wit_table;
 
 const FEE_DENOMINATOR: u128 = 10000;
@@ -61,18 +61,18 @@ public struct PositionManager has key {
     lending: Bag,
 }
 
-public struct ScallopVault<phantom T, phantom S> has store {
-    scoin: Balance<S>,
+public struct ScallopVault<phantom T> has store {
+    scoin: Balance<MarketCoin<T>>,
     principal: u64,
 }
 
-public struct SupplyTicket<phantom T, phantom S> {
+public struct SupplyTicket<phantom T> {
     pm_id: ID,
     expected_scoin: u64,
     principal: u64,
 }
 
-public struct RedeemTicket<phantom T, phantom S> {
+public struct RedeemTicket<phantom T> {
     pm_id: ID,
     expected_underlying: u64,
     scoin_burned: u64,
@@ -296,7 +296,6 @@ public struct AgentRewardCollected has copy, drop {
 public struct ScallopSupplied has copy, drop {
     pm_id: ID,
     coin_type: String,
-    scoin_type: String,
     deposit_amount: u64,
     market_coin_minted: u64,
 }
@@ -304,7 +303,6 @@ public struct ScallopSupplied has copy, drop {
 public struct ScallopRedeemed has copy, drop {
     pm_id: ID,
     coin_type: String,
-    scoin_type: String,
     market_coin_redeemed: u64,
     redeemed_amount: u64,
     principal_portion: u64,
@@ -315,7 +313,6 @@ public struct ScallopRedeemed has copy, drop {
 public struct MarketCoinExtracted has copy, drop {
     pm_id: ID,
     coin_type: String,
-    scoin_type: String,
     market_coin_amount: u64,
     principal_removed: u64,
 }
@@ -1319,18 +1316,18 @@ fun assert_caller_authorized(
     assert!(is_owner || is_agent || is_protocol, ENotAllow);
 }
 
-fun add_to_lending<T, S>(
+fun add_to_lending<T>(
     pm: &mut PositionManager,
-    scoin: Balance<S>,
+    scoin: Balance<MarketCoin<T>>,
     principal_added: u64,
 ) {
     let coin_type = type_name::with_defining_ids<T>().into_string();
     if (bag::contains<String>(&pm.lending, coin_type)) {
-        let vault = bag::borrow_mut<String, ScallopVault<T, S>>(&mut pm.lending, coin_type);
-        balance::join<S>(&mut vault.scoin, scoin);
+        let vault = bag::borrow_mut<String, ScallopVault<T>>(&mut pm.lending, coin_type);
+        balance::join<MarketCoin<T>>(&mut vault.scoin, scoin);
         vault.principal = vault.principal + principal_added;
     } else {
-        bag::add<String, ScallopVault<T, S>>(
+        bag::add<String, ScallopVault<T>>(
             &mut pm.lending,
             coin_type,
             ScallopVault { scoin, principal: principal_added },
@@ -1338,25 +1335,25 @@ fun add_to_lending<T, S>(
     };
 }
 
-fun pull_from_lending<T, S>(
+fun pull_from_lending<T>(
     pm: &mut PositionManager,
     want_amount: u64,
-): (Balance<S>, u64) {
+): (Balance<MarketCoin<T>>, u64) {
     let coin_type = type_name::with_defining_ids<T>().into_string();
     assert!(bag::contains<String>(&pm.lending, coin_type), ENoSuchVault);
-    let total_scoin = balance::value<S>(
-        &bag::borrow<String, ScallopVault<T, S>>(&pm.lending, coin_type).scoin,
+    let total_scoin = balance::value<MarketCoin<T>>(
+        &bag::borrow<String, ScallopVault<T>>(&pm.lending, coin_type).scoin,
     );
     if (want_amount >= total_scoin) {
         let ScallopVault { scoin, principal } =
-            bag::remove<String, ScallopVault<T, S>>(&mut pm.lending, coin_type);
+            bag::remove<String, ScallopVault<T>>(&mut pm.lending, coin_type);
         (scoin, principal)
     } else {
-        let vault = bag::borrow_mut<String, ScallopVault<T, S>>(&mut pm.lending, coin_type);
+        let vault = bag::borrow_mut<String, ScallopVault<T>>(&mut pm.lending, coin_type);
         let principal_portion = (((vault.principal as u128) * (want_amount as u128)
             / (total_scoin as u128)) as u64);
         vault.principal = vault.principal - principal_portion;
-        let s_balance = balance::split<S>(&mut vault.scoin, want_amount);
+        let s_balance = balance::split<MarketCoin<T>>(&mut vault.scoin, want_amount);
         (s_balance, principal_portion)
     }
 }
@@ -1399,19 +1396,19 @@ fun compute_expected_underlying<T>(market: &Market, scoin_amount: u64): u64 {
 
 // ============ Scallop Lending Public API (Hot Potato) ============
 
-public fun start_supply<T, S>(
+public fun start_supply<T>(
     access: &AccessList,
     pm: &mut PositionManager,
     market: &Market,
     amount: u64,
     ctx: &mut TxContext,
-): (Coin<T>, SupplyTicket<T, S>) {
+): (Coin<T>, SupplyTicket<T>) {
     assert_caller_authorized(access, pm, ctx);
     let coin: Coin<T> = withdraw_from_balance<T>(pm, amount, ctx);
     let actual = coin.value();
     let expected_scoin = compute_expected_scoin<T>(market, actual);
     assert!(expected_scoin > 0, EZeroExpected);
-    let ticket = SupplyTicket<T, S> {
+    let ticket = SupplyTicket<T> {
         pm_id: object::id(pm),
         expected_scoin,
         principal: actual,
@@ -1419,39 +1416,38 @@ public fun start_supply<T, S>(
     (coin, ticket)
 }
 
-public fun finish_supply<T, S>(
+public fun finish_supply<T>(
     pm: &mut PositionManager,
-    ticket: SupplyTicket<T, S>,
-    scoin: Coin<S>,
+    ticket: SupplyTicket<T>,
+    scoin: Coin<MarketCoin<T>>,
 ) {
     let SupplyTicket { pm_id, expected_scoin, principal } = ticket;
     assert!(pm_id == object::id(pm), EWrongPm);
     let scoin_amount = scoin.value();
     assert!(scoin_amount >= expected_scoin, EAmountShortfall);
-    add_to_lending<T, S>(pm, scoin.into_balance(), principal);
+    add_to_lending<T>(pm, scoin.into_balance(), principal);
 
     event::emit(ScallopSupplied {
         pm_id,
         coin_type: type_name::with_defining_ids<T>().into_string(),
-        scoin_type: type_name::with_defining_ids<S>().into_string(),
         deposit_amount: principal,
         market_coin_minted: scoin_amount,
     });
 }
 
-public fun start_redeem<T, S>(
+public fun start_redeem<T>(
     access: &AccessList,
     pm: &mut PositionManager,
     market: &Market,
     market_coin_amount: u64,
     ctx: &mut TxContext,
-): (Coin<S>, RedeemTicket<T, S>) {
+): (Coin<MarketCoin<T>>, RedeemTicket<T>) {
     assert_caller_authorized(access, pm, ctx);
-    let (s_balance, principal_portion) = pull_from_lending<T, S>(pm, market_coin_amount);
-    let scoin_burned = balance::value<S>(&s_balance);
+    let (s_balance, principal_portion) = pull_from_lending<T>(pm, market_coin_amount);
+    let scoin_burned = balance::value<MarketCoin<T>>(&s_balance);
     let expected_underlying = compute_expected_underlying<T>(market, scoin_burned);
     assert!(expected_underlying > 0, EZeroExpected);
-    let ticket = RedeemTicket<T, S> {
+    let ticket = RedeemTicket<T> {
         pm_id: object::id(pm),
         expected_underlying,
         scoin_burned,
@@ -1460,10 +1456,10 @@ public fun start_redeem<T, S>(
     (s_balance.into_coin(ctx), ticket)
 }
 
-public fun finish_redeem<T, S>(
+public fun finish_redeem<T>(
     pm: &mut PositionManager,
     fee_house: &mut FeeHouse,
-    ticket: RedeemTicket<T, S>,
+    ticket: RedeemTicket<T>,
     underlying: Coin<T>,
     ctx: &mut TxContext,
 ) {
@@ -1491,7 +1487,6 @@ public fun finish_redeem<T, S>(
     event::emit(ScallopRedeemed {
         pm_id,
         coin_type: type_name::with_defining_ids<T>().into_string(),
-        scoin_type: type_name::with_defining_ids<S>().into_string(),
         market_coin_redeemed: scoin_burned,
         redeemed_amount,
         principal_portion,
@@ -1500,19 +1495,18 @@ public fun finish_redeem<T, S>(
     });
 }
 
-public fun user_extract_market_coin<T, S>(
+public fun user_extract_market_coin<T>(
     pm: &mut PositionManager,
     market_coin_amount: u64,
     ctx: &mut TxContext,
-): Coin<S> {
+): Coin<MarketCoin<T>> {
     assert!(pm.owner == ctx.sender(), ENotOwner);
-    let (s_balance, principal_portion) = pull_from_lending<T, S>(pm, market_coin_amount);
-    let s_amount = balance::value<S>(&s_balance);
+    let (s_balance, principal_portion) = pull_from_lending<T>(pm, market_coin_amount);
+    let s_amount = balance::value<MarketCoin<T>>(&s_balance);
 
     event::emit(MarketCoinExtracted {
         pm_id: object::id(pm),
         coin_type: type_name::with_defining_ids<T>().into_string(),
-        scoin_type: type_name::with_defining_ids<S>().into_string(),
         market_coin_amount: s_amount,
         principal_removed: principal_portion,
     });
@@ -1525,20 +1519,20 @@ public fun user_extract_market_coin<T, S>(
 // They are stripped from non-test builds and do not enlarge the deployed bytecode.
 
 #[test_only]
-public fun test_only_pull_from_lending<T, S>(
+public fun test_only_pull_from_lending<T>(
     pm: &mut PositionManager,
     want_amount: u64,
-): (Balance<S>, u64) {
-    pull_from_lending<T, S>(pm, want_amount)
+): (Balance<MarketCoin<T>>, u64) {
+    pull_from_lending<T>(pm, want_amount)
 }
 
 #[test_only]
-public fun test_only_add_to_lending<T, S>(
+public fun test_only_add_to_lending<T>(
     pm: &mut PositionManager,
-    scoin: Balance<S>,
+    scoin: Balance<MarketCoin<T>>,
     principal_added: u64,
 ) {
-    add_to_lending<T, S>(pm, scoin, principal_added)
+    add_to_lending<T>(pm, scoin, principal_added)
 }
 
 #[test_only]
@@ -1599,10 +1593,10 @@ public fun test_only_lending_contains<T>(pm: &PositionManager): bool {
 }
 
 #[test_only]
-public fun test_only_lending_state<T, S>(pm: &PositionManager): (u64, u64) {
+public fun test_only_lending_state<T>(pm: &PositionManager): (u64, u64) {
     let coin_type = type_name::with_defining_ids<T>().into_string();
-    let v = bag::borrow<String, ScallopVault<T, S>>(&pm.lending, coin_type);
-    (balance::value<S>(&v.scoin), v.principal)
+    let v = bag::borrow<String, ScallopVault<T>>(&pm.lending, coin_type);
+    (balance::value<MarketCoin<T>>(&v.scoin), v.principal)
 }
 
 #[test_only]
@@ -1635,15 +1629,15 @@ public fun test_only_fee_house_rate(fee_house: &FeeHouse): u64 {
 }
 
 #[test_only]
-public fun test_only_supply_ticket_fields<T, S>(
-    ticket: &SupplyTicket<T, S>,
+public fun test_only_supply_ticket_fields<T>(
+    ticket: &SupplyTicket<T>,
 ): (ID, u64, u64) {
     (ticket.pm_id, ticket.expected_scoin, ticket.principal)
 }
 
 #[test_only]
-public fun test_only_redeem_ticket_fields<T, S>(
-    ticket: &RedeemTicket<T, S>,
+public fun test_only_redeem_ticket_fields<T>(
+    ticket: &RedeemTicket<T>,
 ): (ID, u64, u64, u64) {
     (
         ticket.pm_id,
@@ -1743,21 +1737,21 @@ public fun spec_fee_house_rate(fee_house: &FeeHouse): u64 {
 }
 
 #[spec_only]
-public fun spec_supply_ticket_pm_id<T, S>(ticket: &SupplyTicket<T, S>): ID {
+public fun spec_supply_ticket_pm_id<T>(ticket: &SupplyTicket<T>): ID {
     ticket.pm_id
 }
 
 #[spec_only]
-public fun spec_supply_ticket_expected_scoin<T, S>(ticket: &SupplyTicket<T, S>): u64 {
+public fun spec_supply_ticket_expected_scoin<T>(ticket: &SupplyTicket<T>): u64 {
     ticket.expected_scoin
 }
 
 #[spec_only]
-public fun spec_redeem_ticket_pm_id<T, S>(ticket: &RedeemTicket<T, S>): ID {
+public fun spec_redeem_ticket_pm_id<T>(ticket: &RedeemTicket<T>): ID {
     ticket.pm_id
 }
 
 #[spec_only]
-public fun spec_redeem_ticket_expected_underlying<T, S>(ticket: &RedeemTicket<T, S>): u64 {
+public fun spec_redeem_ticket_expected_underlying<T>(ticket: &RedeemTicket<T>): u64 {
     ticket.expected_underlying
 }

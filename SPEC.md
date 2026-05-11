@@ -22,10 +22,11 @@ the gap below.
 |----|-----------|-----------|--------|
 | **P-FeeRateBound** | `admin_set_fee` aborts iff `(fee_rate as u128) > 3000`. Encoded as `asserts((fee_rate as u128) <= SPEC_MAX_FEE_RATE)`. | [`specs/sources/cdpm_spec.move:44`](./specs/sources/cdpm_spec.move) | **proven** |
 | **P-FeeCap** | After `admin_set_fee`, `spec_fee_house_rate(fee_house) == fee_rate`, hence `<= 3000`. Encoded as two `ensures`. | [`specs/sources/cdpm_spec.move:49-50`](./specs/sources/cdpm_spec.move) | **proven** |
-| **P-WrongPm-supply** | `finish_supply<T,S>(pm, ticket, scoin)` requires `ticket.pm_id == object::id(pm)` (otherwise aborts with `EWrongPm`). Structural `asserts`. | [`specs/sources/cdpm_spec.move:75`](./specs/sources/cdpm_spec.move) | **structural** (see "Limitations") |
+| **P-WrongPm-supply** | `finish_supply<T>(pm, ticket, scoin)` requires `ticket.pm_id == object::id(pm)` (otherwise aborts with `EWrongPm`). Structural `asserts`. | [`specs/sources/cdpm_spec.move:75`](./specs/sources/cdpm_spec.move) | **structural** (see "Limitations") |
 | **P-AmountShortfall-supply** | `finish_supply` requires `scoin.value() >= ticket.expected_scoin` (else `EAmountShortfall`). Structural `asserts`. | [`specs/sources/cdpm_spec.move:77`](./specs/sources/cdpm_spec.move) | **structural** |
-| **P-WrongPm-redeem** | `finish_redeem<T,S>` requires `ticket.pm_id == object::id(pm)` (else `EWrongPm`). | [`specs/sources/cdpm_spec.move:102`](./specs/sources/cdpm_spec.move) | **structural** |
+| **P-WrongPm-redeem** | `finish_redeem<T>` requires `ticket.pm_id == object::id(pm)` (else `EWrongPm`). | [`specs/sources/cdpm_spec.move:102`](./specs/sources/cdpm_spec.move) | **structural** |
 | **P-AmountShortfall-redeem** | `finish_redeem` requires `underlying.value() >= ticket.expected_underlying` (else `EAmountShortfall`). | [`specs/sources/cdpm_spec.move:104`](./specs/sources/cdpm_spec.move) | **structural** |
+| **P-FakeSCoinExtraction-blocked** | `finish_supply<T>` is type-locked to `Coin<MarketCoin<T>>`; agents cannot fabricate fake sCoin types. Enforced by Move type system, not prover. | type-system, no spec needed | **type-checked** |
 
 All three spec functions are checked across the prover's three phases (`Check`,
 `Assume`, `SpecNoAbortCheck`) and pass; the prover's last line is
@@ -129,9 +130,10 @@ The prover does **not** cover:
   opaque dependency. We do not prove anything about the lending pool's own
   balance sheets — only about how cdpm marshals values across the boundary.
 - **Gas costs / DoS surface.** Out of scope for a verification tool.
-- **H-D1 type-mismatch issue.** As documented elsewhere, the user has chosen
-  not to fix the H-D1 issue in code; documentation already covers it. No spec
-  attempts to formalise its absence.
+- **H-D1 (T, S1) vs (T, S2) collision.** This issue no longer exists in the
+  current code: the public surface no longer carries a free `S` generic;
+  `finish_supply<T>` is statically typed to accept only `Coin<MarketCoin<T>>`.
+  See README D-08 / DESIGN "Type-pinned sCoin".
 - **Lending arithmetic** (P-PrincipalMonotonic, P-VaultPositiveAfterAdd) — see
   "Skipped" above.
 

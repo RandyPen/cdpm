@@ -51,9 +51,9 @@ interface PositionManager {
   balance: Map<string, string>;  // Available funds
   fee: Map<string, string>;      // Accumulated fees
   // Scallop lending vaults — keyed by `type_name<T>` (underlying coin type only).
-  // Value type: ScallopVault<T, S> { scoin: Balance<S>, principal: u64 }.
-  // At most one vault per T; switching the sCoin variant `S` requires
-  // draining the existing vault first.
+  // Value type: ScallopVault<T> { scoin: Balance<MarketCoin<T>>, principal: u64 }.
+  // At most one vault per T; the sCoin type is structurally pinned to
+  // MarketCoin<T> by the type system, so a fake-sCoin variant cannot be supplied.
   lending: Map<string, { scoin: string; principal: string }>;
 }
 ```
@@ -61,8 +61,8 @@ interface PositionManager {
 ### ScallopVault
 
 ```typescript
-interface ScallopVault<T, S> {
-  scoin: string;      // Balance<S> — Scallop sCoin (yield-bearing market coin)
+interface ScallopVault<T> {
+  scoin: string;      // Balance<MarketCoin<T>> — Scallop sCoin (yield-bearing market coin)
   principal: u64;     // Original underlying deposited; used for yield accounting
 }
 ```

@@ -5,6 +5,8 @@
 The on-chain shape:
 
 ```move
+use protocol::reserve::MarketCoin;
+
 public struct PositionManager has key {
     id: UID,
     owner: address,
@@ -12,16 +14,16 @@ public struct PositionManager has key {
     position: Option<Position>,
     balance: Bag,
     fee: Bag,
-    lending: Bag,                 // <— keyed by `type_name<T>`, value = ScallopVault<T, S>
+    lending: Bag,                 // <— keyed by `type_name<T>`, value = ScallopVault<T>
 }
 
-public struct ScallopVault<phantom T, phantom S> has store {
-    scoin: Balance<S>,            // Scallop sCoin (yield-bearing market coin)
-    principal: u64,               // Original underlying deposited (for yield accounting)
+public struct ScallopVault<phantom T> has store {
+    scoin: Balance<MarketCoin<T>>, // Scallop sCoin (yield-bearing market coin)
+    principal: u64,                // Original underlying deposited (for yield accounting)
 }
 ```
 
-There is **at most one vault per underlying type T**. The (T, S) pair is fixed for the lifetime of that vault — to switch the sCoin variant `S`, you must drain the existing vault first.
+There is **at most one vault per underlying type T**. The sCoin type is structurally pinned to `MarketCoin<T>` by the type system — there is no separate `S` generic, so a fake-sCoin variant simply cannot be passed in.
 
 ---
 
@@ -29,14 +31,14 @@ There is **at most one vault per underlying type T**. The (T, S) pair is fixed f
 
 The four entry points come in two pairs that must be glued together inside one PTB:
 
-| Phase    | cdpm function | Returns / consumes                                     |
-|----------|--------------------------------|-----------------------------------------|
-| Supply   | `start_supply<T, S>`           | `(Coin<T>, SupplyTicket<T, S>)`         |
-| Supply   | `finish_supply<T, S>`          | consumes `SupplyTicket` + `Coin<S>`     |
-| Redeem   | `start_redeem<T, S>`           | `(Coin<S>, RedeemTicket<T, S>)`         |
-| Redeem   | `finish_redeem<T, S>`          | consumes `RedeemTicket` + `Coin<T>`     |
+| Phase    | cdpm function | Returns / consumes                                          |
+|----------|------------------------|----------------------------------------------------|
+| Supply   | `start_supply<T>`      | `(Coin<T>, SupplyTicket<T>)`                       |
+| Supply   | `finish_supply<T>`     | consumes `SupplyTicket<T>` + `Coin<MarketCoin<T>>` |
+| Redeem   | `start_redeem<T>`      | `(Coin<MarketCoin<T>>, RedeemTicket<T>)`           |
+| Redeem   | `finish_redeem<T>`     | consumes `RedeemTicket<T>` + `Coin<T>`             |
 
-`SupplyTicket<T, S>` and `RedeemTicket<T, S>` have **no `drop` ability**. The only way to discharge them is by calling the matching `finish_*`. If you forget, the PTB aborts.
+`SupplyTicket<T>` and `RedeemTicket<T>` have **no `drop` ability**. The only way to discharge them is by calling the matching `finish_*`. If you forget, the PTB aborts.
 
 Authorization for `start_supply` / `start_redeem` is checked by `assert_caller_authorized`: caller must be **owner**, **an authorized agent**, or **a whitelisted protocol bot AND the PM has no agents**.
 
@@ -52,9 +54,9 @@ Required PTB order:
 
 ```
 1. protocol::accrue_interest::accrue_interest_for_market(version, market, clock)
-2. cdpm::start_supply<T, S>(access, pm, market, amount)        → (coin_t, ticket)
-3. protocol::mint::mint<T>(version, market, coin_t, clock)     → coin_s
-4. cdpm::finish_supply<T, S>(pm, ticket, coin_s)
+2. cdpm::start_supply<T>(access, pm, market, amount)              → (coin_t, ticket)
+3. protocol::mint::mint<T>(version, market, coin_t, clock)        → coin_market<T>
+4. cdpm::finish_supply<T>(pm, ticket, coin_market)
 ```
 
 ```typescript
@@ -65,7 +67,6 @@ async function userSupplyToScallop(
   signer: any,
   pmId: string,
   underlyingCoinType: string,    // e.g. '0x...::usdc::USDC'
-  scoinType: string,             // e.g. '0x...::scallop_market_coin::MARKET_COIN<USDC>'
   amount: bigint,
 ) {
   const tx = new Transaction();
@@ -83,7 +84,7 @@ async function userSupplyToScallop(
   // 2. Withdraw underlying from pm.balance and emit a SupplyTicket.
   const [coinT, ticket] = tx.moveCall({
     target: `${CDPM_PACKAGE}::cdpm::start_supply`,
-    typeArguments: [underlyingCoinType, scoinType],
+    typeArguments: [underlyingCoinType],
     arguments: [
       tx.object(CDPM_MAINNET.ACCESS_LIST_ID),
       tx.object(pmId),
@@ -92,8 +93,8 @@ async function userSupplyToScallop(
     ],
   });
 
-  // 3. Hand the underlying to Scallop, receive the sCoin.
-  const [coinS] = tx.moveCall({
+  // 3. Hand the underlying to Scallop, receive Coin<MarketCoin<T>>.
+  const [coinMarket] = tx.moveCall({
     target: `${SCALLOP_PROTOCOL}::mint::mint`,
     typeArguments: [underlyingCoinType],
     arguments: [
@@ -107,8 +108,8 @@ async function userSupplyToScallop(
   // 4. Burn the SupplyTicket by depositing the sCoin into pm.lending.
   tx.moveCall({
     target: `${CDPM_PACKAGE}::cdpm::finish_supply`,
-    typeArguments: [underlyingCoinType, scoinType],
-    arguments: [tx.object(pmId), ticket, coinS],
+    typeArguments: [underlyingCoinType],
+    arguments: [tx.object(pmId), ticket, coinMarket],
   });
 
   return await client.signAndExecuteTransaction({ signer, transaction: tx });
@@ -118,8 +119,8 @@ async function userSupplyToScallop(
 Important properties:
 
 - `start_supply` decreases `pm.balance[T]` by `amount` and stores `principal` for later yield accounting.
-- `finish_supply` requires `coinS.value() >= ticket.expected_scoin`; otherwise it aborts with `EAmountShortfall (1009)`.
-- The first supply for a given `T` creates a fresh `ScallopVault<T, S>`. Subsequent supplies of the same `(T, S)` add to it. A supply of `<T, S2>` while a `<T, S1>` vault exists aborts at framework level (`dynamic_field::EFieldTypeMismatch`).
+- `finish_supply` requires `coinMarket.value() >= ticket.expected_scoin`; otherwise it aborts with `EAmountShortfall (1009)`. Combined with the `Coin<MarketCoin<T>>` type pin (the only way to obtain a non-zero `Coin<MarketCoin<T>>` is through Scallop's `mint`, since `MarketCoin` has only `drop` and no public constructor), an agent cannot short-change the vault with a fake sCoin or a smaller real one.
+- The first supply for a given `T` creates a fresh `ScallopVault<T>`; subsequent supplies of the same `T` add to it.
 
 ---
 
@@ -139,9 +140,9 @@ Required PTB order:
 
 ```
 1. protocol::accrue_interest::accrue_interest_for_market(version, market, clock)
-2. cdpm::start_redeem<T, S>(access, pm, market, scoin_amount)         → (coin_s, ticket)
-3. protocol::redeem::redeem<T>(version, market, coin_s, clock)        → coin_t
-4. cdpm::finish_redeem<T, S>(pm, fee_house, ticket, coin_t)
+2. cdpm::start_redeem<T>(access, pm, market, scoin_amount)            → (coin_market, ticket)
+3. protocol::redeem::redeem<T>(version, market, coin_market, clock)   → coin_t
+4. cdpm::finish_redeem<T>(pm, fee_house, ticket, coin_t)
 ```
 
 ```typescript
@@ -150,7 +151,6 @@ async function userRedeemFromScallop(
   signer: any,
   pmId: string,
   underlyingCoinType: string,
-  scoinType: string,
   scoinAmount: bigint,
 ) {
   const tx = new Transaction();
@@ -164,9 +164,9 @@ async function userRedeemFromScallop(
     ],
   });
 
-  const [coinS, ticket] = tx.moveCall({
+  const [coinMarket, ticket] = tx.moveCall({
     target: `${CDPM_PACKAGE}::cdpm::start_redeem`,
-    typeArguments: [underlyingCoinType, scoinType],
+    typeArguments: [underlyingCoinType],
     arguments: [
       tx.object(CDPM_MAINNET.ACCESS_LIST_ID),
       tx.object(pmId),
@@ -181,14 +181,14 @@ async function userRedeemFromScallop(
     arguments: [
       tx.object(SCALLOP_VERSION_ID),
       tx.object(SCALLOP_MARKET_ID),
-      coinS,
+      coinMarket,
       tx.object('0x6'),
     ],
   });
 
   tx.moveCall({
     target: `${CDPM_PACKAGE}::cdpm::finish_redeem`,
-    typeArguments: [underlyingCoinType, scoinType],
+    typeArguments: [underlyingCoinType],
     arguments: [
       tx.object(pmId),
       tx.object(CDPM_MAINNET.FEE_HOUSE_ID),
@@ -207,14 +207,14 @@ The post-fee underlying lands back in `pm.balance[T]`; you can withdraw it later
 
 ## Owner-Only Escape: Extract Raw sCoin
 
-If Scallop ever becomes unreachable (paused, package upgrade frozen, etc.), the **owner** can still pull the raw `Coin<S>` out of the vault without touching any Scallop object:
+If Scallop ever becomes unreachable (paused, package upgrade frozen, etc.), the **owner** can still pull the raw `Coin<MarketCoin<T>>` out of the vault without touching any Scallop object:
 
 ```move
-public fun user_extract_market_coin<T, S>(
+public fun user_extract_market_coin<T>(
     pm: &mut PositionManager,
     market_coin_amount: u64,
     ctx: &mut TxContext,
-): Coin<S>
+): Coin<MarketCoin<T>>
 ```
 
 ```typescript
@@ -223,18 +223,17 @@ async function userExtractMarketCoin(
   signer: any,
   pmId: string,
   underlyingCoinType: string,
-  scoinType: string,
   scoinAmount: bigint,
 ) {
   const tx = new Transaction();
 
-  const [coinS] = tx.moveCall({
+  const [coinMarket] = tx.moveCall({
     target: `${CDPM_PACKAGE}::cdpm::user_extract_market_coin`,
-    typeArguments: [underlyingCoinType, scoinType],
+    typeArguments: [underlyingCoinType],
     arguments: [tx.object(pmId), tx.pure.u64(scoinAmount)],
   });
 
-  tx.transferObjects([coinS], signer.toSuiAddress());
+  tx.transferObjects([coinMarket], signer.toSuiAddress());
   return await client.signAndExecuteTransaction({ signer, transaction: tx });
 }
 ```
@@ -247,24 +246,12 @@ async function userExtractMarketCoin(
 
 ## Closing a PositionManager With Active Vaults
 
-`user_close_pm` now asserts `bag::is_empty(&pm.lending)` (`ELendingNotEmpty = 1004`). Before calling it you must, for every `(T, S)` vault, either:
+`user_close_pm` now asserts `bag::is_empty(&pm.lending)` (`ELendingNotEmpty = 1004`). Before calling it you must, for every `T` vault, either:
 
 1. `finish_redeem` the entire `scoin` balance back into underlying; or
 2. `user_extract_market_coin` to pull the sCoin out to your wallet.
 
 Either path leaves `pm.lending` empty, after which `user_close_pm` succeeds.
-
----
-
-## Switching Variant `S` for an Existing Underlying `T`
-
-The vault key is `type_name<T>`, but each vault stores a fixed `<T, S>`. If you ever need to migrate `<T, S1> → <T, S2>`:
-
-1. Drain the old vault completely (`start_redeem<T, S1>` + finish, or `user_extract_market_coin<T, S1>`).
-2. The vault entry is removed from `pm.lending` once its scoin balance hits zero.
-3. Now `start_supply<T, S2>` can run.
-
-Attempting `start_supply<T, S2>` while a `<T, S1>` vault still exists aborts inside `add_to_lending` with the framework error `dynamic_field::EFieldTypeMismatch`.
 
 ---
 
@@ -274,15 +261,13 @@ Attempting `start_supply<T, S2>` while a `<T, S1>` vault still exists aborts ins
 interface ScallopSupplied {
   pm_id: string;
   coin_type: string;          // type_name<T>
-  scoin_type: string;         // type_name<S>
   deposit_amount: u64;        // underlying transferred to Scallop
-  market_coin_minted: u64;    // sCoin received
+  market_coin_minted: u64;    // sCoin received (Coin<MarketCoin<T>>)
 }
 
 interface ScallopRedeemed {
   pm_id: string;
   coin_type: string;
-  scoin_type: string;
   market_coin_redeemed: u64;  // sCoin burned
   redeemed_amount: u64;       // underlying received from Scallop (pre-fee)
   principal_portion: u64;     // principal slice consumed by this redeem
@@ -293,13 +278,12 @@ interface ScallopRedeemed {
 interface MarketCoinExtracted {
   pm_id: string;
   coin_type: string;
-  scoin_type: string;
   market_coin_amount: u64;
   principal_removed: u64;
 }
 ```
 
-> The events do **not** carry a `by` field — Sui event envelopes already record the transaction sender; reach for `event.sender` if you need to distinguish owner / agent / protocol callers.
+> Events no longer carry a separate `scoin_type` field — the sCoin type is always `MarketCoin<T>`, fully determined by `coin_type`. The events also do **not** carry a `by` field; Sui event envelopes already record the transaction sender, reach for `event.sender` if you need to distinguish owner / agent / protocol callers.
 
 ---
 

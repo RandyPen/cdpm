@@ -247,9 +247,10 @@ cdpm exposes a hot-potato lending API shared by owner / agent / whitelisted prot
 
 ### Constraints Agents Should Know
 
-- **(T, S) is one-to-one**: `pm.lending` keys on the underlying `T` only. If a vault `<T, S1>` already exists, calling `start_supply<T, S2>` aborts at `dynamic_field::EFieldTypeMismatch`. Switching `S` requires draining the existing vault first — and only the **owner** can drain via the `user_extract_market_coin` escape hatch, so agents that need to switch should redeem fully first.
+- **One vault per underlying T**: `pm.lending` keys on the underlying `T` only. The sCoin type is structurally pinned to `MarketCoin<T>` by the type system, so a fake-sCoin variant cannot be supplied — there is no longer a separate `S` generic to mismatch.
 - **Yield fee applies to agents**: `finish_redeem` computes `fee_amount = floor(max(0, redeemed − principal_portion) × fee_house.fee_rate / 10_000)` regardless of caller, so agent redeems pay the same yield fee as owner / protocol redeems.
-- **Owner-only**: `user_extract_market_coin<T, S>` aborts with `ENotOwner (1001)` for agents. If Scallop is unreachable, only the owner can rescue raw sCoin.
+- **Owner-only**: `user_extract_market_coin<T>` aborts with `ENotOwner (1001)` for agents. If Scallop is unreachable, only the owner can rescue raw sCoin.
+- **Agents cannot short-change the vault**: `finish_supply` requires `Coin<MarketCoin<T>>` (the only way to obtain a non-zero `Coin<MarketCoin<T>>` is through Scallop's `mint`, since `MarketCoin` has only `drop` and no public constructor) and asserts `actual >= ticket.expected_scoin`. The same two-axis defense applies on redeem.
 
 ### PTB Recipe — Agent Supply
 
@@ -257,9 +258,9 @@ The first command of any supply PTB **MUST** be `protocol::accrue_interest::accr
 
 ```
 1. protocol::accrue_interest::accrue_interest_for_market(version, market, clock)
-2. cdpm::start_supply<T, S>(access, pm, market, amount)        → (coin_t, ticket)
-3. protocol::mint::mint<T>(version, market, coin_t, clock)     → coin_s
-4. cdpm::finish_supply<T, S>(pm, ticket, coin_s)
+2. cdpm::start_supply<T>(access, pm, market, amount)              → (coin_t, ticket)
+3. protocol::mint::mint<T>(version, market, coin_t, clock)        → coin_market<T>
+4. cdpm::finish_supply<T>(pm, ticket, coin_market)
 ```
 
 ```typescript
@@ -268,7 +269,6 @@ async function agentSupplyToScallop(
   signer: any,           // Agent keypair
   pmId: string,
   underlyingCoinType: string,
-  scoinType: string,
   amount: bigint,
 ) {
   const tx = new Transaction();
@@ -284,7 +284,7 @@ async function agentSupplyToScallop(
 
   const [coinT, ticket] = tx.moveCall({
     target: `${CDPM_PACKAGE}::cdpm::start_supply`,
-    typeArguments: [underlyingCoinType, scoinType],
+    typeArguments: [underlyingCoinType],
     arguments: [
       tx.object(CDPM_MAINNET.ACCESS_LIST_ID),
       tx.object(pmId),
@@ -293,7 +293,7 @@ async function agentSupplyToScallop(
     ],
   });
 
-  const [coinS] = tx.moveCall({
+  const [coinMarket] = tx.moveCall({
     target: `${SCALLOP_PROTOCOL}::mint::mint`,
     typeArguments: [underlyingCoinType],
     arguments: [
@@ -306,8 +306,8 @@ async function agentSupplyToScallop(
 
   tx.moveCall({
     target: `${CDPM_PACKAGE}::cdpm::finish_supply`,
-    typeArguments: [underlyingCoinType, scoinType],
-    arguments: [tx.object(pmId), ticket, coinS],
+    typeArguments: [underlyingCoinType],
+    arguments: [tx.object(pmId), ticket, coinMarket],
   });
 
   return await client.signAndExecuteTransaction({ signer, transaction: tx });
@@ -320,9 +320,9 @@ Same accrual-first rule. Net underlying (after yield fee) lands back in `pm.bala
 
 ```
 1. protocol::accrue_interest::accrue_interest_for_market(version, market, clock)
-2. cdpm::start_redeem<T, S>(access, pm, market, scoin_amount)         → (coin_s, ticket)
-3. protocol::redeem::redeem<T>(version, market, coin_s, clock)        → coin_t
-4. cdpm::finish_redeem<T, S>(pm, fee_house, ticket, coin_t)
+2. cdpm::start_redeem<T>(access, pm, market, scoin_amount)            → (coin_market, ticket)
+3. protocol::redeem::redeem<T>(version, market, coin_market, clock)   → coin_t
+4. cdpm::finish_redeem<T>(pm, fee_house, ticket, coin_t)
 ```
 
 ```typescript
@@ -331,7 +331,6 @@ async function agentRedeemFromScallop(
   signer: any,
   pmId: string,
   underlyingCoinType: string,
-  scoinType: string,
   scoinAmount: bigint,
 ) {
   const tx = new Transaction();
@@ -345,9 +344,9 @@ async function agentRedeemFromScallop(
     ],
   });
 
-  const [coinS, ticket] = tx.moveCall({
+  const [coinMarket, ticket] = tx.moveCall({
     target: `${CDPM_PACKAGE}::cdpm::start_redeem`,
-    typeArguments: [underlyingCoinType, scoinType],
+    typeArguments: [underlyingCoinType],
     arguments: [
       tx.object(CDPM_MAINNET.ACCESS_LIST_ID),
       tx.object(pmId),
@@ -362,14 +361,14 @@ async function agentRedeemFromScallop(
     arguments: [
       tx.object(SCALLOP_VERSION_ID),
       tx.object(SCALLOP_MARKET_ID),
-      coinS,
+      coinMarket,
       tx.object('0x6'),
     ],
   });
 
   tx.moveCall({
     target: `${CDPM_PACKAGE}::cdpm::finish_redeem`,
-    typeArguments: [underlyingCoinType, scoinType],
+    typeArguments: [underlyingCoinType],
     arguments: [
       tx.object(pmId),
       tx.object(CDPM_MAINNET.FEE_HOUSE_ID),
@@ -384,4 +383,4 @@ async function agentRedeemFromScallop(
 
 ### Tickets Are Hot Potatoes
 
-`SupplyTicket<T, S>` and `RedeemTicket<T, S>` have **no `drop` ability** — the only way to discharge them is via the matching `finish_*` call inside the same PTB. If your strategy chains conditional commands, never branch the ticket out of the success path.
+`SupplyTicket<T>` and `RedeemTicket<T>` have **no `drop` ability** — the only way to discharge them is via the matching `finish_*` call inside the same PTB. If your strategy chains conditional commands, never branch the ticket out of the success path.

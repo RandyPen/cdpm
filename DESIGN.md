@@ -43,12 +43,12 @@ public struct PositionManager has key {
     position: Option<Position>, // Underlying Cetus DLMM position
     balance: Bag,               // Token balances (String -> Balance<T>)
     fee: Bag,                   // Accumulated fees (String -> Balance<T>)
-    lending: Bag,               // Scallop sCoin holdings (String -> ScallopVault<T, S>)
+    lending: Bag,               // Scallop sCoin holdings (String -> ScallopVault<T>)
 }
 
-public struct ScallopVault<phantom T, phantom S> has store {
-    scoin: Balance<S>,          // Scallop sCoin (e.g. MarketCoin<T>) parametrised over S
-    principal: u64,             // Underlying principal supplied (net of redemptions)
+public struct ScallopVault<phantom T> has store {
+    scoin: Balance<MarketCoin<T>>,   // Scallop sCoin, type-pinned to MarketCoin<T>
+    principal: u64,                  // Underlying principal supplied (net of redemptions)
 }
 ```
 
@@ -58,7 +58,7 @@ public struct ScallopVault<phantom T, phantom S> has store {
 - **Position**: Optional, exists when user has active liquidity
 - **Balance**: Generic token balances for deposit/withdrawal
 - **Fee**: Accumulated fees from agent/protocol operations
-- **Lending**: Scallop sCoin `S` (typically `protocol::reserve::MarketCoin<T>`) wrapped per `(T, S)` pair along with cumulative principal; populated by `start_supply` / `finish_supply`, drained by `start_redeem` / `finish_redeem` / `user_extract_market_coin`
+- **Lending**: Scallop sCoin `MarketCoin<T>` wrapped per underlying type along with cumulative principal; populated by `start_supply` / `finish_supply`, drained by `start_redeem` / `finish_redeem` / `user_extract_market_coin`. The sCoin type is pinned by Move's type system, blocking fake-sCoin extraction attacks.
 
 ### 2. FeeHouse
 Global protocol fee management structure.
@@ -404,9 +404,13 @@ Scallop's `Version` is bumped frequently. If cdpm imported `protocol::mint` /
 `protocol::redeem`, every `Version` bump would freeze cdpm's lending API,
 forcing a full cdpm redeploy (cdpm is non-upgradeable). With hot-potato:
 
-- cdpm imports only **view functions** (`protocol::market::vault`,
+- cdpm imports only **view types and view functions** (`protocol::market::vault`,
   `protocol::reserve::balance_sheets` / `balance_sheet`,
-  `x::wit_table::borrow`). None of these enforce `Version`.
+  `protocol::reserve::MarketCoin` as a phantom-type pin on the lending
+  vault, and `x::wit_table::borrow`). None of these enforce `Version`;
+  `MarketCoin<T>` is a pure marker struct (`has drop`) defined in
+  `protocol::reserve` and never touches the runtime version checks that live
+  in `protocol::mint` / `redeem` / `accrue_interest`.
 - Caller PTB calls Scallop's `accrue_interest`, `mint`, `redeem` directly
   with the live Version object. When Scallop bumps Version, only the caller
   PTB aborts; cdpm itself stays untouched and `pm.lending` remains
@@ -414,44 +418,44 @@ forcing a full cdpm redeploy (cdpm is non-upgradeable). With hot-potato:
 
 ### Public surface
 ```move
-public fun start_supply<T, S>(
+public fun start_supply<T>(
     access: &AccessList,
     pm: &mut PositionManager,
     market: &Market,            // read-only view
     amount: u64,
     ctx: &mut TxContext,
-): (Coin<T>, SupplyTicket<T, S>);
+): (Coin<T>, SupplyTicket<T>);
 
-public fun finish_supply<T, S>(
+public fun finish_supply<T>(
     pm: &mut PositionManager,
-    ticket: SupplyTicket<T, S>,
-    scoin: Coin<S>,
+    ticket: SupplyTicket<T>,
+    scoin: Coin<MarketCoin<T>>,
 );
 
-public fun start_redeem<T, S>(
+public fun start_redeem<T>(
     access: &AccessList,
     pm: &mut PositionManager,
     market: &Market,
     market_coin_amount: u64,    // u64::MAX redeems all
     ctx: &mut TxContext,
-): (Coin<S>, RedeemTicket<T, S>);
+): (Coin<MarketCoin<T>>, RedeemTicket<T>);
 
-public fun finish_redeem<T, S>(
+public fun finish_redeem<T>(
     pm: &mut PositionManager,
     fee_house: &mut FeeHouse,
-    ticket: RedeemTicket<T, S>,
+    ticket: RedeemTicket<T>,
     underlying: Coin<T>,
     ctx: &mut TxContext,
 );
 
-public fun user_extract_market_coin<T, S>(
+public fun user_extract_market_coin<T>(
     pm: &mut PositionManager,
     market_coin_amount: u64,    // u64::MAX extracts all
     ctx: &mut TxContext,
-): Coin<S>;
+): Coin<MarketCoin<T>>;
 ```
 
-`SupplyTicket<T, S>` and `RedeemTicket<T, S>` are hot potatoes (no `key` /
+`SupplyTicket<T>` and `RedeemTicket<T>` are hot potatoes (no `key` /
 `store` / `copy` / `drop`) — they must be consumed by their paired finisher
 in the same PTB. Move's type system enforces this.
 
@@ -476,13 +480,23 @@ expected_underlying  = floor(scoin × (cash + debt − revenue) / supply)
 - For redeem: Scallop must return at least the underlying amount cdpm
   computed.
 
-This blocks the agent-extraction attack: an agent who diverts the released
-`Coin<T>` cannot satisfy `finish_supply` without supplying back at least the
-amount Scallop's `mint` would produce — economically null. There is no
-upper bound — `actual > expected` is permitted because any "extra" came
-from the caller's own pocket (donation) or from accrued interest the caller
-helpfully realized; in either case the protocol/user benefit and there is
-no exploitation path. The intentional asymmetry means PTBs that skip
+This blocks the agent-extraction attack on TWO axes:
+
+1. **Type pin** — `finish_supply`'s `scoin` parameter is typed
+   `Coin<MarketCoin<T>>`, not a free generic `Coin<S>`. `MarketCoin<T>` has
+   only `drop` and no public constructor; the only way to obtain a non-zero
+   `Coin<MarketCoin<T>>` is through Scallop's `mint`. An agent cannot mint
+   their own coin type and pass it as fake sCoin.
+2. **Quantity floor** — `actual >= expected` ensures Scallop's `mint` was
+   actually invoked with the diverted underlying, not bypassed.
+
+Together these make agent extraction economically null: stealing `Coin<T>`
+forces the agent to deliver an authentic `Coin<MarketCoin<T>>` of equivalent
+value, which itself costs equivalent `Coin<T>` to mint at Scallop. There is
+no upper bound on `actual` — `actual > expected` is permitted because any
+"extra" came from the caller's own pocket (donation) or from accrued interest
+the caller helpfully realized; in either case the protocol/user benefit and
+there is no exploitation path. The intentional asymmetry means PTBs that skip
 `accrue_interest_for_market` succeed only when Scallop returns *more* than
 cdpm's stale view (redeem direction) and abort cleanly when Scallop returns
 *less* (supply direction); no fund loss in either case.
@@ -498,17 +512,17 @@ fund loss). Templates:
 **Supply**
 ```
 PTB[0] accrue_interest::accrue_interest_for_market(version, market, clock)
-PTB[1] (coin_t, ticket) = cdpm::start_supply<T, S>(access, pm, market, amount)
+PTB[1] (coin_t, ticket) = cdpm::start_supply<T>(access, pm, market, amount)
 PTB[2] scoin = mint::mint<T>(version, market, coin_t, clock)
-PTB[3] cdpm::finish_supply<T, S>(pm, ticket, scoin)
+PTB[3] cdpm::finish_supply<T>(pm, ticket, scoin)
 ```
 
 **Redeem**
 ```
 PTB[0] accrue_interest::accrue_interest_for_market(version, market, clock)
-PTB[1] (scoin, ticket) = cdpm::start_redeem<T, S>(access, pm, market, market_coin_amount)
+PTB[1] (scoin, ticket) = cdpm::start_redeem<T>(access, pm, market, market_coin_amount)
 PTB[2] underlying = redeem::redeem<T>(version, market, scoin, clock)
-PTB[3] cdpm::finish_redeem<T, S>(pm, fee_house, ticket, underlying)
+PTB[3] cdpm::finish_redeem<T>(pm, fee_house, ticket, underlying)
 ```
 
 ### Yield fee model
@@ -533,34 +547,23 @@ When `redeemed_underlying ≤ principal_portion` (e.g. socialized loss),
 - Re-entry of extracted assets must go through `Coin<T>` (after external
   redemption) and `user_add_liquidity_to_balance` — no inverse
   `user_inject_market_coin` exists, by design (D-09).
-- **A given underlying type `T` can only hold one `S` (Scallop sCoin type)
-  at a time.** This is enforced structurally rather than by an explicit
-  cdpm-side check: `pm.lending` is keyed by `type_name<T>().into_string()`
-  alone, while each `Bag` entry records its full value type
-  `ScallopVault<T, S>`. If `start_supply<T, S1>` populates a vault and a
-  later call uses `start_supply<T, S2>` (`S1 != S2`), the call to
-  `bag::borrow_mut<String, ScallopVault<T, S2>>` inside `add_to_lending`
-  / `pull_from_lending` aborts with the framework's
-  `dynamic_field::EFieldTypeMismatch` rather than cdpm's `ENoSuchVault`.
-  This is intentional: the `Bag` entry records `S1`, so the typed
-  `bag::contains<String>` returns `true` (key matches) but the type-tagged
-  borrow rejects `S2`. **To migrate to a new Scallop sCoin type**, fully
-  drain the existing vault via `start_redeem<T, S1>` (or
-  `user_extract_market_coin<T, S1>` if Scallop is unreachable) so the
-  entry is removed from the bag, *then* `start_supply<T, S2>` — at that
-  point the bag has no key=T entry and a fresh `ScallopVault<T, S2>` is
-  inserted. Off-chain clients should treat a non-`ENoSuchVault`,
-  non-`EAmountShortfall` framework abort during `start_supply` /
-  `start_redeem` / `user_extract_market_coin` as "wrong S for this T".
+- **The sCoin type is fixed to `MarketCoin<T>` for any given underlying `T`.**
+  cdpm's lending vault is `ScallopVault<phantom T> { scoin: Balance<MarketCoin<T>> }`.
+  There is no longer a free `S` type parameter on the public surface, so
+  the `(T, S1)` vs `(T, S2)` collision case from earlier hot-potato drafts
+  cannot arise. Migration to a different Scallop sCoin type identity (e.g.
+  Scallop publishes a new package with a fresh `MarketCoin<T>` definition)
+  requires a fresh cdpm deploy that imports the new type — a rare event
+  treated like any other Sui struct-identity change.
 
-### Events (no `by` field; tx metadata records the sender)
+### Events (no `by` field; tx metadata records the sender; no `scoin_type` — sCoin is always `MarketCoin<T>`)
 ```move
-public struct ScallopSupplied   { pm_id, coin_type, scoin_type, deposit_amount,
+public struct ScallopSupplied   { pm_id, coin_type, deposit_amount,
                                   market_coin_minted };
-public struct ScallopRedeemed   { pm_id, coin_type, scoin_type, market_coin_redeemed,
+public struct ScallopRedeemed   { pm_id, coin_type, market_coin_redeemed,
                                   redeemed_amount, principal_portion, interest,
                                   fee_amount };
-public struct MarketCoinExtracted { pm_id, coin_type, scoin_type, market_coin_amount,
+public struct MarketCoinExtracted { pm_id, coin_type, market_coin_amount,
                                     principal_removed };
 ```
 

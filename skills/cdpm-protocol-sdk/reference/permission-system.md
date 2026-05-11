@@ -11,7 +11,7 @@
 | Manage Agents | yes | no | no | no |
 | Scallop `start_supply` / `start_redeem` | yes | yes | yes* | no |
 | Scallop `finish_supply` / `finish_redeem` | yes | yes | yes* | no |
-| `user_extract_market_coin<T, S>` | yes | no | no | no |
+| `user_extract_market_coin<T>` | yes | no | no | no |
 | `user_close_pm` (requires `pm.lending` empty) | yes | no | no | no |
 | Set Fee Rate (cap 30%) | no | no | no | yes |
 | Collect Protocol Fees | no | no | no | yes |

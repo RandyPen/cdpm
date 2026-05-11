@@ -35,8 +35,6 @@ async function handleAgentError(error: any): Promise<string> {
     return 'SupplyTicket/RedeemTicket consumed against a different PositionManager.';
   } else if (errorStr.includes('EAmountShortfall')) {
     return 'finish_* received Coin with value < ticket.expected. Run accrue_interest_for_market as the first PTB command.';
-  } else if (errorStr.includes('EFieldTypeMismatch')) {
-    return 'pm.lending already has a ScallopVault<T, S\'> with a different sCoin type. Drain it before supplying with a new S.';
   }
 
   return `Unknown error: ${errorStr}`;

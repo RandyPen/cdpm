@@ -51,8 +51,7 @@ interface AgentRewardCollected {
 // to distinguish owner / agent / protocol callers.
 interface ScallopSupplied {
   pm_id: string;
-  coin_type: string;            // type_name<T>
-  scoin_type: string;           // type_name<S>
+  coin_type: string;            // type_name<T> — sCoin type is always MarketCoin<T>
   deposit_amount: string;       // underlying transferred to Scallop
   market_coin_minted: string;   // sCoin received and added to pm.lending
 }
@@ -61,7 +60,6 @@ interface ScallopSupplied {
 interface ScallopRedeemed {
   pm_id: string;
   coin_type: string;
-  scoin_type: string;
   market_coin_redeemed: string; // sCoin burned
   redeemed_amount: string;      // underlying received pre-fee
   principal_portion: string;    // principal slice this redeem consumed
