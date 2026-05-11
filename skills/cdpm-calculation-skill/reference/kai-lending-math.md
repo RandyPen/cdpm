@@ -458,7 +458,162 @@ When sizing inputs:
 
 ---
 
-## 10. Cross-Reference
+## 10. Reading Live Vault APY Off-Chain (Supply-Side Half of the Picker)
+
+The pair `(total_available, yt_supply)` from §1 encodes the *current* per-YT price; what it does **not** give you directly is the *rate* at which `total_available` is unlocking — i.e. the supply APY a sleeping `pm.balance[T]` would earn if you parked it via `kai_start_supply<T, YT>`. Kai's vault holds time-locked profit (`tlb::max_withdrawable`) and aggregates strategy NAV, so the live yield depends on how fast the time-locked balance unlocks. Kai publishes both the snapshot and the derived APY via [`@kunalabs-io/kai`](https://github.com/kunalabs-io/kai-ts-sdk).
+
+This page covers the Kai-side rate-query API. The cross-protocol "Scallop or Kai?" picker that consumes both this and the Scallop-side query lives in [`scallop-lending-math.md` §10.4](./scallop-lending-math.md#104-decision-recipe--scallop-vs-kai-supply-picker) — Kai-only callers can use the snippet in §10.4 below.
+
+### 10.1 SDK Setup
+
+```typescript
+import { SuiClient } from '@mysten/sui/client';
+import {
+  VAULTS,
+  getVaultStats,
+  getAllVaultStats,
+  getWalletVaultInfo,
+} from '@kunalabs-io/kai';
+
+const client = new SuiClient({ url: 'https://fullnode.mainnet.sui.io' });
+```
+
+`VAULTS` is a frozen map of every Kai-deployed vault — instances expose the underlying / YT type metadata (`T`, `YT`), the on-chain object id, and the deposit / withdraw / fetch / `getStrategies` methods that compose into PTBs (see §10.5 below).
+
+Two practical caveats:
+
+1. **Mainnet only.** Every vault id in `VAULTS` is hard-coded to mainnet objects (`kai-ts-sdk/src/vault/vault.ts:441-533`). There is no testnet / devnet map. cdpm + Kai integration testing has to run against mainnet, fork a mainnet snapshot locally, or stub the Kai layer.
+2. **`paused_*` keys exist.** The map includes `paused_suiUSDT` and `paused_USDC` alongside the active `suiUSDT` and `USDC`. These are deprecated vaults retained for redeem-only flows; **do not pick `paused_*` as a supply destination** in the picker — `kai_start_supply` will succeed but the vault no longer accrues. Filter them out at the call site:
+
+   ```typescript
+   const activeKaiKeys = Object.keys(VAULTS).filter(k => !k.startsWith('paused_'));
+   ```
+
+### 10.2 Rate-Query Methods
+
+```typescript
+// Single vault.
+const data  = await VAULTS.suiUSDT.fetch(client);    // on-chain Vault<T, YT>
+const stats = getVaultStats(data);                   // { tvl, apr, apy }
+
+// Every vault in one round-trip.
+const all = await getAllVaultStats(client);
+//   → Array<{ vaultInfo, tvl, apr, apy }>
+```
+
+`getVaultStats` is **synchronous** once you have `vaultData` — the SDK already pulled the on-chain state via `fetch`. `getAllVaultStats` batches the fetch + compute across every entry in `VAULTS`.
+
+### 10.3 Return Shape & APR Derivation
+
+```typescript
+interface VaultStats {
+  tvl: Amount;   // total_available_balance, decimal-aware wrapper around bigint
+  apr: number;   // annual unlock rate / TVL, post-performance-fee
+  apy: number;   // continuously-compounded equivalent of apr
+}
+```
+
+The APR is derived from the time-locked balance unlock schedule, not from a cached number on-chain. The performance fee is applied to `unlockPerSecond` *before* annualization (`muldiv(unlockPerSecond, 10000 - performanceFeeBps, 10000)`), so the reported `apr` is already the **net** rate the depositor sees:
+
+```
+unlockPerSecondNet = unlockPerSecond × (10000 − performanceFeeBps) / 10000
+apr                = unlockPerSecondNet × 60 × 60 × 24 × 365 / tvl
+apy                = Math.exp(apr) − 1                       // 1-year continuous compounding
+```
+
+The SDK calls `calcContinuousApy(apr, 365)` (`kai-ts-sdk/src/vault/util.ts:103`) which internally computes `time = days / 365` and then `Math.exp(apr × time) − 1`. Because `days` is hardcoded to `365`, `time = 1` and the formula collapses to `Math.exp(apr) − 1`. Earlier revisions of this doc framed it as `exp(apr × t)` with `t = days/365`; that was technically true of the helper but misleading because the helper is always called with `days = 365`.
+
+Two important properties:
+
+1. **Auto-zeroing past `finalUnlockTsSec`.** When the current Unix-second timestamp exceeds `finalUnlockTsSec`, the SDK treats `unlockPerSecond = 0` and reports `apr = 0` (`util.ts:77-79`). The time-locked balance has fully unlocked; no further yield is being released. cdpm-side bots should treat a sustained `apr = 0` as a signal to redeem the YT (no further upside) rather than hold.
+2. **Bitcoin-denominated normalization.** For vaults whose underlying symbol is in `{'wBTC', 'LBTC', 'xBTC'}` the SDK averages `unlockPerSecond` over `min(unlockDurationSec, 30 × 60)` seconds before annualizing — sub-satoshi precision otherwise rounds the per-second rate to zero. The branch is gated on `vault.T.symbol`, so other coins (even high-decimal ones) follow the simple formula above.
+
+### 10.4 Decision Recipe — Scallop vs Kai Supply Picker
+
+The dominant cdpm use case for live rates is "where to park `pm.balance[T]` — Scallop or Kai?". Because both venues share `pm.lending` (under different bag keys) and the cdpm yield-fee is identical across both, the picker reduces to a raw `apy` comparison. The canonical picker — querying Scallop and Kai in parallel and returning `{ venue, apy, detail }` — lives in [`scallop-lending-math.md` §10.4](./scallop-lending-math.md#104-decision-recipe--scallop-vs-kai-supply-picker) so it sits alongside the Scallop-side `MarketPool` field reference. Wire `getVaultStats(VAULTS[kaiKey].fetch(client)).apy` in as the Kai input there rather than maintaining a parallel single-protocol "is Kai worth it?" helper here.
+
+If you need a Kai-only quick check (e.g. when the Scallop market is paused and Scallop is not on the table), inline:
+
+```typescript
+const { apy } = getVaultStats(await VAULTS[kaiKey].fetch(client));
+const supplyKai = apy >= minApy;
+```
+
+— there's no need for a separate function wrapping that call. The picker's `pickSupplyVenue` in §10.4 of the Scallop math doc handles the `kaiVaultKey: null` degenerate case symmetrically when Scallop is the sole option.
+
+### 10.5 PTB-Builder Hooks — SDK Composables Inside cdpm's Hot-Potato
+
+Kai's SDK exposes granular move-call builders that fit cdpm's PTB shape directly — unlike Scallop's wallet-rooted `*Quick` helpers, Kai's `vault.deposit` / `vault.withdraw` accept any `TransactionObjectInput` (a tx-result `Balance` works, an existing balance object id works) and return another tx-result `Balance`, so they slot in between cdpm's start/finish ticket pair without touching the wallet:
+
+```typescript
+// Inside a cdpm Kai supply PTB:
+const vault     = VAULTS.suiUSDT;                        // pick the active (non-paused) entry
+const balanceT  = tx.moveCall({                          // cdpm::kai_start_supply gave us coin_t
+  target: '0x2::coin::into_balance', typeArguments: [vault.T.coinType], arguments: [coinT],
+});
+const balanceYT = vault.deposit(tx, balanceT);           // ← SDK helper, replaces manual vault::deposit move-call
+```
+
+The withdraw side is the bigger win. The user-sdk recipe currently has a 30-line `strategyWalkers` ceremony plus `vault::redeem_withdraw_ticket` settlement; the SDK collapses both into one call:
+
+```typescript
+const balanceT = vault.withdraw(tx, balanceYT, vault.getStrategies());
+// The SDK emits, in order:
+//   1. kai_sav::vault::withdraw(vault, balanceYT, clock)             → withdraw_ticket
+//   2. for each strategy in vault.getStrategies():
+//      <strategy_module>::strategy_withdraw_for_vault(...withdraw_ticket...)
+//   3. kai_sav::vault::redeem_withdraw_ticket(vault, withdraw_ticket) → Balance<T>
+```
+
+#### How `vault.getStrategies()` actually works
+
+`vault.getStrategies()` is **not** a chain reader. It is a constructor-injected, zero-argument synchronous function defined per-`VaultInfo` (`kai-ts-sdk/src/vault/vault.ts:496` etc.) that returns a static descriptor list of the strategies registered for this vault. It does not call `vault.fetch`; it does not inspect `to_withdraw`; it does not filter inactive strategies. The walker emission inside `vault.withdraw` is **unconditional** — every registered strategy module runs its `strategy_withdraw_for_vault` move-call, and the strategy itself decides at execution time whether there is anything to withdraw (often a no-op when `to_withdraw == 0`).
+
+This shape has two consequences for cdpm integrators:
+
+1. The walker list is fixed at SDK-build time. When Kai adds a new strategy to a live vault, the SDK has to publish a new version that registers the corresponding walker; until then, `vault.withdraw` will silently miss the new strategy and `vault::redeem_withdraw_ticket` will abort. Pin the SDK version in lockstep with Kai upgrades.
+2. There is no per-redeem optimization to skip idle strategies. The PTB always pays gas for every walker. For most vaults this is 1-2 strategies, so the overhead is bounded; for vaults that grow to many strategies, expect the redeem-PTB gas to scale with the registered count.
+
+For cdpm-flow PTBs, prefer:
+
+| Step | Manual recipe (in `cdpm-user-sdk/reference/kai-lending.md`) | SDK alternative |
+|------|---|---|
+| Supply: turn `coin_t` into `Balance<T>` then deposit | `0x2::coin::into_balance` + manual `kai_sav::vault::deposit` move-call | `vault.deposit(tx, balanceT)` |
+| Redeem: walk every strategy, settle ticket | manual loop over `strategyWalkers` + `vault::redeem_withdraw_ticket` move-call | `vault.withdraw(tx, balanceYT, vault.getStrategies())` |
+| Sized redeem: "I want at least `K` underlying" | §7 closed-form / iterative refinement → `kai_start_redeem` with computed YT | `vault.withdrawTAmt(tx, tAmt, balanceYT, vault.getStrategies())` — burns just-enough YT and walks strategies in one call |
+
+The cdpm-side calls (`kai_start_supply` / `kai_finish_supply` / `kai_start_redeem` / `kai_finish_redeem`) remain raw `tx.moveCall` against `${CDPM_PACKAGE}::cdpm::*` — only the inner Kai vault commands change.
+
+#### `vault.withdrawTAmt` as a §7-replacement
+
+`vault.withdrawTAmt(tx, tAmt, balanceYT, strategies)` (`kai-ts-sdk/src/vault/vault.ts:253-274`) burns *just enough* YT to release `tAmt` underlying — Kai's vault contract does the inverse-sizing on-chain, so callers don't need the §7 closed-form `ytToBurnForTargetUnderlying` for that case. Combined with cdpm's `kai_start_redeem(MAX_U64)` sentinel, you can chain:
+
+1. `cdpm::kai_start_redeem<T, YT>(access, pm, vault, MAX_U64, clock)` → `(coin_yt, ticket)` — drains the bag entry's full YT into a tx-result coin.
+2. `vault.withdrawTAmt(tx, tAmt, coin_yt.into_balance(), vault.getStrategies())` → `Balance<T>` of size `>= tAmt`, **plus** Kai returns the unused YT directly to the wallet.
+3. `cdpm::kai_finish_redeem<T, YT>(pm, fee_house, ticket, balance_t.into_coin())`.
+
+Caveat: step 2 sends the YT-leftover to the **transaction sender** wallet, not back to `pm.lending`. For cdpm flows this is wrong — the unused YT belongs in `pm.lending`, not the signer. Use `withdrawTAmt` only when (a) you intend to drain the entry anyway (`tAmt` ≈ full vault entry value) or (b) you re-supply the leftover YT immediately afterward via a fresh `kai_start_supply`/`kai_finish_supply` round. For partial-redeem flows that must preserve `pm.lending` accounting, stick with §7's closed-form `ytToBurnForTargetNet` and `vault.withdraw`.
+
+> **Cross-protocol composition.** When the same PTB needs both Kai and Scallop legs (e.g. an atomic Kai → Scallop rebalance, or any flow where the picker's choice should not gate atomicity at the tx layer), see the dedicated guide at [`cross-protocol-ptb.md`](./cross-protocol-ptb.md). It documents the canonical Mysten-rooted shared-`Transaction` pattern, the multi-approach comparison, five integration caveats (signing target, `setSender`, `@mysten/sui` dependency pinning, no `*Quick` outputs into cdpm finishes, re-snapshot before signing), and worked rebalance examples.
+
+### 10.6 Wallet-Level vs Vault-Level Stats
+
+`getWalletVaultInfo(client, walletAddress, vaultData)` returns the YT balance + equity for a given address. **It is not directly useful for a `pm.balance[T]` decision** — the YT lives inside `pm.lending[type_name<YT>]`, not in the owner / agent / protocol wallet. To compute per-PM stats, use the bag-key path described in §1 + §8, then multiply `yt_in_pm × p` (where `p = total_available / yt_supply` from `getVaultStats`).
+
+If you do need wallet-level YT (e.g. after `user_extract_kai_yt<T, YT>` pulled YT into the owner wallet), `getWalletVaultInfo` is the right call.
+
+### 10.7 Error / Staleness Notes
+
+- `vault.fetch` and `getVaultStats` are pure reads — no on-chain accrual command needed. Kai's `total_available_balance(clock)` self-accrues via `tlb::max_withdrawable` (cf. §1).
+- The SDK reads `clock` via the `SuiClient` automatically. If you batch many `fetch` calls inside a tight loop, the clock used for APR derivation is the per-call timestamp; APR can drift micro-seconds across the batch. For cross-vault picking this is irrelevant; for tight A/B comparison, snapshot once and pass the same `clock` ms across helpers.
+- Strategy losses (`StrategyLossEvent`) shrink `total_available` and thus `apr` between snapshot and signing. The cdpm-side `EAmountShortfall (1009)` defense already protects against this; treat a sudden APR drop on a vault as a hint that one of its strategies just took a loss.
+- **No hosted REST endpoint.** Unlike Scallop (`https://sui.apis.scallop.io/...`), Kai does not publish a hosted APY API; the SDK is the only documented surface. Read-only consumers either depend on `@kunalabs-io/kai` or call the on-chain `total_available_balance` / `total_yt_supply` view functions directly via `dev_inspect`.
+- **Reusable off-chain twins.** The SDK exposes `calcTotalAvailableBalance`, `calcYtToTAmount`, `calcTToYtAmount`, `calcYtConversionRate` (`kai-ts-sdk/src/vault/util.ts:42-55,147-212`) — pure functions that mirror the cdpm Move math in §2 and §3 (using `muldiv` floor matching cdpm). Prefer these to a hand-rolled twin: when Kai changes the per-vault math, the SDK absorbs the change and your sizing helpers stay correct.
+- **Batched fetch.** `getVaultDataBatch(client, vaultIds)` (`util.ts:255-284`) issues one `multiGetObjects` call for many vaults — useful when the picker needs Kai snapshots across multiple `T` simultaneously.
+
+---
+
+## 11. Cross-Reference
 
 - Owner PTB recipes: [`cdpm-user-sdk/reference/kai-lending.md`](../../cdpm-user-sdk/reference/kai-lending.md)
 - Agent PTB recipes: [`cdpm-agent-sdk/reference/kai-lending.md`](../../cdpm-agent-sdk/reference/kai-lending.md)

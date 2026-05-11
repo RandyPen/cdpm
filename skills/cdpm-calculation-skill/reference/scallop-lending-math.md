@@ -458,3 +458,244 @@ When sizing inputs:
 - For `scallop_start_redeem<T>`: `scoin_amount × denom_underlying >= supply` for the same reason. The inverse helpers in section 7 already enforce ceiling rounding, so they cannot produce `N = 0` for any positive target.
 - For both, build in headroom against `EAmountShortfall` by either calling `accrue_interest_for_market` immediately before, or shaving a small slippage off `expected_*` and verifying live values match before signing.
 - When using `scoinToBurnForTargetNet` for a rebalancing bot: re-snapshot `reserve` and `vault` *after* the accrual command and before signing — sizing on stale snapshots can leave you 1-2 underlying short on the very next block.
+
+---
+
+## 10. Reading Live Supply APY Off-Chain (Scallop vs Kai Picker)
+
+The dominant cdpm use case for live rates is **"where do I park `pm.balance[T]` — Scallop or Kai?"**. cdpm holds the same underlying `T` in both vaults under different bag keys, so the decision is purely yield-driven: query both protocols' live supply APY, subtract the cdpm yield-fee, pick the higher. Scallop publishes its supply APY via [`@scallop-io/sui-scallop-sdk`](https://github.com/scallop-io/sui-scallop-sdk); the Kai twin lives in [`kai-lending-math.md` §10](./kai-lending-math.md). Borrow-side rates (`borrowApy`, kink fields, `maxBorrowApy`, etc.) are **not** part of the cdpm supply path — they are exposed by the same SDK but have no bearing on the parking decision.
+
+### 10.1 SDK Setup
+
+```typescript
+import { Scallop } from '@scallop-io/sui-scallop-sdk';
+
+// Instantiate ONCE at boot and reuse the singleton across every picker call.
+// `createScallopQuery` runs `init()` which fetches the address bundle from
+// `https://sui.apis.scallop.io/addresses/{addressId}` and warms internal
+// caches; doing it per-call burns a network round-trip on each picker invocation.
+const scallop = new Scallop({
+  addressId: '67c44a103fe1b8c454eb9699',  // mainnet default — confirm via README
+  networkType: 'mainnet',
+});
+const query = await scallop.createScallopQuery();
+```
+
+No `secretKey` is required for read paths (`getMarketPool`, `queryMarket`, etc.) — it is only needed when the SDK signs and submits transactions on your behalf, which cdpm flows do not do (the cdpm app signs).
+
+`addressId` points at Scallop's address-bundle service; the SDK pulls every package / object id (`SCALLOP_VERSION_ID`, `SCALLOP_MARKET_ID`, sCoin types, etc.) from there, so a single id update is all you need when Scallop pushes a package upgrade. The same bundle is reachable as a plain HTTP `GET https://sui.apis.scallop.io/addresses/{addressId}` for read-only consumers that prefer not to add the SDK as a dependency.
+
+### 10.2 Rate-Query Methods
+
+```typescript
+// Single market — returns MarketPool | undefined (undefined when the symbol
+// is not in the runtime whitelist or the pool fetch failed).
+const usdcPool = await query.getMarketPool('usdc');
+if (!usdcPool) { /* fall through to idle */ }
+
+// Many markets — returns { pools, collaterals }, where pools is
+// Record<symbol, MarketPool | undefined>. There is NO array-shaped overload.
+const { pools } = await query.getMarketPools(['sui', 'usdc', 'usdt']);
+const suiPool = pools.sui;        // MarketPool | undefined
+const usdcPool2 = pools.usdc;
+
+// Whole market snapshot — supply pools + collateral pools in one call.
+const market = await query.queryMarket();
+```
+
+`getMarketPool(name)` internally calls `getMarketPools(undefined, …)` which fetches the **entire whitelisted set** in one shot, so a single-pool call costs the same as `queryMarket`. If you need more than one pool, prefer the batched form and read what you need from `pools.*`.
+
+The authoritative coin-name set is the runtime `query.constants.whitelist.lending` (a `Set<string>`); typos pass through as `undefined` rather than throwing. Use that set for menu-driven UIs and `Set.has(name)` guards. For the underlying type in your cdpm PTB, resolve back via `pool.coinType` (`Move` type tag) and `pool.marketCoinType` / `pool.sCoinType` for the sCoin side.
+
+### 10.3 `MarketPool` Field Reference (Supply-Only Subset)
+
+The fields that matter for the parking decision:
+
+| Field | Type | Meaning |
+|-------|------|---------|
+| `supplyApy` | `number` | Compounded annualized supply yield. The primary decision input. `0.052` means 5.2% APY. |
+| `supplyApr` | `number` | Simple annualized rate, before compounding. Use when comparing to a quote already framed as APR. |
+| `utilizationRate` | `number` | `borrowAmount / supplyAmount`. Higher utilization = higher live `supplyApy`, but also tighter `cash` reserves (slower redeems if `cash` runs low). Sanity-check that utilization is well below 1.0 before parking large amounts. |
+| `conversionRate` | `number` | Live underlying-per-sCoin (`supplyAmount / marketCoinSupplyAmount`). Cross-check against your `predictRedeem` output before broadcasting. |
+| `growthInterest` | `number` | **Cumulative** interest factor since the on-chain `lastUpdated` — `currentBorrowIndex / borrowIndex − 1`. NOT a per-second rate; it's the multiplicative growth that has accrued but not yet been written to `balance_sheet`. Useful for verifying `accrue_interest_for_market` is needed before sizing. |
+| `supplyAmount`, `borrowAmount`, `reserveAmount` | `number` | **Raw `u64` totals** (cash + debt − reserve etc., undivided by decimals). |
+| `supplyCoin`, `borrowCoin`, `reserveCoin` | `number` | **Decimaled** equivalents (`raw / 10^coinDecimal`). Use these for human-readable display; use the raw forms for ratio math against on-chain values. |
+| `marketCoinSupplyAmount` | `number` | sCoin supply, raw `u64` (same as `supply` in §1). |
+| `coinType` | `string` | Move type tag for `T`. Thread back into the cdpm PTB without hardcoding. |
+| `marketCoinType`, `sCoinType` | `string` | Move type tags for `MarketCoin<T>` (legacy) and the new sCoin (preferred). |
+| `coinDecimal`, `coinPrice` | `number` | Decimals (used by the SDK for the raw↔decimaled split above) and live USD price. `coinPrice` is `0` when the price feed is stale. |
+| `isIsolated` | `boolean` | Isolated markets have stricter caps and (sometimes) different rate curves. Worth surfacing in any UI that lets users pick a market. |
+| `maxSupplyCoin` | `number` | Per-market supply cap, decimaled. If your `idleAmount` plus `supplyCoin` would breach this, `scallop_start_supply` will be rejected on-chain — short-circuit before submitting. |
+
+`MarketPool` also exposes borrow-side fields (`borrowApy`, `baseBorrowApy`, `borrowApyOnMidKink`, `borrowApyOnHighKink`, `maxBorrowApy`, `borrowFee`, `borrowWeight`, etc.). These describe Scallop's borrow market and are unrelated to cdpm's supply-only integration; do not pull them into supply-decision code paths — they will only confuse the picker.
+
+> **Note on units.** Earlier revisions of this doc inverted the `supplyAmount` / `supplyCoin` decimal split. The correct semantics (verified in `sui-scallop-sdk/src/utils/query.ts:118-163`) is: `supplyAmount` / `borrowAmount` / `reserveAmount` are raw `u64`; `supplyCoin` / `borrowCoin` / `reserveCoin` apply `BigNumber.shiftedBy(-coinDecimal)`.
+
+### 10.4 Decision Recipe — Scallop vs Kai Supply Picker
+
+Both protocols can hold the same underlying `T` simultaneously (`pm.lending` keys differ — `type_name<T>` for Scallop, `type_name<YT>` for Kai). The cdpm yield-fee is identical across both, so the fee cancels in the comparison and the picker reduces to "raw `supplyApy` is higher → park there". Always query both before signing — utilization and Kai's time-locked unlock schedule both move continuously, and the winner can flip block-to-block.
+
+```typescript
+import { Scallop } from '@scallop-io/sui-scallop-sdk';
+import {
+  VAULTS,
+  getVaultStats,
+  type VaultInfo,
+} from '@kunalabs-io/kai';
+import { SuiClient } from '@mysten/sui/client';
+
+type Venue = 'scallop' | 'kai' | 'idle';
+
+interface PickResult {
+  venue: Venue;
+  apy: number;          // raw supply APY (cdpm fee cancels in the comparison)
+  detail: {
+    scallopApy: number;
+    kaiApy: number | null;       // null if no Kai vault for this T
+    utilization: number;          // Scallop pool utilization
+  };
+}
+
+/**
+ * Pick the better supply venue for a given underlying.
+ *
+ * - `scallopCoinName` is the SDK's coin alias ('usdc', 'sui', 'usdt', ...).
+ * - `kaiVaultKey` is a key into the `VAULTS` map ('USDC', 'suiUSDT', ...);
+ *   pass `null` when no Kai vault exists for this underlying — the picker
+ *   then degenerates to a Scallop-vs-idle gate.
+ * - `minApy` (e.g. 0.005) gates against parking when even the better venue
+ *   pays less than gas-amortized round-trip cost. Tune per chain conditions.
+ */
+async function pickSupplyVenue(
+  client: SuiClient,
+  query: Awaited<ReturnType<Scallop['createScallopQuery']>>,  // pre-built singleton — see §10.1
+  scallopCoinName: string,
+  kaiVaultKey: keyof typeof VAULTS | null,
+  minApy: number = 0.005,
+): Promise<PickResult> {
+  const [scallopPool, kaiStats] = await Promise.all([
+    query.getMarketPool(scallopCoinName),                       // MarketPool | undefined
+    kaiVaultKey
+      ? VAULTS[kaiVaultKey].fetch(client).then(getVaultStats)
+      : Promise.resolve(null),
+  ]);
+
+  const scallopApy   = scallopPool?.supplyApy ?? -Infinity;     // null-guard: symbol may be absent
+  const utilization  = scallopPool?.utilizationRate ?? 0;
+  const kaiApy       = kaiStats?.apy ?? null;
+
+  const detail = { scallopApy, kaiApy, utilization };
+
+  const best = Math.max(scallopApy, kaiApy ?? -Infinity);
+  if (!Number.isFinite(best) || best < minApy) {
+    return { venue: 'idle', apy: best, detail };
+  }
+
+  const venue: Venue = (kaiApy !== null && kaiApy >= scallopApy) ? 'kai' : 'scallop';
+  return { venue, apy: best, detail };
+}
+```
+
+Notes on the picker:
+
+- **Fee cancels.** cdpm's yield-fee is taken on redeem from the interest portion regardless of venue (`scallop_finish_redeem` and `kai_finish_redeem` share `fee_house.fee_rate`). When comparing two `supplyApy` numbers under the same fee, the `(1 − r)` factor is symmetric and drops out — compare raw APY directly.
+- **`Promise.all`.** Both reads are independent gRPC calls; doing them in parallel halves the picker's wall-clock latency, which matters for rebalance bots that re-pick every block.
+- **Utilization tripwire.** If `scallopPool.utilizationRate > 0.9` (or whatever your chain-condition threshold is), `cash` is thin and a same-block redeem may not have liquidity. Either downgrade Scallop's effective rank (subtract a liquidity-risk premium from `scallopApy`), or just skip Scallop for now. Kai has no equivalent metric — its `total_available_balance` already nets out the strategy locks.
+- **No Kai vault available.** When `kaiVaultKey` is `null`, the picker degenerates to "Scallop or idle" cleanly. The reverse — a Kai vault exists but no Scallop market — is rare for major underlyings; if it happens, drop Scallop from the call and use `getVaultStats` alone.
+- **APR vs APY.** Both SDKs report compounded `apy` and simple `apr`. cdpm itself doesn't compound (interest realizes only on redeem), so comparing `apy` is closest to "what the PM actually earns over the idle window". If you compare `apr`, do it consistently across both venues.
+
+Heuristic numbers to keep in mind: at 5% APY, a 100 MIST gas round-trip pays for itself within ~12 hours on any idle balance ≥ 22 MIST × coin-decimal multiplier. For typical mainnet USDC parking (6 decimals, 100k+ MIST balances), the picker should almost always return a non-`idle` venue — the only reason to gate is when both venues are paying near zero (Scallop with very low utilization + Kai near `finalUnlockTsSec`).
+
+### 10.5 PTB-Builder Hooks — SDK Composables Inside cdpm's Hot-Potato
+
+Scallop's SDK exposes **two layers** of builders:
+
+| Layer | Methods | Coin source | Composable with cdpm? |
+|---|---|---|---|
+| High-level (wallet-rooted) | `scallopTxBlock.depositQuick(amount, coinName)`, `withdrawQuick(amount, coinName)`, `borrowQuick`, `repayQuick`, etc. | **Wallet.** Each `*Quick` runs `coinWithBalance` against `tx.gas` / wallet coins internally. | **No.** cdpm's `scallop_start_supply` returns the tx-result `Coin<T>` — there is no wallet coin to pull from. |
+| Granular (tx-result-rooted) | `scallopTxBlock.deposit(coin, poolCoinName)` → `Coin<MarketCoin<T>>`, `scallopTxBlock.withdraw(marketCoin, poolCoinName)` → `Coin<T>`, plus `addCollateral / takeCollateral / borrow / repay` siblings (see `sui-scallop-sdk/src/builders/coreBuilder.ts:139-180`). | **Tx-result coin** passed directly. | **Yes.** Slots into cdpm's PTB between `scallop_start_supply` and `scallop_finish_supply`. |
+
+The granular `deposit` / `withdraw` builders wrap `protocol::mint::mint<T>` / `protocol::redeem::redeem<T>`. Important detail: Scallop's `mint` and `redeem` Move modules **call `accrue_all_interests` internally** (see `sui-lending-protocol/.../market.move:307,333`), so an explicit `protocol::accrue_interest::accrue_interest_for_market` command before them is redundant for the move-call itself. cdpm still benefits from running it as command 1 so that the off-chain sizing helpers in §7 / §10 match the on-chain `balance_sheet` snapshot the cdpm `scallop_start_*` ticket records — the accrue command is about *off-chain prediction freshness*, not about Scallop's mint/redeem correctness.
+
+**Updated cdpm Scallop supply PTB using the SDK granular builder:**
+
+```typescript
+import { Scallop } from '@scallop-io/sui-scallop-sdk';
+
+const builder = await scallop.createScallopBuilder();
+const txBlock = builder.createTxBlock();
+txBlock.setSender(senderAddress);
+
+// 1. Optional accrual prefix (still wanted for sizing freshness; harmless if omitted).
+txBlock.moveCall({
+  target: `${SCALLOP_PROTOCOL}::accrue_interest::accrue_interest_for_market`,
+  arguments: [
+    txBlock.object(SCALLOP_VERSION_ID),
+    txBlock.object(SCALLOP_MARKET_ID),
+    txBlock.object('0x6'),
+  ],
+});
+
+// 2. cdpm hot-potato start — same as before.
+const [coinT, ticket] = txBlock.moveCall({
+  target: `${CDPM_PACKAGE}::cdpm::scallop_start_supply`,
+  typeArguments: [underlyingCoinType],
+  arguments: [
+    txBlock.object(CDPM_MAINNET.ACCESS_LIST_ID),
+    txBlock.object(pmId),
+    txBlock.object(SCALLOP_MARKET_ID),
+    txBlock.pure.u64(amount),
+  ],
+});
+
+// 3. Replace the manual `protocol::mint::mint` move-call with the SDK helper.
+const coinMarket = txBlock.deposit(coinT, 'usdc');     // → tx-result Coin<MarketCoin<T>>
+
+// 4. cdpm hot-potato finish — same as before.
+txBlock.moveCall({
+  target: `${CDPM_PACKAGE}::cdpm::scallop_finish_supply`,
+  typeArguments: [underlyingCoinType],
+  arguments: [txBlock.object(pmId), ticket, coinMarket],
+});
+
+await suiClient.signAndExecuteTransaction({ signer, transaction: txBlock });
+```
+
+Redeem mirrors this — replace the `protocol::redeem::redeem` move-call with `txBlock.withdraw(coinMarket, 'usdc')`. The cdpm `scallop_start_redeem` / `scallop_finish_redeem` calls remain raw `tx.moveCall` against `${CDPM_PACKAGE}::cdpm::*` — only the inner Scallop command changes.
+
+**Why prefer the granular builder over raw `tx.moveCall`?**
+
+1. **Address resolution comes for free.** `txBlock.deposit('usdc')` resolves `SCALLOP_VERSION_ID`, `SCALLOP_MARKET_ID`, the `Coin<T>` type tag, and the witness types from the SDK's address bundle — no per-protocol-upgrade constant edits.
+2. **Type-tag plumbing is implicit.** The SDK reads `MarketPool.coinType` / `MarketPool.marketCoinType` from the same bundle, so a coin-name change on the Scallop side doesn't require a cdpm code-side edit.
+3. **One package upgrade away.** When Scallop pushes a `mint` / `redeem` signature change, the SDK absorbs it; raw `tx.moveCall` recipes would silently break on the next upgrade.
+
+The wallet-rooted `*Quick` methods are still useful for the *escape path*: an owner who pulled raw sCoin out via `user_extract_scallop_market_coin<T>` can call `txBlock.withdrawQuick(amount, 'usdc')` directly against Scallop to convert sCoin to underlying, without re-entering cdpm.
+
+For now the operational PTB recipes in [`cdpm-user-sdk/reference/scallop-lending.md`](../../cdpm-user-sdk/reference/scallop-lending.md) (and the agent / protocol counterparts) still show the raw `tx.moveCall` shape for clarity. Both shapes are correct; pick whichever fits your call-site abstraction.
+
+> **Cross-protocol composition.** When the same PTB needs both Scallop and Kai legs (e.g. an atomic Scallop ↔ Kai rebalance, or any flow where the picker's choice should not gate atomicity at the tx layer), see the dedicated guide at [`cross-protocol-ptb.md`](./cross-protocol-ptb.md). It documents the canonical Mysten-rooted shared-`Transaction` pattern, the multi-approach comparison, five integration caveats (signing target, `setSender`, `@mysten/sui` dependency pinning, no `*Quick` outputs into cdpm finishes, re-snapshot before signing), and worked rebalance examples.
+
+### 10.6 Using the SDK Strictly for Address Resolution
+
+Even when you build cdpm PTBs manually (without the granular builders in §10.5), the SDK is the cleanest source of Scallop package / object ids. The actual API lives on `scallop.client.address` — `scallop.getAddresses()` does NOT exist:
+
+```typescript
+// Singleton getter — string-or-undefined, validated against AddressStringPath.
+const SCALLOP_PROTOCOL   = scallop.client.address.get('core.packages.protocol.id');
+const SCALLOP_VERSION_ID = scallop.client.address.get('core.version');
+const SCALLOP_MARKET_ID  = scallop.client.address.get('core.market');
+
+// Or grab the whole bundle once and pluck what you need.
+const bundle = scallop.client.address.getAddresses();
+```
+
+The path keys are typed via `AddressStringPath` (`sui-scallop-sdk/src/types/address.ts:175-178`); typos return `undefined` at runtime rather than throwing, so wrap reads in an assertion if a missing key would silently break your PTB.
+
+Reading these once at boot and reusing them across all cdpm Scallop PTBs survives Scallop upgrades that bump the package id but keep the move-call shapes intact — without it, every Scallop upgrade requires a cdpm-side constant edit.
+
+### 10.7 Error / Staleness Notes
+
+- The SDK caches address-bundle reads. To force-refresh, call `await scallop.client.address.read(addressId)` (it re-fetches `https://sui.apis.scallop.io/addresses/{addressId}` and repopulates the bundle). There is no `scallop.fetchAddresses()` shortcut.
+- `queryMarket` / `getMarketPool` already trigger an off-chain recompute that mimics `accrue_interest_for_market`, so the returned `supplyApy` is fresh as of the SDK call. The on-chain `balance_sheet`, however, is **only** fresh after a real PTB runs `accrue_interest_for_market` — your sizing helpers (§7) still need that command first.
+- If you compare `pool.conversionRate × supply` against your `predictRedeem.expectedUnderlying`, expect tiny discrepancies — the SDK uses floats internally; cdpm and the on-chain reserve do u128 ceil/floor. Treat the SDK numbers as decision-grade, not settlement-grade.
+- For pure read-only consumers (e.g., a dashboard that only displays APY), fetching `https://sui.apis.scallop.io/addresses/{addressId}` directly avoids pulling in the full SDK; pair it with a hand-rolled `getMarketPool` over the resolved object ids if dependency size matters.
