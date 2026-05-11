@@ -267,6 +267,131 @@ and the shell can be closed via `user_close_pm` (the `None` branch handles
 this). There is intentionally no "put back into the same PM" function —
 migration flows through a fresh PM.
 
+### D-08: Scallop Lending — Hot-Potato Decoupled Idle Yield
+Idle balances in `pm.balance` (assets outside the active bin range) can be
+loaned to Scallop to earn interest. The PM stores Scallop's sCoin (`S`,
+typically `protocol::reserve::MarketCoin<T>`) in a `lending: Bag` keyed by
+underlying type:
+
+```move
+public struct ScallopVault<phantom T, phantom S> has store {
+    scoin: Balance<S>,
+    principal: u64,
+}
+```
+
+**Decoupling**: cdpm does **not** import `protocol::mint`, `protocol::redeem`,
+`protocol::version::Version`, or `protocol::accrue_interest`. It only imports
+view-only `protocol::market::vault`, `protocol::reserve::balance_sheets` /
+`balance_sheet`, and `x::wit_table`. None of these enforce a Scallop `Version`
+check. As a result, Scallop's frequent `Version` bumps don't break cdpm; only
+the caller-constructed PTB's Scallop calls do, and `pm.lending` remains
+recoverable via the owner-only escape (D-09).
+
+**Hot-potato API**: cdpm pairs `start_*` with `finish_*`. The ticket structs
+have no abilities, so Move's type system forces consumption in the same PTB:
+
+```move
+public struct SupplyTicket<phantom T, phantom S> { /* hot potato */ }
+public struct RedeemTicket<phantom T, phantom S> { /* hot potato */ }
+
+public fun start_supply<T, S>(
+    access, pm, market, amount, ctx,
+): (Coin<T>, SupplyTicket<T, S>);
+public fun finish_supply<T, S>(pm, ticket, scoin: Coin<S>);
+
+public fun start_redeem<T, S>(
+    access, pm, market, market_coin_amount, ctx,
+): (Coin<S>, RedeemTicket<T, S>);
+public fun finish_redeem<T, S>(pm, fee_house, ticket, underlying: Coin<T>, ctx);
+```
+
+`market: &Market` is read-only; cdpm reads the live balance sheet to compute
+`expected_scoin` / `expected_underlying` and stores them inside the ticket
+(ticket fields are private — caller cannot fabricate them). `finish_*` asserts
+`Coin<...>.value() == expected`. This blocks an agent from diverting the
+`Coin<T>` released by `start_supply`: they cannot satisfy `finish_supply`
+unless they supply back exactly the amount Scallop's `mint` would produce.
+
+All three callers (owner / agent / protocol) may operate `start_*` /
+`finish_*`. **Yield interest is treated as protocol income** — every
+`finish_redeem` deducts `fee_rate` (capped at `MAX_FEE_RATE = 30%`) from the
+interest portion (`redeemed_amount - principal_portion`); principal returns to
+`pm.balance` intact. Departure from D-01 is intentional: lending is a
+recurring protocol-managed yield, not self-management.
+
+**PTB contract**: callers must call Scallop's `accrue_interest_for_market`
+first; otherwise cdpm reads stale balance sheet, `expected ≠ actual`, and
+`finish_*` aborts cleanly (no fund loss). Templates:
+
+```
+Supply:
+  accrue_interest::accrue_interest_for_market(version, market, clock)
+  (coin, t) = cdpm::start_supply<T, S>(access, pm, market, amount)
+  scoin     = mint::mint<T>(version, market, coin, clock)
+  cdpm::finish_supply<T, S>(pm, t, scoin)
+
+Redeem:
+  accrue_interest::accrue_interest_for_market(version, market, clock)
+  (scoin, t) = cdpm::start_redeem<T, S>(access, pm, market, market_coin_amount)
+  underlying = redeem::redeem<T>(version, market, scoin, clock)
+  cdpm::finish_redeem<T, S>(pm, fee_house, t, underlying)
+```
+
+Operational risks:
+
+1. **Liquidity risk** — Scallop is over-collateralized lending. At ≈100%
+   utilization, `redeem` aborts. Off-chain scheduler must reserve a
+   non-Scallop buffer for emergency rebalancing.
+2. **Version risk** — Scallop bumping `Version` aborts the caller's PTB at
+   `accrue_interest` / `mint` / `redeem`. cdpm itself is unaffected, and
+   `pm.lending` is still extractable via D-09.
+3. **Whitelist risk** — Scallop checks `tx_context::sender(ctx)` against its
+   whitelist; if they disable `allow_all`, end-user supply/redeem fails.
+4. **Asset deactivation** — Scallop's `mint` aborts on disabled coin types.
+5. **Supply cap** — Scallop enforces a per-asset `supply_limit`; large mints
+   may abort.
+6. **Gas vs yield** — `accrue_interest` runs every PTB; tiny positions can be
+   net-negative.
+
+`user_close_pm` asserts `lending` is empty (`ELendingNotEmpty = 1004`).
+Callers must redeem (or extract — D-09) every vault before closing the PM.
+
+A given `T` can hold only one `S` at a time (Move type system enforces this on
+the `Bag` entry). Migrating to a new Scallop deployment requires extracting
+the old `S` first.
+
+### D-09: `user_extract_market_coin` Is a Scallop-Incompatibility Escape
+Symmetric to D-07. If Scallop becomes unreachable (Version bump, contract
+freeze) and `finish_*` paths cannot complete, `pm.lending` would otherwise be
+stranded.
+
+```move
+public fun user_extract_market_coin<T, S>(
+    pm: &mut PositionManager,
+    market_coin_amount: u64,    // u64::MAX to extract all
+    ctx: &mut TxContext,
+): Coin<S>
+```
+
+- **Owner-only**, no fee.
+- Takes **no Scallop objects** — works even if Scallop is fully unreachable.
+- Principal is amortized using the same formula as `start_redeem`.
+- After extraction the owner holds raw `Coin<S>` and can in PTB redeem against
+  a new Scallop deployment, wrap via Scallop's `s_coin_converter`, or
+  participate in any migration tool Scallop publishes.
+
+**There is intentionally no inverse `user_inject_market_coin` function.**
+Allowing arbitrary `Coin<S>` to be injected with a user-claimed principal
+would let attackers fabricate `principal ≫ true_principal`, making
+`redeemed - principal_portion < 0` and zeroing yield fees forever. Re-entry
+must go through `Coin<T>` → `user_add_liquidity_to_balance` → `start_supply`.
+
+A determined owner can theoretically use this path to bypass the yield fee
+(extract → externally redeem). The cost (extra PTB, no `CoinMetadata` for raw
+sCoin) makes this uneconomic for typical positions; we accept the edge case
+in exchange for guaranteed asset recoverability.
+
 ## Security Features
 
 ### 1. Permission Separation

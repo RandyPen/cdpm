@@ -8,19 +8,37 @@ version = 4
 source = { git = "https://github.com/CetusProtocol/cetus-dlmm-interface.git", subdir = "packages/dlmm", rev = "31ac289f0d35118c2e39bd37e177dd4afaa3a1df" }
 use_environment = "mainnet"
 manifest_digest = "1E932E9C4C15B3E671C5AACEE3107A26421CD5F431977EB48BE64EF5BE1AD9CA"
-deps = { IntegerMate = "IntegerMate", MoveSTL = "MoveSTL", std = "MoveStdlib", sui = "Sui" }
+deps = { IntegerMate = "IntegerMate", MoveSTL = "MoveSTL", std = "MoveStdlib_2", sui = "Sui_2" }
+
+[pinned.mainnet.CoinDecimalsRegistry]
+source = { local = "../sui-lending-protocol/contracts/libs/coin_decimals_registry" }
+use_environment = "mainnet"
+manifest_digest = "3876920E3F5449B657525E749B996C31141507452514AF2E259F5441554DCDDF"
+deps = { Sui = "Sui" }
+
+[pinned.mainnet.Decimal]
+source = { local = "../sui-lending-protocol/contracts/libs/decimal" }
+use_environment = "mainnet"
+manifest_digest = "3876920E3F5449B657525E749B996C31141507452514AF2E259F5441554DCDDF"
+deps = { Sui = "Sui" }
 
 [pinned.mainnet.IntegerMate]
 source = { git = "https://github.com/CetusProtocol/integer-mate.git", subdir = ".", rev = "09a12d9b171122883d9350039d4ed6e8400033b9" }
 use_environment = "mainnet"
 manifest_digest = "E41BBD67BE8940D26C79D78B028477EF5B33BA217A1282C78ACB344CF8A5ECF6"
-deps = { std = "MoveStdlib", sui = "Sui" }
+deps = { std = "MoveStdlib_2", sui = "Sui_2" }
+
+[pinned.mainnet.Math]
+source = { local = "../sui-lending-protocol/contracts/libs/math" }
+use_environment = "mainnet"
+manifest_digest = "3876920E3F5449B657525E749B996C31141507452514AF2E259F5441554DCDDF"
+deps = { Sui = "Sui" }
 
 [pinned.mainnet.MoveSTL]
 source = { git = "https://github.com/CetusProtocol/move-stl.git", subdir = ".", rev = "0681fec63a310ae753d03a06f7c05d3e2925bb09" }
 use_environment = "mainnet"
 manifest_digest = "E41BBD67BE8940D26C79D78B028477EF5B33BA217A1282C78ACB344CF8A5ECF6"
-deps = { std = "MoveStdlib", sui = "Sui" }
+deps = { std = "MoveStdlib_2", sui = "Sui_2" }
 
 [pinned.mainnet.MoveStdlib]
 source = { git = "https://github.com/MystenLabs/sui.git", subdir = "crates/sui-framework/packages/move-stdlib", rev = "b38bca86f0323b3fe8b6b7f4ca0cd7ae7faebe4b" }
@@ -28,14 +46,68 @@ use_environment = "mainnet"
 manifest_digest = "C4FE4C91DE74CBF223B2E380AE40F592177D21870DC2D7EB6227D2D694E05363"
 deps = {}
 
+[pinned.mainnet.MoveStdlib_1]
+source = { git = "https://github.com/MystenLabs/sui.git", subdir = "crates/sui-framework/packages/move-stdlib", rev = "2f5992f189cd24445cd010ccf0aa7ff418ff93b1" }
+use_environment = "mainnet"
+manifest_digest = "C4FE4C91DE74CBF223B2E380AE40F592177D21870DC2D7EB6227D2D694E05363"
+deps = {}
+
+[pinned.mainnet.MoveStdlib_2]
+source = { git = "https://github.com/MystenLabs/sui.git", subdir = "crates/sui-framework/packages/move-stdlib", rev = "73dd2c2ba6f9fdb21d7ffde2b50a3f2f0ac39bc1" }
+use_environment = "mainnet"
+manifest_digest = "C4FE4C91DE74CBF223B2E380AE40F592177D21870DC2D7EB6227D2D694E05363"
+deps = {}
+
+[pinned.mainnet.ScallopProtocol]
+source = { local = "../sui-lending-protocol/contracts/protocol" }
+use_environment = "mainnet"
+manifest_digest = "A91D5B1E1A8E663F005C45833346765F113FED7FFCC93A0E938717DEB8DE0289"
+deps = { CoinDecimalsRegistry = "CoinDecimalsRegistry", Decimal = "Decimal", Math = "Math", Sui = "Sui", TestCoin = "TestCoin", Whitelist = "Whitelist", X = "X", XOracle = "XOracle" }
+
 [pinned.mainnet.Sui]
+source = { git = "https://github.com/MystenLabs/sui.git", subdir = "crates/sui-framework/packages/sui-framework", rev = "2f5992f189cd24445cd010ccf0aa7ff418ff93b1" }
+use_environment = "mainnet"
+manifest_digest = "CD547CB1ACCE0880C835DAED2D8FFCB91D56C833AE5240D3AA5B918398263195"
+deps = { MoveStdlib = "MoveStdlib_1" }
+
+[pinned.mainnet.Sui_1]
 source = { git = "https://github.com/MystenLabs/sui.git", subdir = "crates/sui-framework/packages/sui-framework", rev = "b38bca86f0323b3fe8b6b7f4ca0cd7ae7faebe4b" }
 use_environment = "mainnet"
 manifest_digest = "CD547CB1ACCE0880C835DAED2D8FFCB91D56C833AE5240D3AA5B918398263195"
 deps = { MoveStdlib = "MoveStdlib" }
 
+[pinned.mainnet.Sui_2]
+source = { git = "https://github.com/MystenLabs/sui.git", subdir = "crates/sui-framework/packages/sui-framework", rev = "73dd2c2ba6f9fdb21d7ffde2b50a3f2f0ac39bc1" }
+use_environment = "mainnet"
+manifest_digest = "CD547CB1ACCE0880C835DAED2D8FFCB91D56C833AE5240D3AA5B918398263195"
+deps = { MoveStdlib = "MoveStdlib_2" }
+
+[pinned.mainnet.TestCoin]
+source = { local = "../sui-lending-protocol/contracts/test_coin" }
+use_environment = "mainnet"
+manifest_digest = "3876920E3F5449B657525E749B996C31141507452514AF2E259F5441554DCDDF"
+deps = { Sui = "Sui" }
+
+[pinned.mainnet.Whitelist]
+source = { local = "../sui-lending-protocol/contracts/libs/whitelist" }
+use_environment = "mainnet"
+manifest_digest = "3876920E3F5449B657525E749B996C31141507452514AF2E259F5441554DCDDF"
+deps = { Sui = "Sui" }
+
+[pinned.mainnet.X]
+source = { local = "../sui-lending-protocol/contracts/libs/x" }
+use_environment = "mainnet"
+manifest_digest = "3876920E3F5449B657525E749B996C31141507452514AF2E259F5441554DCDDF"
+deps = { Sui = "Sui" }
+
+[pinned.mainnet.XOracle]
+source = { local = "../sui-lending-protocol/contracts/sui_x_oracle/x_oracle" }
+use_environment = "mainnet"
+manifest_digest = "3876920E3F5449B657525E749B996C31141507452514AF2E259F5441554DCDDF"
+deps = { Sui = "Sui" }
+
 [pinned.mainnet.cdpm]
 source = { root = true }
 use_environment = "mainnet"
-manifest_digest = "F4885AF8F72BA9667794CC23CE531BB23EF144223E150AA40DBB4F3EA08B2FEE"
-deps = { cetusdlmm = "CetusDlmm", integer_mate = "IntegerMate", move_stl = "MoveSTL", std = "MoveStdlib", sui = "Sui" }
+manifest_digest = "F554C4D9CC986D2500F6A6B9005E0323D83F9E95F439E5C63C70D3A290A658A1"
+deps = { MoveStdlib = "MoveStdlib", ScallopProtocol = "ScallopProtocol", Sui = "Sui_1", X = "X", cetusdlmm = "CetusDlmm", integer_mate = "IntegerMate", move_stl = "MoveSTL" }
