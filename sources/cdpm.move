@@ -25,14 +25,15 @@ use x::wit_table;
 const FEE_DENOMINATOR: u128 = 10000;
 const MAX_FEE_RATE: u128 = 3000;
 
-const ENotOwner: u64          = 1001;
-const ENotAllow: u64          = 1002;
-const EInvalidFeeRate: u64    = 1003;
-const ELendingNotEmpty: u64   = 1004;
-const EWrongPm: u64           = 1005;
-const EZeroExpected: u64      = 1007;
-const EReserveEmpty: u64      = 1008;
-const EAmountShortfall: u64   = 1009;     // finish_* received < expected
+const ENotOwner: u64          = 1001;     // caller is not pm.owner
+const ENotAllow: u64          = 1002;     // caller not in agents / access list (or invariant broken)
+const EInvalidFeeRate: u64    = 1003;     // admin_set_fee given rate > MAX_FEE_RATE (30%)
+const ELendingNotEmpty: u64   = 1004;     // user_close_pm called with non-empty lending Bag
+const ENoSuchVault: u64       = 1005;     // pull_from_lending called for an absent (T, S) vault
+const EReserveEmpty: u64      = 1006;     // Scallop reserve has zero supply or zero (cash+debt-revenue)
+const EZeroExpected: u64      = 1007;     // start_* would yield 0 scoin/underlying (amount too small)
+const EWrongPm: u64           = 1008;     // hot-potato ticket consumed against a different PM
+const EAmountShortfall: u64   = 1009;     // finish_* received Coin with value < ticket.expected
 
 // ============ Data Structures ============
 public struct AccessList has key {
@@ -1342,6 +1343,7 @@ fun pull_from_lending<T, S>(
     want_amount: u64,
 ): (Balance<S>, u64) {
     let coin_type = type_name::with_defining_ids<T>().into_string();
+    assert!(bag::contains<String>(&pm.lending, coin_type), ENoSuchVault);
     let total_scoin = balance::value<S>(
         &bag::borrow<String, ScallopVault<T, S>>(&pm.lending, coin_type).scoin,
     );
@@ -1368,7 +1370,8 @@ fun compute_expected_scoin<T>(market: &Market, coin_amount: u64): u64 {
     if (supply == 0) {
         coin_amount
     } else {
-        // Cast each u64 to u128 BEFORE arithmetic to avoid u64 overflow on cash+debt.
+        // Cast u64 → u128 BEFORE arithmetic so cash+debt cannot overflow u64.
+        // u128 holds the full u64×u64 product; sui::balance values are u64 (balance.move:36).
         let cash_u = cash as u128;
         let debt_u = debt as u128;
         let revenue_u = revenue as u128;
@@ -1515,4 +1518,246 @@ public fun user_extract_market_coin<T, S>(
     });
 
     s_balance.into_coin(ctx)
+}
+
+// ============ Test-only accessors ============
+// These functions exist solely so `tests/*` can drive and inspect internal state.
+// They are stripped from non-test builds and do not enlarge the deployed bytecode.
+
+#[test_only]
+public fun test_only_pull_from_lending<T, S>(
+    pm: &mut PositionManager,
+    want_amount: u64,
+): (Balance<S>, u64) {
+    pull_from_lending<T, S>(pm, want_amount)
+}
+
+#[test_only]
+public fun test_only_add_to_lending<T, S>(
+    pm: &mut PositionManager,
+    scoin: Balance<S>,
+    principal_added: u64,
+) {
+    add_to_lending<T, S>(pm, scoin, principal_added)
+}
+
+#[test_only]
+public fun test_only_add_to_balance<T>(
+    pm: &mut PositionManager,
+    coin: Coin<T>,
+) {
+    add_to_balance<T>(pm, coin)
+}
+
+#[test_only]
+public fun test_only_withdraw_from_balance<T>(
+    pm: &mut PositionManager,
+    amount: u64,
+    ctx: &mut TxContext,
+): Coin<T> {
+    withdraw_from_balance<T>(pm, amount, ctx)
+}
+
+#[test_only]
+public fun test_only_add_to_fee<T>(
+    pm: &mut PositionManager,
+    coin: Coin<T>,
+) {
+    add_to_fee<T>(pm, coin)
+}
+
+#[test_only]
+public fun test_only_withdraw_from_fee<T>(
+    pm: &mut PositionManager,
+    amount: u64,
+    ctx: &mut TxContext,
+): Coin<T> {
+    withdraw_from_fee<T>(pm, amount, ctx)
+}
+
+#[test_only]
+public fun test_only_take_fee<T>(
+    balance_in: &mut Balance<T>,
+    fee_house: &mut FeeHouse,
+) {
+    take_fee<T>(balance_in, fee_house)
+}
+
+#[test_only]
+public fun test_only_assert_caller_authorized(
+    access: &AccessList,
+    pm: &PositionManager,
+    ctx: &TxContext,
+) {
+    assert_caller_authorized(access, pm, ctx)
+}
+
+#[test_only]
+public fun test_only_lending_contains<T>(pm: &PositionManager): bool {
+    let coin_type = type_name::with_defining_ids<T>().into_string();
+    bag::contains<String>(&pm.lending, coin_type)
+}
+
+#[test_only]
+public fun test_only_lending_state<T, S>(pm: &PositionManager): (u64, u64) {
+    let coin_type = type_name::with_defining_ids<T>().into_string();
+    let v = bag::borrow<String, ScallopVault<T, S>>(&pm.lending, coin_type);
+    (balance::value<S>(&v.scoin), v.principal)
+}
+
+#[test_only]
+public fun test_only_balance_value<T>(pm: &PositionManager): u64 {
+    let coin_type = type_name::with_defining_ids<T>().into_string();
+    if (bag::contains<String>(&pm.balance, coin_type)) {
+        balance::value<T>(bag::borrow<String, Balance<T>>(&pm.balance, coin_type))
+    } else { 0 }
+}
+
+#[test_only]
+public fun test_only_fee_value<T>(pm: &PositionManager): u64 {
+    let coin_type = type_name::with_defining_ids<T>().into_string();
+    if (bag::contains<String>(&pm.fee, coin_type)) {
+        balance::value<T>(bag::borrow<String, Balance<T>>(&pm.fee, coin_type))
+    } else { 0 }
+}
+
+#[test_only]
+public fun test_only_fee_house_value<T>(fee_house: &FeeHouse): u64 {
+    let coin_type = type_name::with_defining_ids<T>().into_string();
+    if (bag::contains<String>(&fee_house.fee, coin_type)) {
+        balance::value<T>(bag::borrow<String, Balance<T>>(&fee_house.fee, coin_type))
+    } else { 0 }
+}
+
+#[test_only]
+public fun test_only_fee_house_rate(fee_house: &FeeHouse): u64 {
+    fee_house.fee_rate
+}
+
+#[test_only]
+public fun test_only_supply_ticket_fields<T, S>(
+    ticket: &SupplyTicket<T, S>,
+): (ID, u64, u64) {
+    (ticket.pm_id, ticket.expected_scoin, ticket.principal)
+}
+
+#[test_only]
+public fun test_only_redeem_ticket_fields<T, S>(
+    ticket: &RedeemTicket<T, S>,
+): (ID, u64, u64, u64) {
+    (
+        ticket.pm_id,
+        ticket.expected_underlying,
+        ticket.scoin_burned,
+        ticket.principal_portion,
+    )
+}
+
+#[test_only]
+public fun test_only_make_pm(owner: address, ctx: &mut TxContext): PositionManager {
+    PositionManager {
+        id: object::new(ctx),
+        owner,
+        agents: vec_set::empty(),
+        position: option::none(),
+        balance: bag::new(ctx),
+        fee: bag::new(ctx),
+        lending: bag::new(ctx),
+    }
+}
+
+#[test_only]
+public fun test_only_share_pm(pm: PositionManager) {
+    transfer::share_object(pm);
+}
+
+#[test_only]
+public fun test_only_destroy_empty_pm(pm: PositionManager) {
+    let PositionManager { id, owner: _, agents: _, position, balance, fee, lending } = pm;
+    option::destroy_none(position);
+    bag::destroy_empty(balance);
+    bag::destroy_empty(fee);
+    bag::destroy_empty(lending);
+    id.delete();
+}
+
+#[test_only]
+public fun test_only_insert_agent(pm: &mut PositionManager, agent: address) {
+    vec_set::insert(&mut pm.agents, agent);
+}
+
+#[test_only]
+public fun test_only_init(ctx: &mut TxContext) {
+    init(ctx)
+}
+
+// Pure-math twins of the (P, S, w) split done by `pull_from_lending`. These let
+// `#[random_test]` exercise the principal-per-scoin monotonicity property
+// without spinning up a PositionManager + Bag + Balance every iteration.
+
+#[test_only]
+public fun test_only_principal_portion(p: u64, s: u64, w: u64): u64 {
+    (((p as u128) * (w as u128) / (s as u128)) as u64)
+}
+
+#[test_only]
+public fun test_only_compute_expected_scoin_pure(
+    cash: u64, debt: u64, revenue: u64, supply: u64, coin_amount: u64,
+): u64 {
+    if (supply == 0) {
+        coin_amount
+    } else {
+        let cash_u = cash as u128;
+        let debt_u = debt as u128;
+        let revenue_u = revenue as u128;
+        assert!(cash_u + debt_u >= revenue_u, EReserveEmpty);
+        let denom = cash_u + debt_u - revenue_u;
+        assert!(denom > 0, EReserveEmpty);
+        (((coin_amount as u128) * (supply as u128) / denom) as u64)
+    }
+}
+
+#[test_only]
+public fun test_only_compute_expected_underlying_pure(
+    cash: u64, debt: u64, revenue: u64, supply: u64, scoin_amount: u64,
+): u64 {
+    assert!(supply > 0, EReserveEmpty);
+    let cash_u = cash as u128;
+    let debt_u = debt as u128;
+    let revenue_u = revenue as u128;
+    assert!(cash_u + debt_u >= revenue_u, EReserveEmpty);
+    let numer_extra = cash_u + debt_u - revenue_u;
+    (((scoin_amount as u128) * numer_extra / (supply as u128)) as u64)
+}
+
+// ============ Prover-Only Accessors ============
+// `#[spec_only]` items are visible only to `sui-prover` (asymptotic.tech).
+// Regular `sui move build` ignores the attribute (the Move compiler tolerates
+// unknown attributes as warnings) but the asymptotic toolchain strips them
+// from production bytecode just like `#[test_only]`. They expose private
+// fields so the spec package (`specs/`) can state postconditions. See SPEC.md.
+
+#[spec_only]
+public fun spec_fee_house_rate(fee_house: &FeeHouse): u64 {
+    fee_house.fee_rate
+}
+
+#[spec_only]
+public fun spec_supply_ticket_pm_id<T, S>(ticket: &SupplyTicket<T, S>): ID {
+    ticket.pm_id
+}
+
+#[spec_only]
+public fun spec_supply_ticket_expected_scoin<T, S>(ticket: &SupplyTicket<T, S>): u64 {
+    ticket.expected_scoin
+}
+
+#[spec_only]
+public fun spec_redeem_ticket_pm_id<T, S>(ticket: &RedeemTicket<T, S>): ID {
+    ticket.pm_id
+}
+
+#[spec_only]
+public fun spec_redeem_ticket_expected_underlying<T, S>(ticket: &RedeemTicket<T, S>): u64 {
+    ticket.expected_underlying
 }
