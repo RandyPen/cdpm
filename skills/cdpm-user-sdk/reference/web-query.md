@@ -62,6 +62,9 @@ interface PositionManagerInfo {
   agents: string[];
   balance: Record<string, string>;
   fee: Record<string, string>;
+  // Scallop vaults keyed by underlying `type_name<T>`.
+  // Each value is a ScallopVault<T, S> { scoin: Balance<S>, principal: u64 }.
+  lending: Record<string, { scoin: string; principal: string }>;
 }
 ```
 
@@ -103,6 +106,7 @@ async function getPositionManagerDetails(
     agents: pmData.agents || [],
     balance: pmData.balance || {},
     fee: pmData.fee || {},
+    lending: pmData.lending || {},
   };
 }
 ```

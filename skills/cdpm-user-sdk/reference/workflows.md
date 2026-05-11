@@ -145,15 +145,23 @@ async function createPositionSmart(
 
 ## Close Position
 
-> **⚠ IMPORTANT — reward safety**
+> **IMPORTANT — reward safety**
 > `pool::close_position` (used internally by `user_close_pm`) only returns
 > underlying tokens and accumulated trading fees. Any **incentive reward
 > tokens** still held by the position will be destroyed together with the
 > `ClosePositionCert`. Because the contract itself doesn't know which
 > `RewardType`s a pool has, you MUST construct a PTB that first calls
 > `user_collect_reward<CoinTypeA, CoinTypeB, RewardType>` once for each
-> reward token on that pool (typically 1–3 types), then `user_close_pm`
+> reward token on that pool (typically 1-3 types), then `user_close_pm`
 > in the same transaction.
+
+> **IMPORTANT — Scallop lending must be empty**
+> `user_close_pm` now asserts `bag::is_empty(&pm.lending)` and aborts with
+> `ELendingNotEmpty (1004)` otherwise. Before closing, drain every
+> `ScallopVault<T, S>` either by running the full
+> `accrue_interest → start_redeem → redeem::redeem → finish_redeem` PTB or
+> by calling `user_extract_market_coin<T, S>` (owner-only). See
+> `reference/scallop-lending.md` for the full recipes.
 
 ```typescript
 async function closePosition(

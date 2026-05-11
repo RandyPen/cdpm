@@ -43,11 +43,11 @@ public struct PositionManager has key {
     position: Option<Position>, // Underlying Cetus DLMM position
     balance: Bag,               // Token balances (String -> Balance<T>)
     fee: Bag,                   // Accumulated fees (String -> Balance<T>)
-    lending: Bag,               // Scallop sCoin holdings (String -> ScallopVault<T>)
+    lending: Bag,               // Scallop sCoin holdings (String -> ScallopVault<T, S>)
 }
 
-public struct ScallopVault<phantom T> has store {
-    scoin: Balance<MarketCoin<T>>,
+public struct ScallopVault<phantom T, phantom S> has store {
+    scoin: Balance<S>,          // Scallop sCoin (e.g. MarketCoin<T>) parametrised over S
     principal: u64,             // Underlying principal supplied (net of redemptions)
 }
 ```
@@ -58,7 +58,7 @@ public struct ScallopVault<phantom T> has store {
 - **Position**: Optional, exists when user has active liquidity
 - **Balance**: Generic token balances for deposit/withdrawal
 - **Fee**: Accumulated fees from agent/protocol operations
-- **Lending**: Scallop `MarketCoin<T>` (sCoin) wrapped per underlying coin type along with cumulative principal; populated by `scallop_supply`, drained by `scallop_redeem` / `user_extract_market_coin`
+- **Lending**: Scallop sCoin `S` (typically `protocol::reserve::MarketCoin<T>`) wrapped per `(T, S)` pair along with cumulative principal; populated by `start_supply` / `finish_supply`, drained by `start_redeem` / `finish_redeem` / `user_extract_market_coin`
 
 ### 2. FeeHouse
 Global protocol fee management structure.
@@ -168,7 +168,7 @@ public struct Record has key {
 #### Tier 4: Admin
 **Identifier:** Holds `AdminCap`
 **Capabilities:**
-- Set protocol fee rate (0-100%)
+- Set protocol fee rate (0-30%; capped at `MAX_FEE_RATE = 3000` / `FEE_DENOMINATOR = 10000`)
 - Collect accumulated protocol fees
 - Manage AccessList (add/remove protocol addresses)
 - Transfer admin capability
@@ -235,7 +235,7 @@ Agent collects 100 USDC fees
 
 ### Default Configuration
 - **Default Fee Rate:** 2000/10000 = 20%
-- **Maximum Fee Rate:** 10000/10000 = 100%
+- **Maximum Fee Rate:** `MAX_FEE_RATE = 3000`/10000 = 30% (enforced by `admin_set_fee`)
 - **Minimum Fee Rate:** 0/10000 = 0%
 
 ## Event System
@@ -278,17 +278,20 @@ Agent collects 100 USDC fees
 ### PositionManager Lifecycle
 ```
 1. Creation
-   user_deposit() → PositionManagerCreated
-   State: position = some, balance = empty, fee = empty, agents = empty
+   user_deposit_liquidity()  → PositionManagerCreated  (creates a fresh Cetus position from coins)
+   user_deposit_position()   → PositionManagerCreated  (wraps an existing Position into a new PM)
+   State: position = some, balance = empty, fee = empty, lending = empty, agents = empty
 
 2. Normal Operations
-   - Add/remove liquidity
+   - Add/remove liquidity (position or balance side)
    - Collect fees/rewards
    - Manage agents
    - Deposit/withdraw funds
+   - Supply / redeem idle balance to Scallop (start_supply / finish_supply / start_redeem / finish_redeem)
 
 3. Closure
    user_close_pm() → PositionManagerClosed
+   Precondition: lending must be empty (ELendingNotEmpty otherwise).
    State: resources destroyed, position closed
 ```
 
@@ -329,14 +332,15 @@ User/Agent/Protocol collects fees:
 
 ### Error Codes
 ```move
-const ENotOwner: u64        = 1001;  // Caller is not owner
-const ENotAllow: u64        = 1002;  // Caller not authorized (agent/protocol)
-const EInvalidFeeRate: u64  = 1003;  // Fee rate exceeds MAX_FEE_RATE (30%)
+const ENotOwner: u64        = 1001;  // caller is not pm.owner
+const ENotAllow: u64        = 1002;  // caller not in agents / access list
+const EInvalidFeeRate: u64  = 1003;  // admin_set_fee given rate > MAX_FEE_RATE (30%)
 const ELendingNotEmpty: u64 = 1004;  // user_close_pm called with non-empty lending Bag
-const EWrongPm: u64         = 1005;  // hot-potato ticket consumed against a different PM
-const EZeroExpected: u64    = 1007;  // start_* would produce 0 scoin/underlying (amount too small or empty reserve)
-const EReserveEmpty: u64    = 1008;  // Scallop reserve has zero supply or zero (cash+debt-revenue)
-const EAmountShortfall: u64 = 1009;  // finish_* received < ticket.expected (caller would be shorted)
+const ENoSuchVault: u64     = 1005;  // pull_from_lending called for an absent (T, S) vault
+const EReserveEmpty: u64    = 1006;  // Scallop reserve has zero supply or zero (cash+debt-revenue)
+const EZeroExpected: u64    = 1007;  // start_* would yield 0 scoin/underlying (amount too small)
+const EWrongPm: u64         = 1008;  // hot-potato ticket consumed against a different PM
+const EAmountShortfall: u64 = 1009;  // finish_* received Coin with value < ticket.expected
 ```
 
 ### Error Code Recommendations (Future Improvement)
@@ -349,7 +353,7 @@ Suggested categorization:
 ## Security Considerations
 
 ### Contract Invariants
-1. **Fee Rate Bound**: `0 <= fee_rate <= FEE_DENOMINATOR`
+1. **Fee Rate Bound**: `0 <= fee_rate <= MAX_FEE_RATE` (3000 / 10000 = 30%); enforced by `admin_set_fee`
 2. **Balance Non-Negative**: All token balances are non-negative
 3. **Permission Hierarchy**: Strict separation between permission tiers
 4. **Agent Restriction**: Agents cannot withdraw user funds
@@ -529,9 +533,25 @@ When `redeemed_underlying ≤ principal_portion` (e.g. socialized loss),
 - Re-entry of extracted assets must go through `Coin<T>` (after external
   redemption) and `user_add_liquidity_to_balance` — no inverse
   `user_inject_market_coin` exists, by design (D-09).
-- A given underlying type `T` can only have one `S` (Scallop sCoin type)
-  attached at a time — Move's `Bag` enforces this via type-keyed entries.
-  To migrate to a new Scallop deployment, drain the old vault first.
+- **A given underlying type `T` can only hold one `S` (Scallop sCoin type)
+  at a time.** This is enforced structurally rather than by an explicit
+  cdpm-side check: `pm.lending` is keyed by `type_name<T>().into_string()`
+  alone, while each `Bag` entry records its full value type
+  `ScallopVault<T, S>`. If `start_supply<T, S1>` populates a vault and a
+  later call uses `start_supply<T, S2>` (`S1 != S2`), the call to
+  `bag::borrow_mut<String, ScallopVault<T, S2>>` inside `add_to_lending`
+  / `pull_from_lending` aborts with the framework's
+  `dynamic_field::EFieldTypeMismatch` rather than cdpm's `ENoSuchVault`.
+  This is intentional: the `Bag` entry records `S1`, so the typed
+  `bag::contains<String>` returns `true` (key matches) but the type-tagged
+  borrow rejects `S2`. **To migrate to a new Scallop sCoin type**, fully
+  drain the existing vault via `start_redeem<T, S1>` (or
+  `user_extract_market_coin<T, S1>` if Scallop is unreachable) so the
+  entry is removed from the bag, *then* `start_supply<T, S2>` — at that
+  point the bag has no key=T entry and a fresh `ScallopVault<T, S2>` is
+  inserted. Off-chain clients should treat a non-`ENoSuchVault`,
+  non-`EAmountShortfall` framework abort during `start_supply` /
+  `start_redeem` / `user_extract_market_coin` as "wrong S for this T".
 
 ### Events (no `by` field; tx metadata records the sender)
 ```move

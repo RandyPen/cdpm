@@ -85,6 +85,42 @@ interface ProtocolRewardCollected {
 }
 ```
 
+## Scallop Lending Events
+
+These three events fire from the shared hot-potato API regardless of which caller initiated the PTB (owner / agent / protocol). They intentionally omit a `by` field — use the Sui event envelope's `event.sender` to attribute the action.
+
+```typescript
+// Emitted by finish_supply
+interface ScallopSupplied {
+  pm_id: string;
+  coin_type: string;            // type_name<T>
+  scoin_type: string;           // type_name<S>
+  deposit_amount: string;       // underlying transferred to Scallop
+  market_coin_minted: string;   // sCoin received and added to pm.lending
+}
+
+// Emitted by finish_redeem
+interface ScallopRedeemed {
+  pm_id: string;
+  coin_type: string;
+  scoin_type: string;
+  market_coin_redeemed: string; // sCoin burned
+  redeemed_amount: string;      // underlying received from Scallop, pre-fee
+  principal_portion: string;    // principal slice this redeem consumed
+  interest: string;             // redeemed_amount − principal_portion (≥ 0)
+  fee_amount: string;           // protocol yield fee deducted from interest
+}
+
+// Emitted by user_extract_market_coin (owner-only escape hatch)
+interface MarketCoinExtracted {
+  pm_id: string;
+  coin_type: string;
+  scoin_type: string;
+  market_coin_amount: string;   // raw sCoin transferred to owner
+  principal_removed: string;    // principal slice subtracted from the vault
+}
+```
+
 ## Event Subscription
 
 ```typescript
