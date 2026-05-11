@@ -11,11 +11,10 @@
 | Manage Agents | yes | no | no | no |
 | Scallop `scallop_start_supply` / `scallop_start_redeem` | yes | yes | yes* | no |
 | Scallop `scallop_finish_supply` / `scallop_finish_redeem` | yes | yes | yes* | no |
-| `user_extract_scallop_market_coin<T>` | yes | no | no | no |
 | Kai `kai_start_supply` / `kai_start_redeem` | yes | yes | yes* | no |
 | Kai `kai_finish_supply` / `kai_finish_redeem` | yes | yes | yes* | no |
-| `user_extract_kai_yt<T, YT>` | yes | no | no | no |
-| `user_close_pm` (requires `pm.lending` empty — Scallop AND Kai entries) | yes | no | no | no |
+| `user_get_position` / `user_get_and_return_position` (Cetus DLMM `Position` extraction — the only owner-only escape hatch; lending has none) | yes | no | no | no |
+| `user_close_pm` (requires `pm.lending` empty — Scallop AND Kai entries, drained via the full redeem flow only) | yes | no | no | no |
 | Set Fee Rate (cap 30%) | no | no | no | yes |
 | Collect Protocol Fees | no | no | no | yes |
 | Manage AccessList | no | no | no | yes |

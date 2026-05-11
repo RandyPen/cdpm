@@ -5,7 +5,7 @@ cdpm exposes a hot-potato lending integration with **Scallop** alongside Kai SAV
 This page is the agent-flavored counterpart to [`cdpm-user-sdk/reference/scallop-lending.md`](../../cdpm-user-sdk/reference/scallop-lending.md). It re-emphasizes:
 
 - **Yield fee applies to agents.** `scallop_finish_redeem` computes `fee_amount = floor(max(0, redeemed − principal_portion) × fee_house.fee_rate / 10_000)` regardless of caller, so agent-driven Scallop redeems pay the same fee as owner / protocol redeems.
-- **Owner-only escape.** `user_extract_scallop_market_coin<T>` aborts with `ENotOwner (1001)` for agents. If Scallop is unreachable (paused, package upgrade frozen, etc.), only the owner can rescue raw `Coin<MarketCoin<T>>`. Agents must escalate to the owner; they cannot self-rescue.
+- **No escape hatch for lending.** cdpm does **not** expose a `user_extract_scallop_market_coin`-style wrapper-extraction function for anyone — neither agents nor the owner. If Scallop is unreachable (Version bump, paused market, etc.) the abort happens inside the inner `mint::mint` / `redeem::redeem` call before any cdpm `*_finish_*` command runs, so the hot-potato ticket is never consumed and `pm.lending` stays intact. Recovery is to retry the normal `scallop_start_redeem` → `redeem::redeem` → `scallop_finish_redeem` flow once Scallop ships an SDK update against the new Version; cdpm itself stays operational throughout.
 - **Agents cannot short-change the vault.** `scallop_finish_supply` requires `Coin<MarketCoin<T>>` and asserts `actual >= ticket.expected_scoin`. `MarketCoin<T>` has only `drop` ability and no public constructor — the only way to obtain a non-zero `Coin<MarketCoin<T>>` is through Scallop's `protocol::mint::mint<T>`, so external code cannot mint a fake sCoin. The same defence applies on redeem (`Coin<T>` only comes out of `protocol::redeem::redeem<T>` after burning a real sCoin).
 - **Pre-call accrual required.** Unlike Kai, Scallop's reserve is **not** auto-accruing per block — cdpm reads `balance_sheet` view-only inside `compute_expected_scoin` / `compute_expected_underlying_scallop`, so a stale `balance_sheet` would make the prediction exceed live `mint::mint` / `redeem::redeem` output and trip `EAmountShortfall (1009)`. The first PTB command **must** be `protocol::accrue_interest::accrue_interest_for_market`.
 
@@ -237,7 +237,7 @@ Skipping step 2 is fine for small amounts (a 1-2 unit shortfall is easily absorb
 
 | Code | Constant | Trigger | Recovery |
 |------|----------|---------|----------|
-| 1001 | `ENotOwner` | Agent attempted `user_extract_scallop_market_coin`. | Escalate to owner. |
+| 1001 | `ENotOwner` | Agent attempted an owner-only function (e.g. `user_get_position` / `user_get_and_return_position`). | Escalate to owner. |
 | 1002 | `ENotAllow` | Agent address removed from `pm.agents` between scheduling and signing. | Re-check `pm.agents` before retry. |
 | 1005 | `ENoSuchVault` | `scallop_start_redeem` for a `T` that has never been supplied (or was fully drained). | Snapshot `pm.lending` before sizing. |
 | 1006 | `EReserveEmpty` | Scallop reserve degenerate — zero supply or zero `cash+debt−revenue`. | Run the accrue prefix and re-check; if still degenerate, this market is unusable. |
@@ -245,7 +245,7 @@ Skipping step 2 is fine for small amounts (a 1-2 unit shortfall is easily absorb
 | 1008 | `EWrongPm` | Hot-potato ticket consumed against a different PM. | Re-check the `pmId` you signed against. |
 | 1009 | `EAmountShortfall` | Stale Scallop accrual or reserve state moved between snapshot and signing. | Always run `accrue_interest_for_market` as PTB command 1; for large redeems, size with a small margin via `scoinToBurnForTargetNet`. |
 
-External aborts (from Scallop itself, not cdpm): `protocol::version` mismatch after a Scallop upgrade, or a `protocol::market` pause. When these hit, the cdpm hot-potato ticket is never consumed (the abort happens inside the inner Scallop move-call before `scallop_finish_*` runs), so the PM state is intact. Pause Scallop ops on this market until upstream is healthy; if the pause is long-running, escalate to the owner to use `user_extract_scallop_market_coin`.
+External aborts (from Scallop itself, not cdpm): `protocol::version` mismatch after a Scallop upgrade, or a `protocol::market` pause. When these hit, the cdpm hot-potato ticket is never consumed (the abort happens inside the inner Scallop move-call before `scallop_finish_*` runs), so the PM state is intact. Pause Scallop ops on this market until upstream is healthy; once Scallop ships an SDK update against the new Version, retry the normal `scallop_start_redeem` → `redeem::redeem` → `scallop_finish_redeem` flow. cdpm offers no in-protocol bypass — there is no wrapper-extract escape for either owner or agent.
 
 ---
 
@@ -288,13 +288,6 @@ interface ScallopRedeemed {
   interest: u64;
   fee_amount: u64;
 }
-
-interface ScallopMarketCoinExtracted {
-  pm_id: string;
-  coin_type: string;
-  market_coin_amount: u64;
-  principal_removed: u64;
-}
 ```
 
-`ScallopMarketCoinExtracted` should be a red flag for an agent — it means the owner pulled raw sCoin out manually, possibly because Scallop is impaired. Pause Scallop operations on this `T` until the owner signals recovery.
+cdpm emits no extraction event for Scallop lending — there is no wrapper-extract function. The only exit-related event on the Scallop side is `ScallopRedeemed`, emitted by `scallop_finish_redeem` once the underlying lands in `pm.balance`.

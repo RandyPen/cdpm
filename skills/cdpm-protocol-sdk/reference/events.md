@@ -108,15 +108,9 @@ interface ScallopRedeemed {
   interest: string;             // redeemed_amount − principal_portion (≥ 0)
   fee_amount: string;           // protocol yield fee deducted from interest
 }
-
-// Emitted by user_extract_scallop_market_coin (owner-only escape hatch)
-interface ScallopMarketCoinExtracted {
-  pm_id: string;
-  coin_type: string;
-  market_coin_amount: string;   // raw sCoin transferred to owner
-  principal_removed: string;    // principal slice subtracted from the vault
-}
 ```
+
+cdpm emits no extraction event for Scallop lending — there is no wrapper-extract function. The only exit-related event on the Scallop side is `ScallopRedeemed`, emitted once the underlying lands in `pm.balance` via the full `scallop_start_redeem` → `redeem::redeem` → `scallop_finish_redeem` flow.
 
 ## Kai SAV Lending Events
 
@@ -143,16 +137,9 @@ interface KaiRedeemed {
   interest: string;
   fee_amount: string;           // protocol yield fee — shares fee_house.fee_rate with Scallop
 }
-
-// Emitted by user_extract_kai_yt (owner-only escape hatch)
-interface KaiYTExtracted {
-  pm_id: string;
-  coin_type: string;
-  yt_type: string;
-  yt_amount: string;            // raw YT transferred to owner
-  principal_removed: string;    // principal slice subtracted from the KaiVault entry
-}
 ```
+
+cdpm emits no extraction event for Kai lending either — same rule as Scallop. The only exit-related event on the Kai side is `KaiRedeemed`, emitted once the underlying lands in `pm.balance` via the full `kai_start_redeem` → `vault::withdraw` → strategy walk → `redeem_withdraw_ticket` → `kai_finish_redeem` flow.
 
 ## Event Subscription
 

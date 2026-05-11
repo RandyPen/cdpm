@@ -58,7 +58,7 @@ public struct ScallopVault<phantom T> has store {
 - **Position**: Optional, exists when user has active liquidity
 - **Balance**: Generic token balances for deposit/withdrawal
 - **Fee**: Accumulated fees from agent/protocol operations
-- **Lending**: Scallop sCoin `MarketCoin<T>` wrapped per underlying type along with cumulative principal; populated by `scallop_start_supply` / `scallop_finish_supply`, drained by `scallop_start_redeem` / `scallop_finish_redeem` / `user_extract_scallop_market_coin`. The sCoin type is pinned by Move's type system, blocking fake-sCoin extraction attacks.
+- **Lending**: Scallop sCoin `MarketCoin<T>` (or Kai SAV YT) wrapped per underlying type along with cumulative principal; populated by `scallop_start_supply` / `scallop_finish_supply` (Kai: `kai_start_supply` / `kai_finish_supply`), drained **exclusively** by `scallop_start_redeem` / `scallop_finish_redeem` (Kai: `kai_start_redeem` / `kai_finish_redeem`). The wrapper type is pinned by Move's type system, blocking fake-wrapper attacks. There is **no escape hatch** for lending: the only way to exit a lending position is to redeem through the upstream protocol's normal path, which lands the underlying in `pm.balance`; the user then withdraws via `user_remove_liquidity_from_balance`.
 
 ### 2. FeeHouse
 Global protocol fee management structure.
@@ -424,8 +424,13 @@ forcing a full cdpm redeploy (cdpm is non-upgradeable). With hot-potato:
   in `protocol::mint` / `redeem` / `accrue_interest`.
 - Caller PTB calls Scallop's `accrue_interest`, `mint`, `redeem` directly
   with the live Version object. When Scallop bumps Version, only the caller
-  PTB aborts; cdpm itself stays untouched and `pm.lending` remains
-  recoverable via the owner-only escape hatch.
+  PTB aborts; cdpm itself stays untouched. `pm.lending` is still recoverable
+  by retrying once Scallop publishes a SDK update against the new Version —
+  the only exit path is the normal `scallop_start_redeem` /
+  `scallop_finish_redeem` flow, which deposits the underlying into
+  `pm.balance`. cdpm intentionally provides **no escape hatch** that hands
+  raw `Coin<MarketCoin<T>>` back to the user, because the wrapper has no
+  utility outside of redemption against Scallop's reserve.
 
 ### Public surface
 ```move
@@ -458,12 +463,6 @@ public fun scallop_finish_redeem<T>(
     underlying: Coin<T>,
     ctx: &mut TxContext,
 );
-
-public fun user_extract_scallop_market_coin<T>(
-    pm: &mut PositionManager,
-    market_coin_amount: u64,    // u64::MAX extracts all
-    ctx: &mut TxContext,
-): Coin<MarketCoin<T>>;
 ```
 
 `ScallopSupplyTicket<T>` and `ScallopRedeemTicket<T>` are hot potatoes (no `key` /
@@ -472,9 +471,10 @@ in the same PTB. Move's type system enforces this.
 
 ### Caller authorization
 `start_*` / `finish_*` accept all three managed-tier callers (owner / agent /
-(protocol & no agents)) via `assert_caller_authorized`.
-`user_extract_scallop_market_coin` is **owner-only** and takes no Scallop objects, so
-it remains usable even when Scallop is unreachable.
+(protocol & no agents)) via `assert_caller_authorized`. There is no
+owner-only bypass for the lending wrapper — exit is constrained to the
+redeem-into-`pm.balance` path on purpose (see "No escape hatch for lending"
+below).
 
 ### Computed-amount integrity
 The conversion amount in each ticket is computed by cdpm from Scallop's
@@ -597,13 +597,26 @@ for users is **agent selection**, not runtime escape:
   whose off-chain scheduler does NOT call `scallop_start_supply` for Scallop;
   Scallop integration is opt-in per-strategy.
 - **Bound per-PM Scallop exposure** via the off-chain scheduler.
-- **`user_extract_scallop_market_coin` is an incident-response button**, not
-  routine hygiene. Use it when off-chain signals (Scallop governance
-  vote, upgrade announcement, audit alert) indicate the trust assumption
-  is about to break, to pull `Coin<MarketCoin<T>>` out of cdpm before
-  Scallop finalizes a hostile upgrade. Sui upgrade timing is not
-  enforced on-chain by cdpm — the user must monitor Scallop's
-  upgrade-cap custody and respond off-chain.
+
+### No escape hatch for lending
+cdpm intentionally exposes **no** owner-only function that hands raw
+`Coin<MarketCoin<T>>` back to the user. The lending protocol is decoupled
+from cdpm at the call boundary — every mutating Scallop call lives in the
+caller's PTB — so cdpm itself has no broken state to escape from: a
+Scallop Version bump aborts only the caller PTB, not cdpm. The wrapper
+also has no off-protocol utility: a `Coin<MarketCoin<T>>` outside cdpm is
+only redeemable back through Scallop's `redeem`. Constraining exit to
+`scallop_start_redeem` → `scallop_finish_redeem` → `pm.balance` →
+`user_remove_liquidity_from_balance` removes a class of "principal-
+laundering" footguns (extracting wrappers without burning the cumulative
+principal counter that protocol-fee accounting depends on) at zero cost to
+the legitimate exit path.
+
+The Cetus DLMM `Position` is the only object cdpm cannot recover from
+upstream breakage in-band, because `Position` is held inside cdpm and its
+lifecycle is gated by Cetus's `Versioned`. That one case is handled by
+the owner-only `user_get_position` / `user_get_and_return_position`
+extraction (see "Position lifecycle" section).
 
 ### Events (no `by` field; tx metadata records the sender; no `scoin_type` — sCoin is always `MarketCoin<T>`)
 ```move
@@ -612,8 +625,6 @@ public struct ScallopSupplied   { pm_id, coin_type, deposit_amount,
 public struct ScallopRedeemed   { pm_id, coin_type, market_coin_redeemed,
                                   redeemed_amount, principal_portion, interest,
                                   fee_amount };
-public struct ScallopMarketCoinExtracted { pm_id, coin_type, market_coin_amount,
-                                    principal_removed };
 ```
 
 ## Kai SAV Lending Integration (D-10 / D-11)
@@ -630,8 +641,9 @@ to third-party integrators.
   (Bag entry value is `KaiVault<phantom T, phantom YT>`). Same T can hold a
   Scallop vault (key=T) and a Kai vault (key=YT) simultaneously.
 - API shape: `kai_start_supply` / `kai_finish_supply` /
-  `kai_start_redeem` / `kai_finish_redeem` + `user_extract_kai_yt`
-  (owner-only escape).
+  `kai_start_redeem` / `kai_finish_redeem`. No owner-only wrapper-extract
+  function: lending exit must go through `kai_finish_redeem` (which deposits
+  the underlying into `pm.balance`), then `user_remove_liquidity_from_balance`.
 - Fee model: identical to Scallop. `kai_finish_redeem` deducts
   `fee_rate × max(0, redeemed - principal_portion)` from the interest
   portion. `MAX_FEE_RATE = 3000` cap shared.
@@ -649,7 +661,10 @@ does **not** import:
 
 When Kai bumps its vault `MODULE_VERSION` (kai-sav-core/vault.move:27),
 caller PTB aborts at `vault::deposit/withdraw`; cdpm itself stays
-operational. `pm.lending` recoverable via `user_extract_kai_yt`.
+operational. `pm.lending` is recoverable by retrying the normal
+`kai_start_redeem` → `vault::withdraw` → `kai_finish_redeem` flow once
+Kunalabs ships an SDK update against the new Version; no in-cdpm bypass
+is offered or needed.
 
 ### Type-pin defense
 `Coin<YT>` cannot be forged externally:
@@ -719,9 +734,13 @@ the vault uses.
    loss, only gas waste.
 3. **Admin pause / TVL cap / rate limiter** (vault.move:484-548): caller
    PTB aborts at the live `vault::*` call. cdpm unaffected; `pm.lending`
-   intact.
-4. **Kai package re-deploy with new YT type identity**: extracting via
-   `user_extract_kai_yt` retrieves `Coin<YT_old>` for off-chain handling.
+   intact, awaiting unpause / cap raise / next rate-limit window.
+4. **Kai package re-deploy with new YT type identity**: `pm.lending`
+   continues to hold `Balance<YT_old>` indefinitely; recovery requires
+   Kunalabs to publish a migration path for the old YT (e.g., a swap
+   vault). cdpm does not attempt to second-guess that recovery — the
+   `Balance<YT_old>` is preserved untouched and the principal counter
+   stays accurate for any future redemption.
 
 ### Trust boundary
 
@@ -754,13 +773,17 @@ runtime escape:
   assumption never accrues.
 - **Bound per-PM Kai exposure** via the off-chain scheduler (e.g., cap
   `kai_start_supply` amount as a fraction of `pm.balance`).
-- **`user_extract_kai_yt` is an incident-response button, not a routine
-  hygiene step.** Use it when off-chain signals (Kai governance vote,
-  upgrade announcement, audit alert) indicate the trust assumption is
-  about to break, to pull `Coin<YT>` out of cdpm before Kunalabs
-  finalizes a hostile upgrade. Sui upgrade timing is not enforced
-  on-chain by cdpm — the user must monitor Kunalabs's upgrade-cap
-  custody and respond off-chain.
+
+cdpm does **not** expose a `user_extract_kai_yt`-style wrapper-extraction
+function. As with Scallop, lending exit is constrained to the normal
+redeem → `pm.balance` → `user_remove_liquidity_from_balance` flow: the
+caller's PTB is decoupled from cdpm at every mutating Kai call, so cdpm
+itself has no stuck state to escape; and a raw `Coin<YT>` outside cdpm is
+only useful for redemption back through the same `vault::withdraw` path,
+so handing it out would only delete the principal-counter accounting that
+protocol-fee math depends on. The mitigation for a hostile Kunalabs
+upgrade is opt-out at the scheduler tier (above), not an in-protocol
+escape hatch.
 
 ### Events (no `by`; sender in tx metadata)
 ```move
@@ -769,8 +792,6 @@ public struct KaiSupplied      { pm_id, coin_type, yt_type, deposit_amount,
 public struct KaiRedeemed      { pm_id, coin_type, yt_type, yt_burned,
                                  redeemed_amount, principal_portion, interest,
                                  fee_amount };
-public struct KaiYTExtracted   { pm_id, coin_type, yt_type, yt_amount,
-                                 principal_removed };
 ```
 
 ## Future Enhancements

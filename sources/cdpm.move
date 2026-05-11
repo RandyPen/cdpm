@@ -328,13 +328,6 @@ public struct ScallopRedeemed has copy, drop {
     fee_amount: u64,
 }
 
-public struct ScallopMarketCoinExtracted has copy, drop {
-    pm_id: ID,
-    coin_type: String,
-    market_coin_amount: u64,
-    principal_removed: u64,
-}
-
 public struct KaiSupplied has copy, drop {
     pm_id: ID,
     coin_type: String,
@@ -352,14 +345,6 @@ public struct KaiRedeemed has copy, drop {
     principal_portion: u64,
     interest: u64,
     fee_amount: u64,
-}
-
-public struct KaiYTExtracted has copy, drop {
-    pm_id: ID,
-    coin_type: String,
-    yt_type: String,
-    yt_amount: u64,
-    principal_removed: u64,
 }
 
 fun init(ctx: &mut TxContext) {
@@ -1539,25 +1524,6 @@ public fun scallop_finish_redeem<T>(
     });
 }
 
-public fun user_extract_scallop_market_coin<T>(
-    pm: &mut PositionManager,
-    market_coin_amount: u64,
-    ctx: &mut TxContext,
-): Coin<MarketCoin<T>> {
-    assert!(pm.owner == ctx.sender(), ENotOwner);
-    let (s_balance, principal_portion) = pull_from_scallop_lending<T>(pm, market_coin_amount);
-    let s_amount = balance::value<MarketCoin<T>>(&s_balance);
-
-    event::emit(ScallopMarketCoinExtracted {
-        pm_id: object::id(pm),
-        coin_type: type_name::with_defining_ids<T>().into_string(),
-        market_coin_amount: s_amount,
-        principal_removed: principal_portion,
-    });
-
-    s_balance.into_coin(ctx)
-}
-
 // ============ Kai SAV Lending — Hot-Potato + YT type-pin ============
 
 fun add_to_kai_lending<T, YT>(
@@ -1734,26 +1700,6 @@ public fun kai_finish_redeem<T, YT>(
         interest,
         fee_amount,
     });
-}
-
-public fun user_extract_kai_yt<T, YT>(
-    pm: &mut PositionManager,
-    yt_amount: u64,
-    ctx: &mut TxContext,
-): Coin<YT> {
-    assert!(pm.owner == ctx.sender(), ENotOwner);
-    let (yt_balance, principal_portion) = pull_from_kai_lending<T, YT>(pm, yt_amount);
-    let amount = balance::value<YT>(&yt_balance);
-
-    event::emit(KaiYTExtracted {
-        pm_id: object::id(pm),
-        coin_type: type_name::with_defining_ids<T>().into_string(),
-        yt_type: type_name::with_defining_ids<YT>().into_string(),
-        yt_amount: amount,
-        principal_removed: principal_portion,
-    });
-
-    yt_balance.into_coin(ctx)
 }
 
 // ============ Test-only accessors ============

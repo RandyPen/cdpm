@@ -5,7 +5,7 @@ cdpm exposes a second hot-potato lending integration alongside Scallop: **Kai SA
 This page is the agent-flavored counterpart to [`cdpm-user-sdk/reference/kai-lending.md`](../../cdpm-user-sdk/reference/kai-lending.md). It re-emphasizes:
 
 - **Yield fee applies to agents.** `kai_finish_redeem` computes `fee_amount = floor(max(0, redeemed − principal_portion) × fee_house.fee_rate / 10_000)` regardless of caller, so agent-driven Kai redeems pay the same fee as owner / protocol redeems.
-- **Owner-only escape.** `user_extract_kai_yt<T, YT>` aborts with `ENotOwner (1001)` for agents. If Kai is unreachable, only the owner can rescue raw `Coin<YT>`. Agents must escalate to the owner; they cannot self-rescue.
+- **No escape hatch for lending.** cdpm does **not** expose a `user_extract_kai_yt`-style wrapper-extraction function for anyone — neither agents nor the owner. If Kai is unreachable (Version bump, withdrawals disabled, etc.) the abort happens inside the inner `vault::withdraw` / `redeem_withdraw_ticket` call before any cdpm `*_finish_*` command runs, so the hot-potato ticket is never consumed and `pm.lending` stays intact. Recovery is to retry the normal `kai_start_redeem` → `vault::withdraw` → `kai_finish_redeem` flow once Kunalabs ships an SDK update against the new Version; cdpm itself stays operational throughout.
 - **Agents cannot short-change the vault.** `kai_finish_supply` requires `Coin<YT>` and asserts `actual >= ticket.expected_yt`. `YT`'s `TreasuryCap` is private to `kai_sav::vault::Vault<T, YT>`, so external code cannot mint a fake `Coin<YT>`. The same defence applies on redeem (`Coin<T>` only comes out of `vault::redeem_withdraw_ticket` after the strategy walk).
 - **No pre-call accrual.** Unlike Scallop, Kai's vault auto-accounts time-locked profit via `tlb::max_withdrawable` inside `total_available_balance`, so the PTB does **not** need to start with an accrual command. cdpm's `compute_expected_yt` / `compute_expected_underlying_kai` read the same auto-accruing function the live `vault::deposit` / `vault::withdraw` use.
 
@@ -229,7 +229,7 @@ The closed-form approximation is occasionally off-by-one due to per-step floors 
 
 | Operation | Reason |
 |-----------|--------|
-| `user_extract_kai_yt<T, YT>` | Owner-only — aborts with `ENotOwner (1001)` for agents. |
+| Pull raw `Coin<YT>` out of `pm.lending` | cdpm exposes **no** `user_extract_kai_yt`-style wrapper-extraction function for anyone (neither agent nor owner). The only exit path is the full redeem flow: `kai_start_redeem` → `vault::withdraw` → strategy walk → `redeem_withdraw_ticket` → `kai_finish_redeem` → `user_remove_liquidity_from_balance<T>`. |
 | Construct a fake `Vault<T, EvilYT>` | `kai_sav::vault::new` is `public(package)` — only Kai's modules can mint a `Vault`. |
 | Mint `Coin<YT>` outside the vault | `YT`'s `TreasuryCap` is owned by `Vault<T, YT>` — `kai_finish_supply` fails `EAmountShortfall (1009)` if the agent tries to substitute a forged or smaller `Coin<YT>`. |
 | Skip the strategy walk | `vault::redeem_withdraw_ticket` aborts internally if any strategy slot is unsettled. Forgetting a walker step makes the whole PTB abort before `kai_finish_redeem` runs (so the hot-potato ticket is never consumed and funds are safe). |
@@ -259,17 +259,9 @@ interface KaiRedeemed {
   interest: u64;
   fee_amount: u64;
 }
-
-interface KaiYTExtracted {
-  pm_id: string;
-  coin_type: string;
-  yt_type: string;
-  yt_amount: u64;
-  principal_removed: u64;
-}
 ```
 
-`KaiYTExtracted` should be a red flag for an agent — it means the owner pulled YT out manually, possibly because Kai is impaired. Pause Kai operations until the owner signals recovery.
+cdpm emits no extraction event for Kai lending — there is no wrapper-extract function. The only exit-related event on the Kai side is `KaiRedeemed`, emitted by `kai_finish_redeem` once the underlying lands in `pm.balance`.
 
 ---
 
@@ -277,7 +269,7 @@ interface KaiYTExtracted {
 
 | Code | Constant | Most likely cause for an agent |
 |------|----------|---------------------------------|
-| 1001 | `ENotOwner` | Agent attempted `user_extract_kai_yt`. Escalate to owner. |
+| 1001 | `ENotOwner` | Agent attempted an owner-only function (e.g. `user_get_position` / `user_get_and_return_position`). Escalate to owner. |
 | 1002 | `ENotAllow` | Agent address removed from `pm.agents` between scheduling and signing. Re-check `pm.agents` before retry. |
 | 1005 | `ENoSuchVault` | `kai_start_redeem` for a `(T, YT)` pair that has never been supplied (or was fully drained). Snapshot `pm.lending` before sizing. |
 | 1006 | `EReserveEmpty` | Kai vault `total_yt_supply == 0`. Bootstrap state — supply first. |

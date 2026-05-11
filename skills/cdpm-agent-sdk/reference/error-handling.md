@@ -5,11 +5,11 @@
 ```typescript
 // cdpm error codes (sources/cdpm.move, lines 28-36) — codes are SHARED between Scallop and Kai integrations.
 const CDPM_ERROR_CODES = {
-  ENotOwner:         1001, // Caller is not pm.owner (e.g. agent tried user_extract_scallop_market_coin / user_extract_kai_yt)
+  ENotOwner:         1001, // Caller is not pm.owner (e.g. agent tried user_get_position / user_get_and_return_position)
   ENotAllow:         1002, // assert_caller_authorized failed (or invariant broken)
   EInvalidFeeRate:   1003, // admin_set_fee given rate > MAX_FEE_RATE (30%)
   ELendingNotEmpty:  1004, // user_close_pm called with non-empty pm.lending (any Scallop or Kai entry)
-  ENoSuchVault:      1005, // scallop_start_redeem / kai_start_redeem / extract called for an absent vault entry
+  ENoSuchVault:      1005, // scallop_start_redeem / kai_start_redeem called for an absent vault entry
   EReserveEmpty:     1006, // Scallop reserve degenerate OR Kai vault total_yt_supply == 0
   EZeroExpected:     1007, // scallop_start_* / kai_start_* would yield 0 — amount too small
   EWrongPm:          1008, // Hot-potato ticket consumed against a different PM (Scallop or Kai)
@@ -20,11 +20,11 @@ async function handleAgentError(error: any): Promise<string> {
   const errorStr = error.toString();
 
   if (errorStr.includes('ENotOwner')) {
-    return 'Operation requires owner permission. Agents cannot call user_extract_scallop_market_coin or user_extract_kai_yt.';
+    return 'Operation requires owner permission. Agents cannot call user_get_position / user_get_and_return_position (the only owner-only escape hatch — the Cetus DLMM Position object). cdpm exposes no wrapper-extract escape for Scallop/Kai lending.';
   } else if (errorStr.includes('ENotAllow')) {
     return 'Agent not in pm.agents. Contact owner for authorization.';
   } else if (errorStr.includes('ELendingNotEmpty')) {
-    return 'pm.lending is non-empty; every ScallopVault<T> AND KaiVault<T, YT> entry must be redeemed or extracted before user_close_pm.';
+    return 'pm.lending is non-empty; every ScallopVault<T> AND KaiVault<T, YT> entry must be redeemed (full scallop_*/kai_* start→finish flow) before user_close_pm. There is no wrapper-extract bypass.';
   } else if (errorStr.includes('ENoSuchVault')) {
     return 'No ScallopVault<T> or KaiVault<T, YT> entry in pm.lending for the requested key. Check pm.lending entries before calling scallop_start_redeem / kai_start_redeem.';
   } else if (errorStr.includes('EReserveEmpty')) {

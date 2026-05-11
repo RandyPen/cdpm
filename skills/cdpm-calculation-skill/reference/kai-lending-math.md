@@ -600,7 +600,7 @@ Caveat: `withdrawTAmt` consumes only `tAmt`-worth of YT from the input `Balance<
 
 `getWalletVaultInfo(client, walletAddress, vaultData)` returns the YT balance + equity for a given address. **It is not directly useful for a `pm.balance[T]` decision** — the YT lives inside `pm.lending[type_name<YT>]`, not in the owner / agent / protocol wallet. To compute per-PM stats, use the bag-key path described in §1 + §8, then multiply `yt_in_pm × p` (where `p = total_available / yt_supply` from `getVaultStats`).
 
-If you do need wallet-level YT (e.g. after `user_extract_kai_yt<T, YT>` pulled YT into the owner wallet), `getWalletVaultInfo` is the right call.
+Wallet-level YT (`getWalletVaultInfo`) is only relevant for addresses that hold YT independently of cdpm — e.g. a user who supplied to Kai directly outside any PositionManager. cdpm itself exposes no wrapper-extract function, so no cdpm flow ever lands raw `Coin<YT>` in the owner / agent / protocol wallet.
 
 ### 10.7 Error / Staleness Notes
 

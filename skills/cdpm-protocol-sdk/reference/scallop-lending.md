@@ -251,7 +251,7 @@ async function validateProtocolScallopOperation(
 }
 ```
 
-**Owner-only escape stays owner-only.** `user_extract_scallop_market_coin<T>` aborts with `ENotOwner (1001)` for protocol bots. If Scallop is impaired, the protocol cannot rescue raw `Coin<MarketCoin<T>>` from `pm.lending`; only the PM owner can.
+**No wrapper-extract escape for lending.** cdpm exposes no `user_extract_scallop_market_coin`-style function for anyone — not for protocol bots, not for the owner. If Scallop is impaired, no caller can rescue raw `Coin<MarketCoin<T>>` from `pm.lending`. The only exit is the full redeem flow (`scallop_start_redeem` → `redeem::redeem` → `scallop_finish_redeem`); if Scallop's `redeem::redeem` aborts (Version bump, paused market, etc.), the cdpm hot-potato ticket is never consumed, `pm.lending` stays intact, and recovery is to retry the normal flow once Scallop ships an SDK update against the new Version.
 
 ---
 
@@ -294,16 +294,9 @@ interface ScallopRedeemed {
   interest: u64;              // redeemed_amount − principal_portion (≥ 0)
   fee_amount: u64;            // protocol yield fee deducted from interest
 }
-
-interface ScallopMarketCoinExtracted {
-  pm_id: string;
-  coin_type: string;
-  market_coin_amount: u64;
-  principal_removed: u64;
-}
 ```
 
-`ScallopMarketCoinExtracted` is owner-only — protocol bots never emit it.
+cdpm emits no extraction event for Scallop lending — there is no wrapper-extract function. `ScallopRedeemed` is the only exit-related Scallop event and is emitted by `scallop_finish_redeem` once the underlying lands in `pm.balance`.
 
 ---
 
@@ -312,11 +305,11 @@ interface ScallopMarketCoinExtracted {
 | Code | Constant | Most likely cause for a protocol bot |
 |------|----------|---------------------------------------|
 | 1002 | `ENotAllow` | Either: protocol address not in AccessList, or PM has at least one agent (protocol-tier locked out). Snapshot `pm.agents` and `access.allow` before each batch. |
-| 1004 | `ELendingNotEmpty` | Owner attempted `user_close_pm` while the protocol bot still has a Scallop entry in `pm.lending`. Coordinate with owner — drain or extract before close. |
+| 1004 | `ELendingNotEmpty` | Owner attempted `user_close_pm` while the protocol bot still has a Scallop entry in `pm.lending`. Coordinate with owner — drain via the full redeem flow before close (no wrapper-extract bypass exists). |
 | 1005 | `ENoSuchVault` | `scallop_start_redeem` for a `T` with no entry. Re-fetch `pm.lending` before sizing. |
 | 1006 | `EReserveEmpty` | Scallop reserve has zero supply or zero `(cash+debt-revenue)`. Run the accrual prefix and re-check; if still degenerate, skip this market. |
 | 1007 | `EZeroExpected` | Amount too small for the current reserve ratio. Increase amount; for low-utilization markets, batch multiple PMs into one supply. |
 | 1008 | `EWrongPm` | Hot-potato ticket consumed against a different PM. Bug in batch construction — assert `pmId` consistency across all four cdpm move-calls in the batch. |
 | 1009 | `EAmountShortfall` | Stale Scallop accrual or reserve state moved between snapshot and signing. Always run `accrue_interest_for_market` as command 1 of the batch; for large redeems, size with a small margin via `scoinToBurnForTargetNet`. |
 
-External aborts that bubble up from Scallop itself (cdpm does not produce these) — typically a `protocol::version` mismatch after Scallop pushes an upgrade, or a `protocol::market` pause. When any of these hit, the cdpm hot-potato ticket is never consumed (the abort happens inside the inner Scallop move-call before `scallop_finish_*` runs), so the PM state is intact. The protocol bot can reschedule once Scallop is upgraded / unpaused, or escalate to the owner to use the `user_extract_scallop_market_coin` escape hatch.
+External aborts that bubble up from Scallop itself (cdpm does not produce these) — typically a `protocol::version` mismatch after Scallop pushes an upgrade, or a `protocol::market` pause. When any of these hit, the cdpm hot-potato ticket is never consumed (the abort happens inside the inner Scallop move-call before `scallop_finish_*` runs), so the PM state is intact. The protocol bot reschedules once Scallop is upgraded / unpaused; cdpm offers no wrapper-extract bypass for either owner or protocol bot.

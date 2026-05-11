@@ -669,7 +669,7 @@ Redeem mirrors this — replace the `protocol::redeem::redeem` move-call with `t
 2. **Type-tag plumbing is implicit.** The SDK reads `MarketPool.coinType` / `MarketPool.marketCoinType` from the same bundle, so a coin-name change on the Scallop side doesn't require a cdpm code-side edit.
 3. **One package upgrade away.** When Scallop pushes a `mint` / `redeem` signature change, the SDK absorbs it; raw `tx.moveCall` recipes would silently break on the next upgrade.
 
-The wallet-rooted `*Quick` methods are still useful for the *escape path*: an owner who pulled raw sCoin out via `user_extract_scallop_market_coin<T>` can call `txBlock.withdrawQuick(amount, 'usdc')` directly against Scallop to convert sCoin to underlying, without re-entering cdpm.
+The wallet-rooted `*Quick` methods are useful for direct wallet-to-Scallop flows *outside* cdpm (e.g. a user redeeming sCoin they hold independently of any PositionManager). They have no role inside a cdpm hot-potato flow — cdpm exposes no wrapper-extract function, so no cdpm path ever lands raw sCoin in the owner / agent / protocol wallet.
 
 For now the operational PTB recipes in [`cdpm-user-sdk/reference/scallop-lending.md`](../../cdpm-user-sdk/reference/scallop-lending.md) (and the agent / protocol counterparts) still show the raw `tx.moveCall` shape for clarity. Both shapes are correct; pick whichever fits your call-site abstraction.
 

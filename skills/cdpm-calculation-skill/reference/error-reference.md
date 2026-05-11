@@ -16,11 +16,11 @@ These show up as Move abort codes from the `cdpm::cdpm` module when off-chain pr
 
 | Code | Constant | Cause | Off-chain mitigation |
 |------|----------|-------|----------------------|
-| 1001 | `ENotOwner` | Non-owner called an owner-only function (e.g. `user_extract_scallop_market_coin` or `user_extract_kai_yt`) | Check `pm.owner == sender` before signing |
+| 1001 | `ENotOwner` | Non-owner called an owner-only function (e.g. `user_get_position` / `user_get_and_return_position` — the only owner-only escape hatch, which extracts the Cetus DLMM `Position` object) | Check `pm.owner == sender` before signing |
 | 1002 | `ENotAllow` | `assert_caller_authorized` failed for any of `scallop_start_*` / `kai_start_*`, or a `protocol_*` invariant broken | Verify caller is in `pm.agents` or `AccessList.allow` (and `pm.agents` is empty for the protocol path) |
 | 1003 | `EInvalidFeeRate` | `admin_set_fee` rate `>` 30% | Cap `feeRateBp <= 3000` |
-| 1004 | `ELendingNotEmpty` | `user_close_pm` while `pm.lending` is non-empty (any Scallop or Kai entry) | Drain every `ScallopVault<T>` AND every `KaiVault<T, YT>` first |
-| 1005 | `ENoSuchVault` | `scallop_start_redeem` / `user_extract_scallop_market_coin` for an absent `T` entry, or `kai_start_redeem` / `user_extract_kai_yt` for an absent `(T, YT)` entry | Confirm the requested vault entry exists in `pm.lending` (Scallop key = `type_name<T>`, Kai key = `type_name<YT>`) |
+| 1004 | `ELendingNotEmpty` | `user_close_pm` while `pm.lending` is non-empty (any Scallop or Kai entry) | Drain every `ScallopVault<T>` AND every `KaiVault<T, YT>` via the full `*_start_redeem` → upstream `redeem`/`withdraw` → `*_finish_redeem` flow first (no wrapper-extract bypass exists) |
+| 1005 | `ENoSuchVault` | `scallop_start_redeem` for an absent `T` entry, or `kai_start_redeem` for an absent `(T, YT)` entry | Confirm the requested vault entry exists in `pm.lending` (Scallop key = `type_name<T>`, Kai key = `type_name<YT>`) |
 | 1006 | `EReserveEmpty` | Scallop reserve has zero supply or zero `(cash + debt - revenue)`, OR Kai vault `total_yt_supply == 0` | Scallop: run `accrue_interest_for_market` first; check the live balance sheet. Kai: bootstrap by supplying first or skip the vault. |
 | 1007 | `EZeroExpected` | `scallop_start_*` / `kai_start_*` predicted output is 0 (input too small) | Increase the `amount` |
 | 1008 | `EWrongPm` | `scallop_finish_*` / `kai_finish_*` ticket consumed against a different PM | Reuse the same `pm` object across `start_*` and `finish_*` |

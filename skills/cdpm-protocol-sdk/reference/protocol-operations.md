@@ -392,6 +392,6 @@ async function protocolSizedRedeem(
 
 `scoinToBurnForTargetNet` returns `MAX_U64` when the vault cannot satisfy `desiredNet`; passing that value to `scallop_start_redeem` drains the entire vault and removes its entry from `pm.lending`. Always re-snapshot reserve and vault *after* the `accrue_interest_for_market` command and before sizing — stale snapshots predict a higher `denom` than the live reserve and can leave the bot 1-2 underlying short.
 
-### Protocol Cannot Call `user_extract_scallop_market_coin`
+### No Wrapper-Extract Escape for Lending
 
-`user_extract_scallop_market_coin<T>` aborts with `ENotOwner (1001)` for anyone other than `pm.owner`. Protocol bots cannot use the escape hatch — they must always go through the full Scallop redeem path.
+cdpm exposes **no** `user_extract_scallop_market_coin`-style wrapper-extraction function for anyone — not for protocol bots, not for agents, not even for the owner. The only exit path from `pm.lending` is the full redeem flow: `scallop_start_redeem` → `redeem::redeem` (in the caller's PTB) → `scallop_finish_redeem` (which deducts the yield fee and deposits the underlying into `pm.balance[T]`) → `user_remove_liquidity_from_balance<T>` (owner-only). If Scallop is unreachable (Version bump, paused market), the inner `redeem::redeem` aborts before any cdpm `*_finish_*` runs, so the hot-potato ticket is never consumed and `pm.lending` stays intact; recovery is to retry the normal redeem flow once Scallop ships an SDK update against the new Version.

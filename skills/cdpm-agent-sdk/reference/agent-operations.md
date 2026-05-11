@@ -249,7 +249,7 @@ cdpm exposes a hot-potato lending API shared by owner / agent / whitelisted prot
 
 - **One vault per underlying T**: `pm.lending` keys on the underlying `T` only. The sCoin type is structurally pinned to `MarketCoin<T>` by the type system, so a fake-sCoin variant cannot be supplied — there is no longer a separate `S` generic to mismatch.
 - **Yield fee applies to agents**: `scallop_finish_redeem` computes `fee_amount = floor(max(0, redeemed − principal_portion) × fee_house.fee_rate / 10_000)` regardless of caller, so agent redeems pay the same yield fee as owner / protocol redeems.
-- **Owner-only**: `user_extract_scallop_market_coin<T>` aborts with `ENotOwner (1001)` for agents. If Scallop is unreachable, only the owner can rescue raw sCoin.
+- **No escape hatch for lending**: cdpm exposes no `user_extract_scallop_market_coin`-style wrapper-extraction function for anyone. If Scallop is unreachable, the inner `mint::mint` / `redeem::redeem` aborts before any cdpm `*_finish_*` command runs, so the hot-potato ticket is never consumed and `pm.lending` stays intact. Recovery is to retry the normal redeem flow once Scallop ships an SDK update against the new Version.
 - **Agents cannot short-change the vault**: `scallop_finish_supply` requires `Coin<MarketCoin<T>>` (the only way to obtain a non-zero `Coin<MarketCoin<T>>` is through Scallop's `mint`, since `MarketCoin` has only `drop` and no public constructor) and asserts `actual >= ticket.expected_scoin`. The same two-axis defense applies on redeem.
 
 ### PTB Recipe — Agent Supply

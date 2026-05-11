@@ -276,7 +276,7 @@ async function validateProtocolKaiOperation(
 }
 ```
 
-**Owner-only escape stays owner-only.** `user_extract_kai_yt<T, YT>` aborts with `ENotOwner (1001)` for protocol bots. If Kai is impaired, the protocol cannot rescue raw `Coin<YT>` from `pm.lending`; only the PM owner can.
+**No wrapper-extract escape for lending.** cdpm exposes no `user_extract_kai_yt`-style function for anyone — not for protocol bots, not for the owner. If Kai is impaired, no caller can rescue raw `Coin<YT>` from `pm.lending`. The only exit is the full redeem flow (`kai_start_redeem` → `vault::withdraw` → strategy walk → `redeem_withdraw_ticket` → `kai_finish_redeem`); if Kai's `vault::withdraw` aborts (Version bump, withdrawals disabled, etc.), the cdpm hot-potato ticket is never consumed, `pm.lending` stays intact, and recovery is to retry the normal flow once Kunalabs ships an SDK update against the new Version.
 
 ---
 
@@ -303,17 +303,9 @@ interface KaiRedeemed {
   interest: u64;
   fee_amount: u64;
 }
-
-interface KaiYTExtracted {
-  pm_id: string;
-  coin_type: string;
-  yt_type: string;
-  yt_amount: u64;
-  principal_removed: u64;
-}
 ```
 
-`KaiYTExtracted` is owner-only — protocol bots never emit it.
+cdpm emits no extraction event for Kai lending — there is no wrapper-extract function. `KaiRedeemed` is the only exit-related Kai event and is emitted by `kai_finish_redeem` once the underlying lands in `pm.balance`.
 
 ---
 
@@ -322,7 +314,7 @@ interface KaiYTExtracted {
 | Code | Constant | Most likely cause for a protocol bot |
 |------|----------|---------------------------------------|
 | 1002 | `ENotAllow` | Either: protocol address not in AccessList, or PM has at least one agent (protocol-tier locked out). Snapshot `pm.agents` and `access.allow` before each batch. |
-| 1004 | `ELendingNotEmpty` | Owner attempted `user_close_pm` while the protocol bot still has a Kai entry in `pm.lending`. Coordinate with owner — drain or extract before close. |
+| 1004 | `ELendingNotEmpty` | Owner attempted `user_close_pm` while the protocol bot still has a Kai entry in `pm.lending`. Coordinate with owner — drain via the full redeem flow before close (no wrapper-extract bypass exists). |
 | 1005 | `ENoSuchVault` | `kai_start_redeem` for a `(T, YT)` pair with no entry. Re-fetch `pm.lending` before sizing. |
 | 1006 | `EReserveEmpty` | `total_yt_supply == 0` on the live vault — degenerate. Bootstrap by supplying first or skip this vault. |
 | 1007 | `EZeroExpected` | Amount too small for the current vault ratio. Increase amount; for tiny TVL vaults, batch multiple PMs into one supply. |
@@ -331,8 +323,8 @@ interface KaiYTExtracted {
 
 External aborts that bubble up from Kai itself (cdpm does not produce these):
 
-- `vault::EWithdrawalsDisabled` — admin disabled withdrawals; protocol cannot drain. Owner can still `user_extract_kai_yt`.
+- `vault::EWithdrawalsDisabled` — admin disabled withdrawals; nobody can drain through cdpm. `pm.lending` stays intact (the hot-potato ticket is never consumed) and waits for Kunalabs to re-enable withdrawals.
 - `vault::ETvlCapExceeded` — admin set a `tvl_cap` that the supply would breach.
 - `vault::ERateLimit` — admin-configured rate limiter rejected the operation.
 
-When any of these hit, the cdpm hot-potato ticket is never consumed (the abort happens inside the inner Kai move-call before `kai_finish_*` runs), so the PM state is intact. The protocol bot can reschedule.
+When any of these hit, the cdpm hot-potato ticket is never consumed (the abort happens inside the inner Kai move-call before `kai_finish_*` runs), so the PM state is intact. The protocol bot can reschedule once Kai is healthy.

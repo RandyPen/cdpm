@@ -40,8 +40,7 @@ import { SuiGrpcClient } from '@mysten/sui/grpc';
 | Close Position | Only owner can close |
 | Authorize/Revoke Agents | Only owner can manage agents |
 | Modify PositionManager | Cannot change configuration |
-| `user_extract_scallop_market_coin<T>` | Owner-only escape hatch — agents cannot pull raw sCoin |
-| `user_extract_kai_yt<T, YT>` | Owner-only escape hatch — agents cannot pull raw `Coin<YT>` from a Kai vault entry |
+| `user_get_position` / `user_get_and_return_position` | Owner-only Cetus DLMM `Position` extraction — agents cannot pull the `Position` object |
 
 ### Permission Check
 
@@ -63,8 +62,8 @@ const isAuthorized = agents.includes(agentAddress);
 
 ### Core Operations
 - **[Agent Operations](reference/agent-operations.md)** - Add/remove liquidity, collect fees, transfer fees, plus the Scallop hot-potato `scallop_start_*` / `scallop_finish_*` recipe (Kai SAV recipes live in the dedicated page below)
-- **[Scallop Lending](reference/scallop-lending.md)** - Agent-driven `scallop_start_supply` / `scallop_start_redeem` with required `accrue_interest_for_market` prefix; yield fee shares `fee_house.fee_rate` with Kai; owner-only `user_extract_scallop_market_coin` escape
-- **[Kai SAV Lending](reference/kai-lending.md)** - Agent-driven `kai_start_supply` / `kai_start_redeem` with strategy walk; yield fee shares `fee_house.fee_rate` with Scallop; owner-only `user_extract_kai_yt` escape
+- **[Scallop Lending](reference/scallop-lending.md)** - Agent-driven `scallop_start_supply` / `scallop_start_redeem` with required `accrue_interest_for_market` prefix; yield fee shares `fee_house.fee_rate` with Kai; no wrapper-extract escape — exit only via the full redeem flow
+- **[Kai SAV Lending](reference/kai-lending.md)** - Agent-driven `kai_start_supply` / `kai_start_redeem` with strategy walk; yield fee shares `fee_house.fee_rate` with Scallop; no wrapper-extract escape — exit only via the full redeem flow
 - **[Automation Strategies](reference/automation-strategies.md)** - Auto-compounding, rebalancing, fee collection scheduler
 
 ### Monitoring & Best Practices

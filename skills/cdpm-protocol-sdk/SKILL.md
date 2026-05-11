@@ -155,7 +155,7 @@ async function validateProtocolOperation(
 ```typescript
 // Source: sources/cdpm.move, lines 28-36 — codes are SHARED between Scallop and Kai integrations.
 const ERROR_CODES = {
-  ENotOwner:        1001, // Caller is not pm.owner (user_extract_scallop_market_coin / user_extract_kai_yt)
+  ENotOwner:        1001, // Caller is not pm.owner (user_get_position / user_get_and_return_position — Cetus DLMM Position escape, the sole owner-only function)
   ENotAllow:        1002, // Caller not in agents / access list (or invariant broken)
   EInvalidFeeRate:  1003, // admin_set_fee given rate > MAX_FEE_RATE (3000 / 30%)
   ELendingNotEmpty: 1004, // user_close_pm called with non-empty lending Bag (any Scallop or Kai entry)
