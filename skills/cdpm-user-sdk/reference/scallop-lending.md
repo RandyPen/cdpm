@@ -1,6 +1,6 @@
 # Scallop Lending (Idle Funds)
 
-`PositionManager` exposes a hot-potato lending API that lets the **owner** (and authorized agents / whitelisted protocol bots) park unused balance into Scallop and earn yield while the position is idle.
+`PositionManager` exposes a hot-potato lending API that lets the **owner** (and authorized agents / whitelisted protocol bots) park unused balance into Scallop and earn yield while the position is idle. Scallop is **one of two yield destinations** — the other is Kai SAV, documented in [`kai-lending.md`](./kai-lending.md). Both share the same `pm.lending: Bag`, ticket-shape, and yield-fee math; the disambiguation lives in the function-name prefix (`scallop_*` vs `kai_*`) and the bag key (`type_name<T>` for Scallop, `type_name<YT>` for Kai).
 
 The on-chain shape:
 
@@ -14,7 +14,7 @@ public struct PositionManager has key {
     position: Option<Position>,
     balance: Bag,
     fee: Bag,
-    lending: Bag,                 // <— keyed by `type_name<T>`, value = ScallopVault<T>
+    lending: Bag,                 // shared with Kai; Scallop entries keyed by `type_name<T>`, value = ScallopVault<T>
 }
 
 public struct ScallopVault<phantom T> has store {
@@ -23,7 +23,7 @@ public struct ScallopVault<phantom T> has store {
 }
 ```
 
-There is **at most one vault per underlying type T**. The sCoin type is structurally pinned to `MarketCoin<T>` by the type system — there is no separate `S` generic, so a fake-sCoin variant simply cannot be passed in.
+There is **at most one Scallop vault per underlying type T** (Kai entries for the same `T` live under a different key, `type_name<YT>`, so they cannot collide). The sCoin type is structurally pinned to `MarketCoin<T>` by the type system — there is no separate `S` generic, so a fake-sCoin variant simply cannot be passed in.
 
 ---
 
@@ -33,30 +33,30 @@ The four entry points come in two pairs that must be glued together inside one P
 
 | Phase    | cdpm function | Returns / consumes                                          |
 |----------|------------------------|----------------------------------------------------|
-| Supply   | `start_supply<T>`      | `(Coin<T>, SupplyTicket<T>)`                       |
-| Supply   | `finish_supply<T>`     | consumes `SupplyTicket<T>` + `Coin<MarketCoin<T>>` |
-| Redeem   | `start_redeem<T>`      | `(Coin<MarketCoin<T>>, RedeemTicket<T>)`           |
-| Redeem   | `finish_redeem<T>`     | consumes `RedeemTicket<T>` + `Coin<T>`             |
+| Supply   | `scallop_start_supply<T>`      | `(Coin<T>, ScallopSupplyTicket<T>)`                       |
+| Supply   | `scallop_finish_supply<T>`     | consumes `ScallopSupplyTicket<T>` + `Coin<MarketCoin<T>>` |
+| Redeem   | `scallop_start_redeem<T>`      | `(Coin<MarketCoin<T>>, ScallopRedeemTicket<T>)`           |
+| Redeem   | `scallop_finish_redeem<T>`     | consumes `ScallopRedeemTicket<T>` + `Coin<T>`             |
 
-`SupplyTicket<T>` and `RedeemTicket<T>` have **no `drop` ability**. The only way to discharge them is by calling the matching `finish_*`. If you forget, the PTB aborts.
+`ScallopSupplyTicket<T>` and `ScallopRedeemTicket<T>` have **no `drop` ability**. The only way to discharge them is by calling the matching `finish_*`. If you forget, the PTB aborts.
 
-Authorization for `start_supply` / `start_redeem` is checked by `assert_caller_authorized`: caller must be **owner**, **an authorized agent**, or **a whitelisted protocol bot AND the PM has no agents**.
+Authorization for `scallop_start_supply` / `scallop_start_redeem` is checked by `assert_caller_authorized`: caller must be **owner**, **an authorized agent**, or **a whitelisted protocol bot AND the PM has no agents**.
 
-`finish_supply` / `finish_redeem` only verify that `ticket.pm_id == object::id(pm)`; the auth check happens on the start side.
+`scallop_finish_supply` / `scallop_finish_redeem` only verify that `ticket.pm_id == object::id(pm)`; the auth check happens on the start side.
 
 ---
 
 ## PTB Recipe: Supply
 
-The first command of any supply PTB **MUST** be `protocol::accrue_interest::accrue_interest_for_market`. cdpm reads `balance_sheet` view-only — it does not bump Scallop's accrual itself, and a stale `balance_sheet` would make `compute_expected_scoin` predict a higher mint than Scallop actually delivers, tripping `EAmountShortfall (1009)` inside `finish_supply`.
+The first command of any supply PTB **MUST** be `protocol::accrue_interest::accrue_interest_for_market`. cdpm reads `balance_sheet` view-only — it does not bump Scallop's accrual itself, and a stale `balance_sheet` would make `compute_expected_scoin` predict a higher mint than Scallop actually delivers, tripping `EAmountShortfall (1009)` inside `scallop_finish_supply`.
 
 Required PTB order:
 
 ```
 1. protocol::accrue_interest::accrue_interest_for_market(version, market, clock)
-2. cdpm::start_supply<T>(access, pm, market, amount)              → (coin_t, ticket)
+2. cdpm::scallop_start_supply<T>(access, pm, market, amount)              → (coin_t, ticket)
 3. protocol::mint::mint<T>(version, market, coin_t, clock)        → coin_market<T>
-4. cdpm::finish_supply<T>(pm, ticket, coin_market)
+4. cdpm::scallop_finish_supply<T>(pm, ticket, coin_market)
 ```
 
 ```typescript
@@ -81,9 +81,9 @@ async function userSupplyToScallop(
     ],
   });
 
-  // 2. Withdraw underlying from pm.balance and emit a SupplyTicket.
+  // 2. Withdraw underlying from pm.balance and emit a ScallopSupplyTicket.
   const [coinT, ticket] = tx.moveCall({
-    target: `${CDPM_PACKAGE}::cdpm::start_supply`,
+    target: `${CDPM_PACKAGE}::cdpm::scallop_start_supply`,
     typeArguments: [underlyingCoinType],
     arguments: [
       tx.object(CDPM_MAINNET.ACCESS_LIST_ID),
@@ -105,9 +105,9 @@ async function userSupplyToScallop(
     ],
   });
 
-  // 4. Burn the SupplyTicket by depositing the sCoin into pm.lending.
+  // 4. Burn the ScallopSupplyTicket by depositing the sCoin into pm.lending.
   tx.moveCall({
-    target: `${CDPM_PACKAGE}::cdpm::finish_supply`,
+    target: `${CDPM_PACKAGE}::cdpm::scallop_finish_supply`,
     typeArguments: [underlyingCoinType],
     arguments: [tx.object(pmId), ticket, coinMarket],
   });
@@ -118,15 +118,15 @@ async function userSupplyToScallop(
 
 Important properties:
 
-- `start_supply` decreases `pm.balance[T]` by `amount` and stores `principal` for later yield accounting.
-- `finish_supply` requires `coinMarket.value() >= ticket.expected_scoin`; otherwise it aborts with `EAmountShortfall (1009)`. Combined with the `Coin<MarketCoin<T>>` type pin (the only way to obtain a non-zero `Coin<MarketCoin<T>>` is through Scallop's `mint`, since `MarketCoin` has only `drop` and no public constructor), an agent cannot short-change the vault with a fake sCoin or a smaller real one.
+- `scallop_start_supply` decreases `pm.balance[T]` by `amount` and stores `principal` for later yield accounting.
+- `scallop_finish_supply` requires `coinMarket.value() >= ticket.expected_scoin`; otherwise it aborts with `EAmountShortfall (1009)`. Combined with the `Coin<MarketCoin<T>>` type pin (the only way to obtain a non-zero `Coin<MarketCoin<T>>` is through Scallop's `mint`, since `MarketCoin` has only `drop` and no public constructor), an agent cannot short-change the vault with a fake sCoin or a smaller real one.
 - The first supply for a given `T` creates a fresh `ScallopVault<T>`; subsequent supplies of the same `T` add to it.
 
 ---
 
 ## PTB Recipe: Redeem (with yield-fee deduction)
 
-Same accrual rule applies. Redeem deducts the protocol yield fee from the **interest portion only**, never from principal. The fee math lives entirely in `finish_redeem`:
+Same accrual rule applies. Redeem deducts the protocol yield fee from the **interest portion only**, never from principal. The fee math lives entirely in `scallop_finish_redeem`:
 
 ```
 interest         = max(0, redeemed_amount − principal_portion)
@@ -134,15 +134,15 @@ fee_amount       = floor(interest × fee_house.fee_rate / 10_000)
 to_pm_balance    = redeemed_amount − fee_amount
 ```
 
-`principal_portion` is the slice of stored principal proportional to the burned scoin: `principal_portion = floor(P_total × scoin_burned / S_total)` (see `pull_from_lending`).
+`principal_portion` is the slice of stored principal proportional to the burned scoin: `principal_portion = floor(P_total × scoin_burned / S_total)` (see `pull_from_scallop_lending`).
 
 Required PTB order:
 
 ```
 1. protocol::accrue_interest::accrue_interest_for_market(version, market, clock)
-2. cdpm::start_redeem<T>(access, pm, market, scoin_amount)            → (coin_market, ticket)
+2. cdpm::scallop_start_redeem<T>(access, pm, market, scoin_amount)            → (coin_market, ticket)
 3. protocol::redeem::redeem<T>(version, market, coin_market, clock)   → coin_t
-4. cdpm::finish_redeem<T>(pm, fee_house, ticket, coin_t)
+4. cdpm::scallop_finish_redeem<T>(pm, fee_house, ticket, coin_t)
 ```
 
 ```typescript
@@ -165,7 +165,7 @@ async function userRedeemFromScallop(
   });
 
   const [coinMarket, ticket] = tx.moveCall({
-    target: `${CDPM_PACKAGE}::cdpm::start_redeem`,
+    target: `${CDPM_PACKAGE}::cdpm::scallop_start_redeem`,
     typeArguments: [underlyingCoinType],
     arguments: [
       tx.object(CDPM_MAINNET.ACCESS_LIST_ID),
@@ -187,7 +187,7 @@ async function userRedeemFromScallop(
   });
 
   tx.moveCall({
-    target: `${CDPM_PACKAGE}::cdpm::finish_redeem`,
+    target: `${CDPM_PACKAGE}::cdpm::scallop_finish_redeem`,
     typeArguments: [underlyingCoinType],
     arguments: [
       tx.object(pmId),
@@ -205,7 +205,7 @@ The post-fee underlying lands back in `pm.balance[T]`; you can withdraw it later
 
 ### Sizing Redemptions
 
-`start_redeem` takes a `market_coin_amount` (sCoin), but most callers think in terms of *underlying they need*. Two inverses cover the realistic cases:
+`scallop_start_redeem` takes a `market_coin_amount` (sCoin), but most callers think in terms of *underlying they need*. Two inverses cover the realistic cases:
 
 - **Pre-fee target.** I want at least `K` underlying out of Scallop, fee aside. `scoin_to_burn = ceil(K × supply / denom)` where `denom = cash + debt − revenue`.
 - **Post-fee target.** I want at least `K` net underlying credited to `pm.balance[T]` after the yield fee. The closed form is `N ≈ ceil(K / (p × (1 − r) + r × π))` when there is interest (the typical case `p > π`), where `p = denom / supply`, `π = principal / scoinTotal`, `r = fee_rate / 10000`.
@@ -233,9 +233,9 @@ const nPostFee = scoinToBurnForTargetNet(
   2_000n,                   // 2000 bp = 20%
 );
 
-// Feed it straight into start_redeem.
+// Feed it straight into scallop_start_redeem.
 tx.moveCall({
-  target: `${CDPM_PACKAGE}::cdpm::start_redeem`,
+  target: `${CDPM_PACKAGE}::cdpm::scallop_start_redeem`,
   typeArguments: [underlyingCoinType],
   arguments: [
     tx.object(CDPM_MAINNET.ACCESS_LIST_ID),
@@ -246,7 +246,7 @@ tx.moveCall({
 });
 ```
 
-If the helper returns `MAX_U64` it means the vault cannot satisfy your target; passing `MAX_U64` to `start_redeem` drains the entire vault and returns whatever Scallop pays out.
+If the helper returns `MAX_U64` it means the vault cannot satisfy your target; passing `MAX_U64` to `scallop_start_redeem` drains the entire vault and returns whatever Scallop pays out.
 
 ---
 
@@ -255,7 +255,7 @@ If the helper returns `MAX_U64` it means the vault cannot satisfy your target; p
 If Scallop ever becomes unreachable (paused, package upgrade frozen, etc.), the **owner** can still pull the raw `Coin<MarketCoin<T>>` out of the vault without touching any Scallop object:
 
 ```move
-public fun user_extract_market_coin<T>(
+public fun user_extract_scallop_market_coin<T>(
     pm: &mut PositionManager,
     market_coin_amount: u64,
     ctx: &mut TxContext,
@@ -273,7 +273,7 @@ async function userExtractMarketCoin(
   const tx = new Transaction();
 
   const [coinMarket] = tx.moveCall({
-    target: `${CDPM_PACKAGE}::cdpm::user_extract_market_coin`,
+    target: `${CDPM_PACKAGE}::cdpm::user_extract_scallop_market_coin`,
     typeArguments: [underlyingCoinType],
     arguments: [tx.object(pmId), tx.pure.u64(scoinAmount)],
   });
@@ -291,12 +291,12 @@ async function userExtractMarketCoin(
 
 ## Closing a PositionManager With Active Vaults
 
-`user_close_pm` now asserts `bag::is_empty(&pm.lending)` (`ELendingNotEmpty = 1004`). Before calling it you must, for every `T` vault, either:
+`user_close_pm` now asserts `bag::is_empty(&pm.lending)` (`ELendingNotEmpty = 1004`). The same assertion covers both Scallop and Kai entries — drain every entry of either flavor before close. For every Scallop `T` vault, either:
 
-1. `finish_redeem` the entire `scoin` balance back into underlying; or
-2. `user_extract_market_coin` to pull the sCoin out to your wallet.
+1. `scallop_finish_redeem` the entire `scoin` balance back into underlying; or
+2. `user_extract_scallop_market_coin` to pull the sCoin out to your wallet.
 
-Either path leaves `pm.lending` empty, after which `user_close_pm` succeeds.
+For every Kai `(T, YT)` entry, run the matching `kai_finish_redeem` or `user_extract_kai_yt` — see [`kai-lending.md`](./kai-lending.md). After every entry is drained `user_close_pm` succeeds.
 
 ---
 
@@ -320,7 +320,7 @@ interface ScallopRedeemed {
   fee_amount: u64;            // protocol fee taken from interest
 }
 
-interface MarketCoinExtracted {
+interface ScallopMarketCoinExtracted {
   pm_id: string;
   coin_type: string;
   market_coin_amount: u64;
@@ -336,11 +336,11 @@ interface MarketCoinExtracted {
 
 | Code | Constant | When |
 |------|----------|------|
-| 1001 | `ENotOwner` | `user_extract_market_coin` called by non-owner |
-| 1002 | `ENotAllow` | `start_supply` / `start_redeem` failed `assert_caller_authorized` |
-| 1004 | `ELendingNotEmpty` | `user_close_pm` while `pm.lending` is non-empty |
-| 1005 | `ENoSuchVault` | `start_redeem` / `user_extract_market_coin` for an absent (T) entry |
+| 1001 | `ENotOwner` | `user_extract_scallop_market_coin` called by non-owner |
+| 1002 | `ENotAllow` | `scallop_start_supply` / `scallop_start_redeem` failed `assert_caller_authorized` |
+| 1004 | `ELendingNotEmpty` | `user_close_pm` while `pm.lending` is non-empty (any Scallop or Kai entry) |
+| 1005 | `ENoSuchVault` | `scallop_start_redeem` / `user_extract_scallop_market_coin` for an absent Scallop (T) entry (the Kai counterparts share this code for absent `(T, YT)` entries — see `kai-lending.md`) |
 | 1006 | `EReserveEmpty` | Scallop reserve has zero supply or zero `(cash+debt−revenue)` |
-| 1007 | `EZeroExpected` | `start_supply` / `start_redeem` would yield 0 — amount too small |
+| 1007 | `EZeroExpected` | `scallop_start_supply` / `scallop_start_redeem` would yield 0 — amount too small |
 | 1008 | `EWrongPm` | `finish_*` ticket consumed against a different PositionManager |
 | 1009 | `EAmountShortfall` | `finish_*` Coin value `<` ticket.expected (stale accrual or Scallop slippage) |

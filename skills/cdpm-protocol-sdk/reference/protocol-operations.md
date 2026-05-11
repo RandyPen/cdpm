@@ -203,21 +203,21 @@ async function protocolCollectFeesAuto(
 
 ## Scallop Lending (Supply / Redeem)
 
-The Scallop hot-potato API is open to whitelisted protocol bots, but only when `pm.agents` is empty (the protocol-tier invariant). `assert_caller_authorized` inside `start_supply` / `start_redeem` lets the bot through under the union `is_owner || is_agent || (is_in_access_list && pm.agents.is_empty())`.
+The Scallop hot-potato API is open to whitelisted protocol bots, but only when `pm.agents` is empty (the protocol-tier invariant). `assert_caller_authorized` inside `scallop_start_supply` / `scallop_start_redeem` lets the bot through under the union `is_owner || is_agent || (is_in_access_list && pm.agents.is_empty())`.
 
-`finish_supply` / `finish_redeem` only verify `ticket.pm_id == object::id(pm)` — the auth check is done up front.
+`scallop_finish_supply` / `scallop_finish_redeem` only verify `ticket.pm_id == object::id(pm)` — the auth check is done up front.
 
 ### Pre-flight: Accrue Interest First
 
-cdpm reads Scallop's `balance_sheet` view-only inside `compute_expected_scoin` / `compute_expected_underlying`. If the reserve hasn't been accrued in this block, the prediction will exceed what `mint::mint` / `redeem::redeem` actually return, and `finish_*` aborts cleanly with `EAmountShortfall (1009)`. The fix is the same for every caller: run `accrue_interest_for_market` as the **first** PTB command.
+cdpm reads Scallop's `balance_sheet` view-only inside `compute_expected_scoin` / `compute_expected_underlying_scallop`. If the reserve hasn't been accrued in this block, the prediction will exceed what `mint::mint` / `redeem::redeem` actually return, and `finish_*` aborts cleanly with `EAmountShortfall (1009)`. The fix is the same for every caller: run `accrue_interest_for_market` as the **first** PTB command.
 
 ### PTB Recipe — Protocol Supply
 
 ```
 1. protocol::accrue_interest::accrue_interest_for_market(version, market, clock)
-2. cdpm::start_supply<T>(access, pm, market, amount)              → (coin_t, ticket)
+2. cdpm::scallop_start_supply<T>(access, pm, market, amount)              → (coin_t, ticket)
 3. protocol::mint::mint<T>(version, market, coin_t, clock)        → coin_market<T>
-4. cdpm::finish_supply<T>(pm, ticket, coin_market)
+4. cdpm::scallop_finish_supply<T>(pm, ticket, coin_market)
 ```
 
 ```typescript
@@ -241,7 +241,7 @@ async function protocolSupplyToScallop(
   });
 
   const [coinT, ticket] = tx.moveCall({
-    target: `${CDPM_PACKAGE}::cdpm::start_supply`,
+    target: `${CDPM_PACKAGE}::cdpm::scallop_start_supply`,
     typeArguments: [underlyingCoinType],
     arguments: [
       tx.object(accessListId),
@@ -263,7 +263,7 @@ async function protocolSupplyToScallop(
   });
 
   tx.moveCall({
-    target: `${CDPM_PACKAGE}::cdpm::finish_supply`,
+    target: `${CDPM_PACKAGE}::cdpm::scallop_finish_supply`,
     typeArguments: [underlyingCoinType],
     arguments: [tx.object(pmId), ticket, coinMarket],
   });
@@ -274,13 +274,13 @@ async function protocolSupplyToScallop(
 
 ### PTB Recipe — Protocol Redeem (Yield Fee Applies)
 
-`finish_redeem` deducts `floor(max(0, redeemed − principal_portion) × fee_house.fee_rate / 10_000)` from the interest portion before adding the rest to `pm.balance[T]`. Protocol callers pay the same yield fee as owner / agent.
+`scallop_finish_redeem` deducts `floor(max(0, redeemed − principal_portion) × fee_house.fee_rate / 10_000)` from the interest portion before adding the rest to `pm.balance[T]`. Protocol callers pay the same yield fee as owner / agent.
 
 ```
 1. protocol::accrue_interest::accrue_interest_for_market(version, market, clock)
-2. cdpm::start_redeem<T>(access, pm, market, scoin_amount)            → (coin_market, ticket)
+2. cdpm::scallop_start_redeem<T>(access, pm, market, scoin_amount)            → (coin_market, ticket)
 3. protocol::redeem::redeem<T>(version, market, coin_market, clock)   → coin_t
-4. cdpm::finish_redeem<T>(pm, fee_house, ticket, coin_t)
+4. cdpm::scallop_finish_redeem<T>(pm, fee_house, ticket, coin_t)
 ```
 
 ```typescript
@@ -305,7 +305,7 @@ async function protocolRedeemFromScallop(
   });
 
   const [coinMarket, ticket] = tx.moveCall({
-    target: `${CDPM_PACKAGE}::cdpm::start_redeem`,
+    target: `${CDPM_PACKAGE}::cdpm::scallop_start_redeem`,
     typeArguments: [underlyingCoinType],
     arguments: [
       tx.object(accessListId),
@@ -327,7 +327,7 @@ async function protocolRedeemFromScallop(
   });
 
   tx.moveCall({
-    target: `${CDPM_PACKAGE}::cdpm::finish_redeem`,
+    target: `${CDPM_PACKAGE}::cdpm::scallop_finish_redeem`,
     typeArguments: [underlyingCoinType],
     arguments: [
       tx.object(pmId),
@@ -341,9 +341,9 @@ async function protocolRedeemFromScallop(
 }
 ```
 
-### Sizing Redemptions Before Calling `start_redeem`
+### Sizing Redemptions Before Calling `scallop_start_redeem`
 
-Protocol bots, like agents, usually know "I need `K` underlying for the next operation" and must compute `market_coin_amount` from that. `start_redeem` takes sCoin, not underlying, so the bot has to invert `compute_expected_underlying` (and the yield-fee deduction) before signing.
+Protocol bots, like agents, usually know "I need `K` underlying for the next operation" and must compute `market_coin_amount` from that. `scallop_start_redeem` takes sCoin, not underlying, so the bot has to invert `compute_expected_underlying_scallop` (and the yield-fee deduction) before signing.
 
 Two practical inverses:
 
@@ -390,8 +390,8 @@ async function protocolSizedRedeem(
 }
 ```
 
-`scoinToBurnForTargetNet` returns `MAX_U64` when the vault cannot satisfy `desiredNet`; passing that value to `start_redeem` drains the entire vault and removes its entry from `pm.lending`. Always re-snapshot reserve and vault *after* the `accrue_interest_for_market` command and before sizing — stale snapshots predict a higher `denom` than the live reserve and can leave the bot 1-2 underlying short.
+`scoinToBurnForTargetNet` returns `MAX_U64` when the vault cannot satisfy `desiredNet`; passing that value to `scallop_start_redeem` drains the entire vault and removes its entry from `pm.lending`. Always re-snapshot reserve and vault *after* the `accrue_interest_for_market` command and before sizing — stale snapshots predict a higher `denom` than the live reserve and can leave the bot 1-2 underlying short.
 
-### Protocol Cannot Call `user_extract_market_coin`
+### Protocol Cannot Call `user_extract_scallop_market_coin`
 
-`user_extract_market_coin<T>` aborts with `ENotOwner (1001)` for anyone other than `pm.owner`. Protocol bots cannot use the escape hatch — they must always go through the full Scallop redeem path.
+`user_extract_scallop_market_coin<T>` aborts with `ENotOwner (1001)` for anyone other than `pm.owner`. Protocol bots cannot use the escape hatch — they must always go through the full Scallop redeem path.

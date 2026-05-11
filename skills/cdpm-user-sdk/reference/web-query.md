@@ -62,9 +62,11 @@ interface PositionManagerInfo {
   agents: string[];
   balance: Record<string, string>;
   fee: Record<string, string>;
-  // Scallop vaults keyed by underlying `type_name<T>`.
-  // Each value is a ScallopVault<T> { scoin: Balance<MarketCoin<T>>, principal: u64 }.
-  lending: Record<string, { scoin: string; principal: string }>;
+  // Lending bag entries — Scallop and Kai coexist on the same PM.
+  //   Scallop: key = type_name<T>,  value = ScallopVault<T> { scoin: Balance<MarketCoin<T>>, principal: u64 }
+  //   Kai SAV: key = type_name<YT>, value = KaiVault<T, YT>  { yt_balance: Balance<YT>,      principal: u64 }
+  // GraphQL serialises each bag value as raw JSON — discriminate on the presence of `scoin` vs `yt_balance`.
+  lending: Record<string, { scoin?: string; yt_balance?: string; principal: string }>;
 }
 ```
 

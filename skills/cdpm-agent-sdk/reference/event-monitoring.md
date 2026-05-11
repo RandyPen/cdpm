@@ -46,7 +46,7 @@ interface AgentRewardCollected {
   by: string;
 }
 
-// Scallop supply (emitted by finish_supply, regardless of caller).
+// Scallop supply (emitted by scallop_finish_supply, regardless of caller).
 // Note: there is NO `by` field — use `event.sender` from the event envelope
 // to distinguish owner / agent / protocol callers.
 interface ScallopSupplied {
@@ -56,7 +56,7 @@ interface ScallopSupplied {
   market_coin_minted: string;   // sCoin received and added to pm.lending
 }
 
-// Scallop redeem (emitted by finish_redeem, regardless of caller).
+// Scallop redeem (emitted by scallop_finish_redeem, regardless of caller).
 interface ScallopRedeemed {
   pm_id: string;
   coin_type: string;
@@ -66,9 +66,30 @@ interface ScallopRedeemed {
   interest: string;             // redeemed_amount − principal_portion (≥ 0)
   fee_amount: string;           // protocol yield fee deducted from interest
 }
+
+// Kai supply / redeem — same shape, with extra `yt_type` for the YT generic.
+// Emitted by kai_finish_supply / kai_finish_redeem regardless of caller.
+interface KaiSupplied {
+  pm_id: string;
+  coin_type: string;            // type_name<T>
+  yt_type: string;              // type_name<YT>
+  deposit_amount: string;
+  yt_minted: string;
+}
+
+interface KaiRedeemed {
+  pm_id: string;
+  coin_type: string;
+  yt_type: string;
+  yt_burned: string;
+  redeemed_amount: string;      // underlying received pre-fee (after the strategy walk)
+  principal_portion: string;
+  interest: string;
+  fee_amount: string;           // protocol yield fee — same fee_house.fee_rate as Scallop
+}
 ```
 
-> Sui event envelopes carry `event.sender`; the cdpm payload no longer includes a `by` field for the Scallop events to keep payload size constant across callers.
+> Sui event envelopes carry `event.sender`; the cdpm payload no longer includes a `by` field for either the Scallop or the Kai events to keep payload size constant across callers.
 
 ## Event Subscription
 
@@ -87,8 +108,12 @@ class AgentEventMonitor {
         },
       },
       onMessage: (event) => {
-        // Filter events by agent address
-        if (event.parsedJson?.by === agentAddress) {
+        // Filter events by agent address.
+        // Cetus liquidity / fee / reward events carry `by`; Scallop and Kai
+        // lending events do NOT (the cdpm payload omits it). Fall back to the
+        // envelope's `event.sender` for those.
+        const actor = event.parsedJson?.by ?? event.sender;
+        if (actor === agentAddress) {
           onEvent(event);
         }
       },

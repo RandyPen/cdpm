@@ -2,8 +2,8 @@
 
 [move]
 version = 3
-manifest_digest = "359AB337B719865D08C4D733E9E055B1726E4C7694E9137F372E71CCC03143D1"
-deps_digest = "04732BFEF428F74DE262001DC455D76B909EBC394B034A9A15CC095E4BDD9CEF"
+manifest_digest = "3650B4A2EB8B9593114C04DAD0514CF0CEF38F3EAA43F6B1EF9E304907AA0F80"
+deps_digest = "8D8E72BAA06E63572166CA7E7F6E159CA2D11E27ADE3961B15E29922A04B0D32"
 dependencies = [
   { id = "DeepBook", name = "DeepBook" },
   { id = "MoveStdlib", name = "MoveStdlib" },
@@ -14,21 +14,11 @@ dependencies = [
   { id = "cdpm", name = "cdpm" },
 ]
 dev-dependencies = [
-  { id = "CetusDlmm", name = "CetusDlmm" },
-]
-
-[[move.package]]
-id = "CetusDlmm"
-source = { local = "/tmp/cetus-dlmm-patched/packages/dlmm" }
-
-dependencies = [
-  { id = "DeepBook", name = "DeepBook" },
   { id = "IntegerMate", name = "IntegerMate" },
   { id = "MoveSTL", name = "MoveSTL" },
-  { id = "MoveStdlib", name = "MoveStdlib" },
-  { id = "Sui", name = "Sui" },
-  { id = "SuiProver", name = "SuiProver" },
-  { id = "SuiSystem", name = "SuiSystem" },
+  { id = "ScallopProtocol", name = "ScallopProtocol" },
+  { id = "X", name = "X" },
+  { id = "cetusdlmm", name = "CetusDlmm" },
 ]
 
 [[move.package]]
@@ -186,15 +176,457 @@ dependencies = [
 ]
 
 [[move.package]]
+id = "access_management"
+source = { local = "../../kai-contracts/access-management" }
+
+dependencies = [
+  { id = "DeepBook", name = "DeepBook" },
+  { id = "MoveStdlib", name = "MoveStdlib" },
+  { id = "Sui", name = "Sui" },
+  { id = "SuiProver", name = "SuiProver" },
+  { id = "SuiSystem", name = "SuiSystem" },
+]
+
+[[move.package]]
+id = "bluefin_spot"
+source = { local = "../../kai-contracts/_vendor/Bluefin/spot-v17" }
+
+dependencies = [
+  { id = "DeepBook", name = "DeepBook" },
+  { id = "MoveStdlib", name = "MoveStdlib" },
+  { id = "Sui", name = "Sui" },
+  { id = "SuiProver", name = "SuiProver" },
+  { id = "SuiSystem", name = "SuiSystem" },
+  { id = "integer_library", name = "integer_library" },
+  { id = "integer_mate", name = "integer_mate" },
+]
+
+[[move.package]]
 id = "cdpm"
 source = { local = ".." }
 
 dependencies = [
-  { id = "CetusDlmm", name = "cetusdlmm" },
-  { id = "IntegerMate", name = "integer_mate" },
-  { id = "MoveSTL", name = "move_stl" },
+  { id = "DeepBook", name = "DeepBook" },
+  { id = "IntegerMate", name = "IntegerMate" },
+  { id = "MoveSTL", name = "MoveSTL" },
   { id = "MoveStdlib", name = "MoveStdlib" },
   { id = "ScallopProtocol", name = "ScallopProtocol" },
   { id = "Sui", name = "Sui" },
+  { id = "SuiProver", name = "SuiProver" },
+  { id = "SuiSystem", name = "SuiSystem" },
   { id = "X", name = "X" },
+  { id = "cetusdlmm", name = "cetusdlmm" },
+  { id = "kai_sav", name = "kai_sav" },
+]
+
+[[move.package]]
+id = "cetus_clmm"
+source = { local = "../../kai-contracts/_vendor/Cetus/clmm-v13" }
+
+dependencies = [
+  { id = "DeepBook", name = "DeepBook" },
+  { id = "MoveStdlib", name = "MoveStdlib" },
+  { id = "Sui", name = "Sui" },
+  { id = "SuiProver", name = "SuiProver" },
+  { id = "SuiSystem", name = "SuiSystem" },
+  { id = "integer_mate", name = "integer_mate" },
+  { id = "move_stl", name = "move_stl" },
+]
+
+[[move.package]]
+id = "cetusdlmm"
+source = { local = "/tmp/cetus-dlmm-patched/packages/dlmm" }
+
+dependencies = [
+  { id = "DeepBook", name = "DeepBook" },
+  { id = "IntegerMate", name = "IntegerMate" },
+  { id = "MoveSTL", name = "MoveSTL" },
+  { id = "MoveStdlib", name = "MoveStdlib" },
+  { id = "Sui", name = "Sui" },
+  { id = "SuiProver", name = "SuiProver" },
+  { id = "SuiSystem", name = "SuiSystem" },
+]
+
+[[move.package]]
+id = "coin_decimals_registry"
+source = { local = "../../kai-contracts/_vendor/Scallop/coin-decimals-registry-v1" }
+
+dependencies = [
+  { id = "DeepBook", name = "DeepBook" },
+  { id = "MoveStdlib", name = "MoveStdlib" },
+  { id = "Sui", name = "Sui" },
+  { id = "SuiProver", name = "SuiProver" },
+  { id = "SuiSystem", name = "SuiSystem" },
+]
+
+[[move.package]]
+id = "deep"
+source = { local = "../../kai-contracts/_vendor/coins/DEEP" }
+
+dependencies = [
+  { id = "DeepBook", name = "DeepBook" },
+  { id = "MoveStdlib", name = "MoveStdlib" },
+  { id = "Sui", name = "Sui" },
+  { id = "SuiProver", name = "SuiProver" },
+  { id = "SuiSystem", name = "SuiSystem" },
+]
+
+[[move.package]]
+id = "integer_library"
+source = { local = "../../kai-contracts/_vendor/Bluefin/integer-library-v3" }
+
+dependencies = [
+  { id = "DeepBook", name = "DeepBook" },
+  { id = "MoveStdlib", name = "MoveStdlib" },
+  { id = "Sui", name = "Sui" },
+  { id = "SuiProver", name = "SuiProver" },
+  { id = "SuiSystem", name = "SuiSystem" },
+]
+
+[[move.package]]
+id = "integer_mate"
+source = { local = "../../kai-contracts/_vendor/Cetus/integer-mate-v7" }
+
+dependencies = [
+  { id = "DeepBook", name = "DeepBook" },
+  { id = "MoveStdlib", name = "MoveStdlib" },
+  { id = "Sui", name = "Sui" },
+  { id = "SuiProver", name = "SuiProver" },
+  { id = "SuiSystem", name = "SuiSystem" },
+]
+
+[[move.package]]
+id = "kai_leverage"
+source = { local = "../../kai-contracts/kai/leverage/core" }
+
+dependencies = [
+  { id = "DeepBook", name = "DeepBook" },
+  { id = "MoveStdlib", name = "MoveStdlib" },
+  { id = "Sui", name = "Sui" },
+  { id = "SuiProver", name = "SuiProver" },
+  { id = "SuiSystem", name = "SuiSystem" },
+  { id = "access_management", name = "access_management" },
+  { id = "bluefin_spot", name = "bluefin_spot" },
+  { id = "cetus_clmm", name = "cetus_clmm" },
+  { id = "deep", name = "deep" },
+  { id = "integer_mate", name = "integer_mate" },
+  { id = "lbtc", name = "lbtc" },
+  { id = "pyth", name = "pyth" },
+  { id = "rate_limiter", name = "rate_limiter" },
+  { id = "suiusdt", name = "suiusdt" },
+  { id = "usdc", name = "usdc" },
+  { id = "usdy", name = "usdy" },
+  { id = "wal", name = "wal" },
+  { id = "wbtc", name = "wbtc" },
+  { id = "whusdce", name = "whusdce" },
+  { id = "whusdte", name = "whusdte" },
+  { id = "xbtc", name = "xbtc" },
+]
+
+[[move.package]]
+id = "kai_sav"
+source = { local = "../../kai-contracts/kai/sav/core-prover-patched" }
+
+dependencies = [
+  { id = "DeepBook", name = "DeepBook" },
+  { id = "MoveStdlib", name = "MoveStdlib" },
+  { id = "Sui", name = "Sui" },
+  { id = "SuiProver", name = "SuiProver" },
+  { id = "SuiSystem", name = "SuiSystem" },
+  { id = "access_management", name = "access_management" },
+  { id = "kai_leverage", name = "kai_leverage" },
+  { id = "kai_ywhusdte_ysui", name = "kai_ywhusdte_ysui" },
+  { id = "protocol", name = "protocol" },
+  { id = "rate_limiter", name = "rate_limiter" },
+  { id = "spool", name = "spool" },
+  { id = "whusdce", name = "whusdce" },
+  { id = "whusdte", name = "whusdte" },
+]
+
+[[move.package]]
+id = "kai_ywhusdte_ysui"
+source = { local = "../../kai-contracts/kai/sav/vault-token-init/kai-ywhusdte-ysui" }
+
+dependencies = [
+  { id = "DeepBook", name = "DeepBook" },
+  { id = "MoveStdlib", name = "MoveStdlib" },
+  { id = "Sui", name = "Sui" },
+  { id = "SuiProver", name = "SuiProver" },
+  { id = "SuiSystem", name = "SuiSystem" },
+]
+
+[[move.package]]
+id = "lbtc"
+source = { local = "../../kai-contracts/_vendor/coins/LBTC" }
+
+dependencies = [
+  { id = "DeepBook", name = "DeepBook" },
+  { id = "MoveStdlib", name = "MoveStdlib" },
+  { id = "Sui", name = "Sui" },
+  { id = "SuiProver", name = "SuiProver" },
+  { id = "SuiSystem", name = "SuiSystem" },
+]
+
+[[move.package]]
+id = "math"
+source = { local = "../../kai-contracts/_vendor/Scallop/math-v1" }
+
+dependencies = [
+  { id = "DeepBook", name = "DeepBook" },
+  { id = "MoveStdlib", name = "MoveStdlib" },
+  { id = "Sui", name = "Sui" },
+  { id = "SuiProver", name = "SuiProver" },
+  { id = "SuiSystem", name = "SuiSystem" },
+]
+
+[[move.package]]
+id = "move_stl"
+source = { local = "../../kai-contracts/_vendor/Cetus/move-stl-v5" }
+
+dependencies = [
+  { id = "DeepBook", name = "DeepBook" },
+  { id = "MoveStdlib", name = "MoveStdlib" },
+  { id = "Sui", name = "Sui" },
+  { id = "SuiProver", name = "SuiProver" },
+  { id = "SuiSystem", name = "SuiSystem" },
+]
+
+[[move.package]]
+id = "protocol"
+source = { local = "../../kai-contracts/_vendor/Scallop/protocol-v10" }
+
+dependencies = [
+  { id = "DeepBook", name = "DeepBook" },
+  { id = "MoveStdlib", name = "MoveStdlib" },
+  { id = "Sui", name = "Sui" },
+  { id = "SuiProver", name = "SuiProver" },
+  { id = "SuiSystem", name = "SuiSystem" },
+  { id = "coin_decimals_registry", name = "coin_decimals_registry" },
+  { id = "math", name = "math" },
+  { id = "whitelist", name = "whitelist" },
+  { id = "x", name = "x" },
+  { id = "x_oracle", name = "x_oracle" },
+]
+
+[[move.package]]
+id = "pyth"
+source = { local = "../../kai-contracts/_vendor/Pyth/core-v2" }
+
+dependencies = [
+  { id = "DeepBook", name = "DeepBook" },
+  { id = "MoveStdlib", name = "MoveStdlib" },
+  { id = "Sui", name = "Sui" },
+  { id = "SuiProver", name = "SuiProver" },
+  { id = "SuiSystem", name = "SuiSystem" },
+  { id = "wormhole", name = "wormhole" },
+]
+
+[[move.package]]
+id = "rate_limiter"
+source = { local = "../../kai-contracts/rate-limiter" }
+
+dependencies = [
+  { id = "DeepBook", name = "DeepBook" },
+  { id = "MoveStdlib", name = "MoveStdlib" },
+  { id = "Sui", name = "Sui" },
+  { id = "SuiProver", name = "SuiProver" },
+  { id = "SuiSystem", name = "SuiSystem" },
+]
+
+[[move.package]]
+id = "spool"
+source = { local = "../../kai-contracts/_vendor/Scallop/spool-v2" }
+
+dependencies = [
+  { id = "DeepBook", name = "DeepBook" },
+  { id = "MoveStdlib", name = "MoveStdlib" },
+  { id = "Sui", name = "Sui" },
+  { id = "SuiProver", name = "SuiProver" },
+  { id = "SuiSystem", name = "SuiSystem" },
+]
+
+[[move.package]]
+id = "stablecoin"
+source = { local = "../../kai-contracts/_vendor/Circle/stablecoin-v1" }
+
+dependencies = [
+  { id = "DeepBook", name = "DeepBook" },
+  { id = "MoveStdlib", name = "MoveStdlib" },
+  { id = "Sui", name = "Sui" },
+  { id = "SuiProver", name = "SuiProver" },
+  { id = "SuiSystem", name = "SuiSystem" },
+  { id = "sui_extensions", name = "sui_extensions" },
+]
+
+[[move.package]]
+id = "sui_extensions"
+source = { local = "../../kai-contracts/_vendor/Circle/sui-extensions-v1" }
+
+dependencies = [
+  { id = "DeepBook", name = "DeepBook" },
+  { id = "MoveStdlib", name = "MoveStdlib" },
+  { id = "Sui", name = "Sui" },
+  { id = "SuiProver", name = "SuiProver" },
+  { id = "SuiSystem", name = "SuiSystem" },
+]
+
+[[move.package]]
+id = "suiusdt"
+source = { local = "../../kai-contracts/_vendor/coins/suiUSDT" }
+
+dependencies = [
+  { id = "DeepBook", name = "DeepBook" },
+  { id = "MoveStdlib", name = "MoveStdlib" },
+  { id = "Sui", name = "Sui" },
+  { id = "SuiProver", name = "SuiProver" },
+  { id = "SuiSystem", name = "SuiSystem" },
+]
+
+[[move.package]]
+id = "token_bridge"
+source = { local = "../../kai-contracts/_vendor/Wormhole/token-bridge-v1" }
+
+dependencies = [
+  { id = "DeepBook", name = "DeepBook" },
+  { id = "MoveStdlib", name = "MoveStdlib" },
+  { id = "Sui", name = "Sui" },
+  { id = "SuiProver", name = "SuiProver" },
+  { id = "SuiSystem", name = "SuiSystem" },
+  { id = "wormhole", name = "wormhole" },
+]
+
+[[move.package]]
+id = "usdc"
+source = { local = "../../kai-contracts/_vendor/coins/USDC" }
+
+dependencies = [
+  { id = "DeepBook", name = "DeepBook" },
+  { id = "MoveStdlib", name = "MoveStdlib" },
+  { id = "Sui", name = "Sui" },
+  { id = "SuiProver", name = "SuiProver" },
+  { id = "SuiSystem", name = "SuiSystem" },
+  { id = "stablecoin", name = "stablecoin" },
+  { id = "sui_extensions", name = "sui_extensions" },
+]
+
+[[move.package]]
+id = "usdy"
+source = { local = "../../kai-contracts/_vendor/coins/USDY" }
+
+dependencies = [
+  { id = "DeepBook", name = "DeepBook" },
+  { id = "MoveStdlib", name = "MoveStdlib" },
+  { id = "Sui", name = "Sui" },
+  { id = "SuiProver", name = "SuiProver" },
+  { id = "SuiSystem", name = "SuiSystem" },
+]
+
+[[move.package]]
+id = "wal"
+source = { local = "../../kai-contracts/_vendor/coins/WAL" }
+
+dependencies = [
+  { id = "DeepBook", name = "DeepBook" },
+  { id = "MoveStdlib", name = "MoveStdlib" },
+  { id = "Sui", name = "Sui" },
+  { id = "SuiProver", name = "SuiProver" },
+  { id = "SuiSystem", name = "SuiSystem" },
+]
+
+[[move.package]]
+id = "wbtc"
+source = { local = "../../kai-contracts/_vendor/coins/wBTC" }
+
+dependencies = [
+  { id = "DeepBook", name = "DeepBook" },
+  { id = "MoveStdlib", name = "MoveStdlib" },
+  { id = "Sui", name = "Sui" },
+  { id = "SuiProver", name = "SuiProver" },
+  { id = "SuiSystem", name = "SuiSystem" },
+]
+
+[[move.package]]
+id = "whitelist"
+source = { local = "../../kai-contracts/_vendor/Scallop/whitelist-v1" }
+
+dependencies = [
+  { id = "DeepBook", name = "DeepBook" },
+  { id = "MoveStdlib", name = "MoveStdlib" },
+  { id = "Sui", name = "Sui" },
+  { id = "SuiProver", name = "SuiProver" },
+  { id = "SuiSystem", name = "SuiSystem" },
+]
+
+[[move.package]]
+id = "whusdce"
+source = { local = "../../kai-contracts/_vendor/coins/whUSDCe" }
+
+dependencies = [
+  { id = "DeepBook", name = "DeepBook" },
+  { id = "MoveStdlib", name = "MoveStdlib" },
+  { id = "Sui", name = "Sui" },
+  { id = "SuiProver", name = "SuiProver" },
+  { id = "SuiSystem", name = "SuiSystem" },
+  { id = "token_bridge", name = "token_bridge" },
+]
+
+[[move.package]]
+id = "whusdte"
+source = { local = "../../kai-contracts/_vendor/coins/whUSDTe" }
+
+dependencies = [
+  { id = "DeepBook", name = "DeepBook" },
+  { id = "MoveStdlib", name = "MoveStdlib" },
+  { id = "Sui", name = "Sui" },
+  { id = "SuiProver", name = "SuiProver" },
+  { id = "SuiSystem", name = "SuiSystem" },
+  { id = "token_bridge", name = "token_bridge" },
+]
+
+[[move.package]]
+id = "wormhole"
+source = { local = "../../kai-contracts/_vendor/Wormhole/core-v1" }
+
+dependencies = [
+  { id = "DeepBook", name = "DeepBook" },
+  { id = "MoveStdlib", name = "MoveStdlib" },
+  { id = "Sui", name = "Sui" },
+  { id = "SuiProver", name = "SuiProver" },
+  { id = "SuiSystem", name = "SuiSystem" },
+]
+
+[[move.package]]
+id = "x"
+source = { local = "../../kai-contracts/_vendor/Scallop/x-v1" }
+
+dependencies = [
+  { id = "DeepBook", name = "DeepBook" },
+  { id = "MoveStdlib", name = "MoveStdlib" },
+  { id = "Sui", name = "Sui" },
+  { id = "SuiProver", name = "SuiProver" },
+  { id = "SuiSystem", name = "SuiSystem" },
+]
+
+[[move.package]]
+id = "x_oracle"
+source = { local = "../../kai-contracts/_vendor/Scallop/x-oracle-v1" }
+
+dependencies = [
+  { id = "DeepBook", name = "DeepBook" },
+  { id = "MoveStdlib", name = "MoveStdlib" },
+  { id = "Sui", name = "Sui" },
+  { id = "SuiProver", name = "SuiProver" },
+  { id = "SuiSystem", name = "SuiSystem" },
+]
+
+[[move.package]]
+id = "xbtc"
+source = { local = "../../kai-contracts/_vendor/coins/xBTC" }
+
+dependencies = [
+  { id = "DeepBook", name = "DeepBook" },
+  { id = "MoveStdlib", name = "MoveStdlib" },
+  { id = "Sui", name = "Sui" },
+  { id = "SuiProver", name = "SuiProver" },
+  { id = "SuiSystem", name = "SuiSystem" },
 ]

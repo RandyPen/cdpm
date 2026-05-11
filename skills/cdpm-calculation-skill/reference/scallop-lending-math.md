@@ -29,7 +29,7 @@ cdpm asserts `cash + debt >= revenue` and `denom_underlying > 0`, otherwise it a
 
 ---
 
-## 2. `compute_expected_scoin` (used by `start_supply`)
+## 2. `compute_expected_scoin` (used by `scallop_start_supply`)
 
 ```move
 fun compute_expected_scoin<T>(market: &Market, coin_amount: u64): u64 {
@@ -68,10 +68,10 @@ Edge cases:
 
 ---
 
-## 3. `compute_expected_underlying` (used by `start_redeem`)
+## 3. `compute_expected_underlying_scallop` (used by `scallop_start_redeem`)
 
 ```move
-fun compute_expected_underlying<T>(market: &Market, scoin_amount: u64): u64 {
+fun compute_expected_underlying_scallop<T>(market: &Market, scoin_amount: u64): u64 {
     floor(scoin_amount × (cash + debt − revenue) / supply)
 }
 ```
@@ -93,11 +93,11 @@ function computeExpectedUnderlying(
 }
 ```
 
-`EZeroExpected (1007)` when the result is `0` (the asserted-positive check happens inside `start_redeem`).
+`EZeroExpected (1007)` when the result is `0` (the asserted-positive check happens inside `scallop_start_redeem`).
 
 ---
 
-## 4. Principal Amortization (`pull_from_lending`)
+## 4. Principal Amortization (`pull_from_scallop_lending`)
 
 When the caller wants to redeem `want_amount` sCoin out of a vault that currently holds `S_total` sCoin and `P_total` principal, cdpm splits the principal proportionally:
 
@@ -134,7 +134,7 @@ Properties worth noting:
 
 ---
 
-## 5. Yield Fee Inside `finish_redeem`
+## 5. Yield Fee Inside `scallop_finish_redeem`
 
 The interest portion is whatever Scallop returned beyond the principal slice; the yield fee is taken from the interest only:
 
@@ -223,21 +223,21 @@ function predictRedeem(
 }
 ```
 
-Live Scallop redeem may pay slightly more than `expectedUnderlying` (the contract only asserts `>=`); use `expectedUnderlying` as the conservative lower bound for your strategy logic. The same applies to `toBalance`: it is a lower bound on what actually lands in `pm.balance[T]` after `finish_redeem`.
+Live Scallop redeem may pay slightly more than `expectedUnderlying` (the contract only asserts `>=`); use `expectedUnderlying` as the conservative lower bound for your strategy logic. The same applies to `toBalance`: it is a lower bound on what actually lands in `pm.balance[T]` after `scallop_finish_redeem`.
 
 ### 6.1 Forward direction — "I burn N sCoin, what do I net?"
 
-Already covered by `predictRedeem(reserve, vault, N, feeRateBp).toBalance`. This is the answer to *"what underlying lands in `pm.balance[T]`?"*. See section 3 for the raw `compute_expected_underlying` formula and section 5 for the yield-fee deduction.
+Already covered by `predictRedeem(reserve, vault, N, feeRateBp).toBalance`. This is the answer to *"what underlying lands in `pm.balance[T]`?"*. See section 3 for the raw `compute_expected_underlying_scallop` formula and section 5 for the yield-fee deduction.
 
 ---
 
 ## 7. Inverse Direction — Sizing Redemptions
 
-The forward formulas in sections 2-6 answer "given an `N` sCoin to burn, what comes back?". The inverse — "I need at least `K` underlying, what `N` do I feed `start_redeem`?" — is what bots and rebalancing strategies actually need at call sites.
+The forward formulas in sections 2-6 answer "given an `N` sCoin to burn, what comes back?". The inverse — "I need at least `K` underlying, what `N` do I feed `scallop_start_redeem`?" — is what bots and rebalancing strategies actually need at call sites.
 
 ### 7.1 Inverse: sCoin to burn for target underlying (pre-fee)
 
-`compute_expected_underlying` is `floor(N × denom / supply)`. To guarantee the on-chain output is `>= K`, invert with **ceiling** division:
+`compute_expected_underlying_scallop` is `floor(N × denom / supply)`. To guarantee the on-chain output is `>= K`, invert with **ceiling** division:
 
 ```
 scoin_to_burn = ceil(K × supply / denom)
@@ -257,7 +257,7 @@ function ceilDiv(a: bigint, b: bigint): bigint {
 }
 
 /**
- * Inverse of `compute_expected_underlying`. Returns the smallest `N` such that
+ * Inverse of `compute_expected_underlying_scallop`. Returns the smallest `N` such that
  * `floor(N × denom / supply) >= desiredUnderlying`.
  *
  * Throws `EReserveEmpty (1006)` when `denom == 0` or `cash + debt < revenue`.
@@ -282,7 +282,7 @@ function scoinToBurnForTargetUnderlying(
 }
 ```
 
-Note the `MAX_U64` sentinel: callers can pass that straight into `start_redeem`'s `market_coin_amount`; `pull_from_lending` clamps to the vault's `scoinTotal` and removes the vault entry, returning whatever the live reserve pays out.
+Note the `MAX_U64` sentinel: callers can pass that straight into `scallop_start_redeem`'s `market_coin_amount`; `pull_from_scallop_lending` clamps to the vault's `scoinTotal` and removes the vault entry, returning whatever the live reserve pays out.
 
 ### 7.2 Inverse: sCoin to burn for target **net** underlying (after yield-fee)
 
@@ -409,7 +409,7 @@ function scoinToBurnForTargetNet(
 
 - The closed-form denominator `((10000 − r) × denom × S + r × supply × P)` can be very large under realistic mainnet values; `bigint` handles it without overflow but be aware that intermediate products are `O(u64⁴)`.
 - The split between "interest exists" and "no interest" is a strict `>` on the cross-multiplied comparison. Equality (`p == π`) is degenerate — typically only at vault initialization before any yield has accrued, where there is also no interest to fee.
-- In a *socialized loss* scenario where Scallop's reserve underflows and `denom < principal_per_scoin × supply / S_vault`, the per-scoin underlying drops below the per-scoin principal. The closed form correctly falls into the `interestExists = false` branch (no fee), but the redeemed amount is also less than the principal slice. Net is just `expected_underlying`; the fee path stays `0`. cdpm itself does not surface a special error for this — `finish_redeem` simply skips the fee branch and forwards the full underlying.
+- In a *socialized loss* scenario where Scallop's reserve underflows and `denom < principal_per_scoin × supply / S_vault`, the per-scoin underlying drops below the per-scoin principal. The closed form correctly falls into the `interestExists = false` branch (no fee), but the redeemed amount is also less than the principal slice. Net is just `expected_underlying`; the fee path stays `0`. cdpm itself does not surface a special error for this — `scallop_finish_redeem` simply skips the fee branch and forwards the full underlying.
 
 ### 7.3 Worked Example
 
@@ -428,7 +428,7 @@ Implied per-sCoin values: `p = 1100/1050 ≈ 1.0476`, `π = 950/1000 = 0.95`. Si
    - `fee = floor(9 × 2000 / 10000) = floor(1.8) = 1`
    - `net = 102 − 1 = 101`  →  `101 >= 100`  ✓
 
-The forward sim confirms the closed form. The user feeds `start_redeem` with `market_coin_amount = 98`, the bot pays `1` underlying yield fee, and `pm.balance[T]` increases by `101`.
+The forward sim confirms the closed form. The user feeds `scallop_start_redeem` with `market_coin_amount = 98`, the bot pays `1` underlying yield fee, and `pm.balance[T]` increases by `101`.
 
 If `desiredNet` had been `103`, the closed-form would have returned `N = 101`, and forward sim would have yielded `net = 103` exactly — the iterative refinement helper would not have needed to bump.
 
@@ -446,7 +446,7 @@ The simplest approach is a dry-run of the same accrue-then-read PTB:
 5. protocol::reserve::balance_sheet(sheet) → (cash, debt, revenue, supply)
 ```
 
-Because cdpm imports the same view path (`protocol::reserve` + `x::wit_table`), any consistency you achieve in your dry run mirrors what `start_supply` / `start_redeem` will see if your real PTB also runs `accrue_interest_for_market` first.
+Because cdpm imports the same view path (`protocol::reserve` + `x::wit_table`), any consistency you achieve in your dry run mirrors what `scallop_start_supply` / `scallop_start_redeem` will see if your real PTB also runs `accrue_interest_for_market` first.
 
 ---
 
@@ -454,7 +454,7 @@ Because cdpm imports the same view path (`protocol::reserve` + `x::wit_table`), 
 
 When sizing inputs:
 
-- For `start_supply<T>`: `coin_amount × supply >= denom_underlying` to avoid `EZeroExpected`. In practice deposit at least a few hundred MIST equivalents.
-- For `start_redeem<T>`: `scoin_amount × denom_underlying >= supply` for the same reason. The inverse helpers in section 7 already enforce ceiling rounding, so they cannot produce `N = 0` for any positive target.
+- For `scallop_start_supply<T>`: `coin_amount × supply >= denom_underlying` to avoid `EZeroExpected`. In practice deposit at least a few hundred MIST equivalents.
+- For `scallop_start_redeem<T>`: `scoin_amount × denom_underlying >= supply` for the same reason. The inverse helpers in section 7 already enforce ceiling rounding, so they cannot produce `N = 0` for any positive target.
 - For both, build in headroom against `EAmountShortfall` by either calling `accrue_interest_for_market` immediately before, or shaving a small slippage off `expected_*` and verifying live values match before signing.
 - When using `scoinToBurnForTargetNet` for a rebalancing bot: re-snapshot `reserve` and `vault` *after* the accrual command and before signing — sizing on stale snapshots can leave you 1-2 underlying short on the very next block.

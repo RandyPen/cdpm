@@ -14,12 +14,21 @@ cdpm = { local = ".." }
 Prover = { local = "../../sui-prover/packages/prover", override = true }
 
 [dev-dependencies]
-# Mirror cdpm's cetusdlmm override at the root so the asymptotic resolver
-# does not flag a regular-vs-dev conflict inside cdpm. Uses `rename-from`
-# because the patched package is named `CetusDlmm` (PascalCase) while cdpm
-# imports it via the lowercase address `cetusdlmm` (Sui CLI tolerates the
-# mismatch; sui-prover does not).
+# Mirror cdpm's deps with PascalCase keys + `rename-from` so the
+# asymptotic resolver doesn't reject the lowercase address bindings cdpm
+# uses. Sui CLI tolerates lowercase dep keys matching `[addresses]`;
+# sui-prover requires the dep key to match the upstream `[package].name`.
+# These dev-deps make sui-prover see PascalCase names while cdpm's own
+# Move.toml keeps the lowercase form sui CLI requires.
 CetusDlmm = { local = "/tmp/cetus-dlmm-patched/packages/dlmm", override = true, rename-from = "cetusdlmm" }
+IntegerMate = { git = "https://github.com/CetusProtocol/integer-mate.git", rev = "mainnet-v1.3.0", override = true, rename-from = "integer_mate" }
+MoveSTL = { git = "https://github.com/CetusProtocol/move-stl.git", rev = "mainnet-v1.3.0", override = true, rename-from = "move_stl" }
+ScallopProtocol = { local = "../../sui-lending-protocol/contracts/protocol", override = true, rename-from = "protocol" }
+X = { local = "../../sui-lending-protocol/contracts/libs/x", override = true, rename-from = "x" }
+# kai_sav inherits from cdpm's transitive resolution (which already points
+# at the patched copy at `../kai-contracts/kai/sav/core-prover-patched`).
+# No override needed here — both this spec build and the regular
+# `sui move build` resolve to the same patched package.
 
 [addresses]
 cdpm_specs = "0x0"

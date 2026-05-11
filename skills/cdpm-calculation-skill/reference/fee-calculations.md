@@ -47,9 +47,9 @@ const compositionFee = FeeUtils.calculateCompositionFee(
 )
 ```
 
-## cdpm Protocol Fee (Cetus + Scallop)
+## cdpm Protocol Fee (Cetus + Scallop + Kai)
 
-cdpm uses a single `FeeHouse.fee_rate` (basis points, capped at 3000 = 30%) for two distinct paths:
+cdpm uses a single `FeeHouse.fee_rate` (basis points, capped at 3000 = 30%) for **three** distinct paths:
 
 1. **Cetus protocol-tier fee split** — `take_fee` inside `protocol_collect_fee` / `protocol_collect_reward` shaves the protocol cut off the gross collected balance:
 
@@ -59,7 +59,7 @@ cdpm uses a single `FeeHouse.fee_rate` (basis points, capped at 3000 = 30%) for 
    const userPortion = grossAmount - protocolCut;
    ```
 
-2. **Scallop yield fee** — `finish_redeem` deducts only from the interest portion:
+2. **Scallop yield fee** — `scallop_finish_redeem` deducts only from the interest portion:
 
    ```typescript
    const interest   = redeemedAmount > principalPortion ? redeemedAmount - principalPortion : 0n;
@@ -67,4 +67,6 @@ cdpm uses a single `FeeHouse.fee_rate` (basis points, capped at 3000 = 30%) for 
    const toBalance  = redeemedAmount - yieldFee;
    ```
 
-Both formulas floor and share the same `feeRateBp`. See `reference/scallop-lending-math.md` for the full Scallop redeem prediction (principal amortization, `compute_expected_underlying`, end-to-end helper).
+3. **Kai SAV yield fee** — `kai_finish_redeem` uses the **same** interest-only formula as Scallop (only the source of `redeemedAmount` and `principalPortion` differs — Kai's `vault::redeem_withdraw_ticket` rather than Scallop's `redeem::redeem`). There is no separate Kai fee rate.
+
+All three formulas floor and share the same `feeRateBp` from `FeeHouse`. See [`scallop-lending-math.md`](./scallop-lending-math.md) and [`kai-lending-math.md`](./kai-lending-math.md) for the full redeem predictions (principal amortization, `compute_expected_underlying_scallop` / `compute_expected_underlying_kai`, end-to-end helpers).

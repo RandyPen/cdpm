@@ -3,16 +3,16 @@
 ## Common Agent Errors
 
 ```typescript
-// cdpm error codes (sources/cdpm.move, lines 28-36)
+// cdpm error codes (sources/cdpm.move, lines 28-36) — codes are SHARED between Scallop and Kai integrations.
 const CDPM_ERROR_CODES = {
-  ENotOwner:         1001, // Caller is not pm.owner (e.g. agent tried user_extract_market_coin)
+  ENotOwner:         1001, // Caller is not pm.owner (e.g. agent tried user_extract_scallop_market_coin / user_extract_kai_yt)
   ENotAllow:         1002, // assert_caller_authorized failed (or invariant broken)
   EInvalidFeeRate:   1003, // admin_set_fee given rate > MAX_FEE_RATE (30%)
-  ELendingNotEmpty:  1004, // user_close_pm called with non-empty pm.lending
-  ENoSuchVault:      1005, // start_redeem / extract called for an absent (T) vault
-  EReserveEmpty:     1006, // Scallop reserve has zero supply or zero (cash+debt-revenue)
-  EZeroExpected:     1007, // start_supply / start_redeem would yield 0
-  EWrongPm:          1008, // Hot-potato ticket consumed against a different PM
+  ELendingNotEmpty:  1004, // user_close_pm called with non-empty pm.lending (any Scallop or Kai entry)
+  ENoSuchVault:      1005, // scallop_start_redeem / kai_start_redeem / extract called for an absent vault entry
+  EReserveEmpty:     1006, // Scallop reserve degenerate OR Kai vault total_yt_supply == 0
+  EZeroExpected:     1007, // scallop_start_* / kai_start_* would yield 0 — amount too small
+  EWrongPm:          1008, // Hot-potato ticket consumed against a different PM (Scallop or Kai)
   EAmountShortfall:  1009, // finish_* received Coin with value < ticket.expected
 };
 
@@ -20,21 +20,21 @@ async function handleAgentError(error: any): Promise<string> {
   const errorStr = error.toString();
 
   if (errorStr.includes('ENotOwner')) {
-    return 'Operation requires owner permission. Agents cannot call user_extract_market_coin.';
+    return 'Operation requires owner permission. Agents cannot call user_extract_scallop_market_coin or user_extract_kai_yt.';
   } else if (errorStr.includes('ENotAllow')) {
     return 'Agent not in pm.agents. Contact owner for authorization.';
   } else if (errorStr.includes('ELendingNotEmpty')) {
-    return 'pm.lending is non-empty; the owner must redeem or extract every ScallopVault before user_close_pm.';
+    return 'pm.lending is non-empty; every ScallopVault<T> AND KaiVault<T, YT> entry must be redeemed or extracted before user_close_pm.';
   } else if (errorStr.includes('ENoSuchVault')) {
-    return 'No ScallopVault for that underlying type T. Check pm.lending entries before calling start_redeem.';
+    return 'No ScallopVault<T> or KaiVault<T, YT> entry in pm.lending for the requested key. Check pm.lending entries before calling scallop_start_redeem / kai_start_redeem.';
   } else if (errorStr.includes('EReserveEmpty')) {
-    return 'Scallop reserve has zero supply or zero (cash+debt-revenue). Did you call accrue_interest_for_market first?';
+    return 'Lending reserve degenerate. Scallop: zero supply or zero (cash+debt-revenue) — call accrue_interest_for_market first. Kai: total_yt_supply == 0 — supply first.';
   } else if (errorStr.includes('EZeroExpected')) {
     return 'Supply/redeem amount too small — predicted output is 0. Increase the amount.';
   } else if (errorStr.includes('EWrongPm')) {
-    return 'SupplyTicket/RedeemTicket consumed against a different PositionManager.';
+    return 'Hot-potato ticket (ScallopSupplyTicket / ScallopRedeemTicket / KaiSupplyTicket / KaiRedeemTicket) consumed against a different PositionManager.';
   } else if (errorStr.includes('EAmountShortfall')) {
-    return 'finish_* received Coin with value < ticket.expected. Run accrue_interest_for_market as the first PTB command.';
+    return 'finish_* received Coin with value < ticket.expected. Scallop: run accrue_interest_for_market as the first PTB command. Kai: re-snapshot total_available_balance immediately before signing.';
   }
 
   return `Unknown error: ${errorStr}`;

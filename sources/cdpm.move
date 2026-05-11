@@ -22,6 +22,8 @@ use protocol::market::{Self, Market};
 use protocol::reserve::{Self, MarketCoin};
 use x::wit_table;
 
+use kai_sav::vault as kai_vault;
+
 const FEE_DENOMINATOR: u128 = 10000;
 const MAX_FEE_RATE: u128 = 3000;
 
@@ -29,7 +31,7 @@ const ENotOwner: u64          = 1001;     // caller is not pm.owner
 const ENotAllow: u64          = 1002;     // caller not in agents / access list (or invariant broken)
 const EInvalidFeeRate: u64    = 1003;     // admin_set_fee given rate > MAX_FEE_RATE (30%)
 const ELendingNotEmpty: u64   = 1004;     // user_close_pm called with non-empty lending Bag
-const ENoSuchVault: u64       = 1005;     // pull_from_lending called for an absent (T, S) vault
+const ENoSuchVault: u64       = 1005;     // pull_from_scallop_lending called for an absent (T, S) vault
 const EReserveEmpty: u64      = 1006;     // Scallop reserve has zero supply or zero (cash+debt-revenue)
 const EZeroExpected: u64      = 1007;     // start_* would yield 0 scoin/underlying (amount too small)
 const EWrongPm: u64           = 1008;     // hot-potato ticket consumed against a different PM
@@ -66,16 +68,41 @@ public struct ScallopVault<phantom T> has store {
     principal: u64,
 }
 
-public struct SupplyTicket<phantom T> {
+public struct ScallopSupplyTicket<phantom T> {
     pm_id: ID,
     expected_scoin: u64,
     principal: u64,
 }
 
-public struct RedeemTicket<phantom T> {
+public struct ScallopRedeemTicket<phantom T> {
     pm_id: ID,
     expected_underlying: u64,
     scoin_burned: u64,
+    principal_portion: u64,
+}
+
+// ============ Kai SAV vault holding ============
+//
+// Stored in the same `lending: Bag` as ScallopVault. Bag key uses YT's
+// type_name so a single underlying T can simultaneously have a ScallopVault
+// (key = T) and a KaiVault (key = YT) without collision. YT's TreasuryCap is
+// owned by Kai's vault module, so external code cannot forge `Coin<YT>` —
+// the type-pin defense matches Scallop's MarketCoin<T> guarantee.
+public struct KaiVault<phantom T, phantom YT> has store {
+    yt_balance: Balance<YT>,
+    principal: u64,
+}
+
+public struct KaiSupplyTicket<phantom T, phantom YT> {
+    pm_id: ID,
+    expected_yt: u64,
+    principal: u64,
+}
+
+public struct KaiRedeemTicket<phantom T, phantom YT> {
+    pm_id: ID,
+    expected_underlying: u64,
+    yt_burned: u64,
     principal_portion: u64,
 }
 
@@ -310,10 +337,37 @@ public struct ScallopRedeemed has copy, drop {
     fee_amount: u64,
 }
 
-public struct MarketCoinExtracted has copy, drop {
+public struct ScallopMarketCoinExtracted has copy, drop {
     pm_id: ID,
     coin_type: String,
     market_coin_amount: u64,
+    principal_removed: u64,
+}
+
+public struct KaiSupplied has copy, drop {
+    pm_id: ID,
+    coin_type: String,
+    yt_type: String,
+    deposit_amount: u64,
+    yt_minted: u64,
+}
+
+public struct KaiRedeemed has copy, drop {
+    pm_id: ID,
+    coin_type: String,
+    yt_type: String,
+    yt_burned: u64,
+    redeemed_amount: u64,
+    principal_portion: u64,
+    interest: u64,
+    fee_amount: u64,
+}
+
+public struct KaiYTExtracted has copy, drop {
+    pm_id: ID,
+    coin_type: String,
+    yt_type: String,
+    yt_amount: u64,
     principal_removed: u64,
 }
 
@@ -1316,7 +1370,7 @@ fun assert_caller_authorized(
     assert!(is_owner || is_agent || is_protocol, ENotAllow);
 }
 
-fun add_to_lending<T>(
+fun add_to_scallop_lending<T>(
     pm: &mut PositionManager,
     scoin: Balance<MarketCoin<T>>,
     principal_added: u64,
@@ -1335,7 +1389,7 @@ fun add_to_lending<T>(
     };
 }
 
-fun pull_from_lending<T>(
+fun pull_from_scallop_lending<T>(
     pm: &mut PositionManager,
     want_amount: u64,
 ): (Balance<MarketCoin<T>>, u64) {
@@ -1379,7 +1433,7 @@ fun compute_expected_scoin<T>(market: &Market, coin_amount: u64): u64 {
     }
 }
 
-fun compute_expected_underlying<T>(market: &Market, scoin_amount: u64): u64 {
+fun compute_expected_underlying_scallop<T>(market: &Market, scoin_amount: u64): u64 {
     let reserve = market::vault(market);
     let sheets = reserve::balance_sheets(reserve);
     let key = type_name::with_defining_ids<T>();
@@ -1396,19 +1450,19 @@ fun compute_expected_underlying<T>(market: &Market, scoin_amount: u64): u64 {
 
 // ============ Scallop Lending Public API (Hot Potato) ============
 
-public fun start_supply<T>(
+public fun scallop_start_supply<T>(
     access: &AccessList,
     pm: &mut PositionManager,
     market: &Market,
     amount: u64,
     ctx: &mut TxContext,
-): (Coin<T>, SupplyTicket<T>) {
+): (Coin<T>, ScallopSupplyTicket<T>) {
     assert_caller_authorized(access, pm, ctx);
     let coin: Coin<T> = withdraw_from_balance<T>(pm, amount, ctx);
     let actual = coin.value();
     let expected_scoin = compute_expected_scoin<T>(market, actual);
     assert!(expected_scoin > 0, EZeroExpected);
-    let ticket = SupplyTicket<T> {
+    let ticket = ScallopSupplyTicket<T> {
         pm_id: object::id(pm),
         expected_scoin,
         principal: actual,
@@ -1416,16 +1470,16 @@ public fun start_supply<T>(
     (coin, ticket)
 }
 
-public fun finish_supply<T>(
+public fun scallop_finish_supply<T>(
     pm: &mut PositionManager,
-    ticket: SupplyTicket<T>,
+    ticket: ScallopSupplyTicket<T>,
     scoin: Coin<MarketCoin<T>>,
 ) {
-    let SupplyTicket { pm_id, expected_scoin, principal } = ticket;
+    let ScallopSupplyTicket { pm_id, expected_scoin, principal } = ticket;
     assert!(pm_id == object::id(pm), EWrongPm);
     let scoin_amount = scoin.value();
     assert!(scoin_amount >= expected_scoin, EAmountShortfall);
-    add_to_lending<T>(pm, scoin.into_balance(), principal);
+    add_to_scallop_lending<T>(pm, scoin.into_balance(), principal);
 
     event::emit(ScallopSupplied {
         pm_id,
@@ -1435,19 +1489,19 @@ public fun finish_supply<T>(
     });
 }
 
-public fun start_redeem<T>(
+public fun scallop_start_redeem<T>(
     access: &AccessList,
     pm: &mut PositionManager,
     market: &Market,
     market_coin_amount: u64,
     ctx: &mut TxContext,
-): (Coin<MarketCoin<T>>, RedeemTicket<T>) {
+): (Coin<MarketCoin<T>>, ScallopRedeemTicket<T>) {
     assert_caller_authorized(access, pm, ctx);
-    let (s_balance, principal_portion) = pull_from_lending<T>(pm, market_coin_amount);
+    let (s_balance, principal_portion) = pull_from_scallop_lending<T>(pm, market_coin_amount);
     let scoin_burned = balance::value<MarketCoin<T>>(&s_balance);
-    let expected_underlying = compute_expected_underlying<T>(market, scoin_burned);
+    let expected_underlying = compute_expected_underlying_scallop<T>(market, scoin_burned);
     assert!(expected_underlying > 0, EZeroExpected);
-    let ticket = RedeemTicket<T> {
+    let ticket = ScallopRedeemTicket<T> {
         pm_id: object::id(pm),
         expected_underlying,
         scoin_burned,
@@ -1456,14 +1510,14 @@ public fun start_redeem<T>(
     (s_balance.into_coin(ctx), ticket)
 }
 
-public fun finish_redeem<T>(
+public fun scallop_finish_redeem<T>(
     pm: &mut PositionManager,
     fee_house: &mut FeeHouse,
-    ticket: RedeemTicket<T>,
+    ticket: ScallopRedeemTicket<T>,
     underlying: Coin<T>,
     ctx: &mut TxContext,
 ) {
-    let RedeemTicket { pm_id, expected_underlying, scoin_burned, principal_portion } = ticket;
+    let ScallopRedeemTicket { pm_id, expected_underlying, scoin_burned, principal_portion } = ticket;
     assert!(pm_id == object::id(pm), EWrongPm);
     let redeemed_amount = underlying.value();
     assert!(redeemed_amount >= expected_underlying, EAmountShortfall);
@@ -1495,16 +1549,16 @@ public fun finish_redeem<T>(
     });
 }
 
-public fun user_extract_market_coin<T>(
+public fun user_extract_scallop_market_coin<T>(
     pm: &mut PositionManager,
     market_coin_amount: u64,
     ctx: &mut TxContext,
 ): Coin<MarketCoin<T>> {
     assert!(pm.owner == ctx.sender(), ENotOwner);
-    let (s_balance, principal_portion) = pull_from_lending<T>(pm, market_coin_amount);
+    let (s_balance, principal_portion) = pull_from_scallop_lending<T>(pm, market_coin_amount);
     let s_amount = balance::value<MarketCoin<T>>(&s_balance);
 
-    event::emit(MarketCoinExtracted {
+    event::emit(ScallopMarketCoinExtracted {
         pm_id: object::id(pm),
         coin_type: type_name::with_defining_ids<T>().into_string(),
         market_coin_amount: s_amount,
@@ -1514,25 +1568,223 @@ public fun user_extract_market_coin<T>(
     s_balance.into_coin(ctx)
 }
 
+// ============ Kai SAV Lending — Hot-Potato + YT type-pin ============
+
+fun add_to_kai_lending<T, YT>(
+    pm: &mut PositionManager,
+    yt_balance: Balance<YT>,
+    principal_added: u64,
+) {
+    let key = type_name::with_defining_ids<YT>().into_string();
+    if (bag::contains<String>(&pm.lending, key)) {
+        let v = bag::borrow_mut<String, KaiVault<T, YT>>(&mut pm.lending, key);
+        balance::join<YT>(&mut v.yt_balance, yt_balance);
+        v.principal = v.principal + principal_added;
+    } else {
+        bag::add<String, KaiVault<T, YT>>(
+            &mut pm.lending,
+            key,
+            KaiVault { yt_balance, principal: principal_added },
+        );
+    };
+}
+
+fun pull_from_kai_lending<T, YT>(
+    pm: &mut PositionManager,
+    want_amount: u64,
+): (Balance<YT>, u64) {
+    let key = type_name::with_defining_ids<YT>().into_string();
+    assert!(bag::contains<String>(&pm.lending, key), ENoSuchVault);
+    let total_yt = balance::value<YT>(
+        &bag::borrow<String, KaiVault<T, YT>>(&pm.lending, key).yt_balance,
+    );
+    if (want_amount >= total_yt) {
+        let KaiVault { yt_balance, principal } =
+            bag::remove<String, KaiVault<T, YT>>(&mut pm.lending, key);
+        (yt_balance, principal)
+    } else {
+        let v = bag::borrow_mut<String, KaiVault<T, YT>>(&mut pm.lending, key);
+        let principal_portion = (((v.principal as u128) * (want_amount as u128)
+            / (total_yt as u128)) as u64);
+        v.principal = v.principal - principal_portion;
+        let yt_split = balance::split<YT>(&mut v.yt_balance, want_amount);
+        (yt_split, principal_portion)
+    }
+}
+
+fun compute_expected_yt<T, YT>(
+    vault: &kai_vault::Vault<T, YT>,
+    clock: &Clock,
+    t_amount: u64,
+): u64 {
+    let total = kai_vault::total_available_balance<T, YT>(vault, clock);
+    let yt_supply = kai_vault::total_yt_supply<T, YT>(vault);
+    if (total == 0) {
+        // bootstrap (vault.move:606-608): 1:1 when total_available == 0.
+        // NOTE: yt_supply == 0 with total > 0 is a degenerate state we cannot
+        // safely match (Kai's deposit auto-mints performance fees, see plan
+        // §"Security audit report" point 1). In practice total > 0 implies yt_supply > 0
+        // for all non-bootstrap vaults; if yt_supply == 0 here we return 0
+        // and scallop_start_supply aborts via EZeroExpected.
+        t_amount
+    } else {
+        (((yt_supply as u128) * (t_amount as u128) / (total as u128)) as u64)
+    }
+}
+
+fun compute_expected_underlying_kai<T, YT>(
+    vault: &kai_vault::Vault<T, YT>,
+    clock: &Clock,
+    yt_amount: u64,
+): u64 {
+    let total = kai_vault::total_available_balance<T, YT>(vault, clock);
+    let yt_supply = kai_vault::total_yt_supply<T, YT>(vault);
+    assert!(yt_supply > 0, EReserveEmpty);
+    (((yt_amount as u128) * (total as u128) / (yt_supply as u128)) as u64)
+}
+
+public fun kai_start_supply<T, YT>(
+    access: &AccessList,
+    pm: &mut PositionManager,
+    vault: &kai_vault::Vault<T, YT>,
+    amount: u64,
+    clock: &Clock,
+    ctx: &mut TxContext,
+): (Coin<T>, KaiSupplyTicket<T, YT>) {
+    assert_caller_authorized(access, pm, ctx);
+    let coin: Coin<T> = withdraw_from_balance<T>(pm, amount, ctx);
+    let actual = coin.value();
+    let expected_yt = compute_expected_yt<T, YT>(vault, clock, actual);
+    assert!(expected_yt > 0, EZeroExpected);
+    let ticket = KaiSupplyTicket<T, YT> {
+        pm_id: object::id(pm),
+        expected_yt,
+        principal: actual,
+    };
+    (coin, ticket)
+}
+
+public fun kai_finish_supply<T, YT>(
+    pm: &mut PositionManager,
+    ticket: KaiSupplyTicket<T, YT>,
+    yt: Coin<YT>,
+) {
+    let KaiSupplyTicket { pm_id, expected_yt, principal } = ticket;
+    assert!(pm_id == object::id(pm), EWrongPm);
+    let yt_amount = yt.value();
+    assert!(yt_amount >= expected_yt, EAmountShortfall);
+    add_to_kai_lending<T, YT>(pm, yt.into_balance(), principal);
+
+    event::emit(KaiSupplied {
+        pm_id,
+        coin_type: type_name::with_defining_ids<T>().into_string(),
+        yt_type: type_name::with_defining_ids<YT>().into_string(),
+        deposit_amount: principal,
+        yt_minted: yt_amount,
+    });
+}
+
+public fun kai_start_redeem<T, YT>(
+    access: &AccessList,
+    pm: &mut PositionManager,
+    vault: &kai_vault::Vault<T, YT>,
+    yt_amount: u64,
+    clock: &Clock,
+    ctx: &mut TxContext,
+): (Coin<YT>, KaiRedeemTicket<T, YT>) {
+    assert_caller_authorized(access, pm, ctx);
+    let (yt_balance, principal_portion) = pull_from_kai_lending<T, YT>(pm, yt_amount);
+    let yt_burned = balance::value<YT>(&yt_balance);
+    let expected_underlying = compute_expected_underlying_kai<T, YT>(vault, clock, yt_burned);
+    assert!(expected_underlying > 0, EZeroExpected);
+    let ticket = KaiRedeemTicket<T, YT> {
+        pm_id: object::id(pm),
+        expected_underlying,
+        yt_burned,
+        principal_portion,
+    };
+    (yt_balance.into_coin(ctx), ticket)
+}
+
+public fun kai_finish_redeem<T, YT>(
+    pm: &mut PositionManager,
+    fee_house: &mut FeeHouse,
+    ticket: KaiRedeemTicket<T, YT>,
+    underlying: Coin<T>,
+    ctx: &mut TxContext,
+) {
+    let KaiRedeemTicket { pm_id, expected_underlying, yt_burned, principal_portion } = ticket;
+    assert!(pm_id == object::id(pm), EWrongPm);
+    let redeemed_amount = underlying.value();
+    assert!(redeemed_amount >= expected_underlying, EAmountShortfall);
+    let mut underlying_balance = underlying.into_balance();
+
+    let (interest, fee_amount) = if (redeemed_amount > principal_portion) {
+        let interest = redeemed_amount - principal_portion;
+        let fee_amount = (((interest as u128) * (fee_house.fee_rate as u128)
+            / FEE_DENOMINATOR) as u64);
+        if (fee_amount > 0) {
+            let fee_balance = balance::split<T>(&mut underlying_balance, fee_amount);
+            deposit_into_fee_house<T>(fee_house, fee_balance);
+        };
+        (interest, fee_amount)
+    } else {
+        (0, 0)
+    };
+
+    add_to_balance<T>(pm, underlying_balance.into_coin(ctx));
+
+    event::emit(KaiRedeemed {
+        pm_id,
+        coin_type: type_name::with_defining_ids<T>().into_string(),
+        yt_type: type_name::with_defining_ids<YT>().into_string(),
+        yt_burned,
+        redeemed_amount,
+        principal_portion,
+        interest,
+        fee_amount,
+    });
+}
+
+public fun user_extract_kai_yt<T, YT>(
+    pm: &mut PositionManager,
+    yt_amount: u64,
+    ctx: &mut TxContext,
+): Coin<YT> {
+    assert!(pm.owner == ctx.sender(), ENotOwner);
+    let (yt_balance, principal_portion) = pull_from_kai_lending<T, YT>(pm, yt_amount);
+    let amount = balance::value<YT>(&yt_balance);
+
+    event::emit(KaiYTExtracted {
+        pm_id: object::id(pm),
+        coin_type: type_name::with_defining_ids<T>().into_string(),
+        yt_type: type_name::with_defining_ids<YT>().into_string(),
+        yt_amount: amount,
+        principal_removed: principal_portion,
+    });
+
+    yt_balance.into_coin(ctx)
+}
+
 // ============ Test-only accessors ============
 // These functions exist solely so `tests/*` can drive and inspect internal state.
 // They are stripped from non-test builds and do not enlarge the deployed bytecode.
 
 #[test_only]
-public fun test_only_pull_from_lending<T>(
+public fun test_only_pull_from_scallop_lending<T>(
     pm: &mut PositionManager,
     want_amount: u64,
 ): (Balance<MarketCoin<T>>, u64) {
-    pull_from_lending<T>(pm, want_amount)
+    pull_from_scallop_lending<T>(pm, want_amount)
 }
 
 #[test_only]
-public fun test_only_add_to_lending<T>(
+public fun test_only_add_to_scallop_lending<T>(
     pm: &mut PositionManager,
     scoin: Balance<MarketCoin<T>>,
     principal_added: u64,
 ) {
-    add_to_lending<T>(pm, scoin, principal_added)
+    add_to_scallop_lending<T>(pm, scoin, principal_added)
 }
 
 #[test_only]
@@ -1593,7 +1845,7 @@ public fun test_only_lending_contains<T>(pm: &PositionManager): bool {
 }
 
 #[test_only]
-public fun test_only_lending_state<T>(pm: &PositionManager): (u64, u64) {
+public fun test_only_scallop_lending_state<T>(pm: &PositionManager): (u64, u64) {
     let coin_type = type_name::with_defining_ids<T>().into_string();
     let v = bag::borrow<String, ScallopVault<T>>(&pm.lending, coin_type);
     (balance::value<MarketCoin<T>>(&v.scoin), v.principal)
@@ -1629,15 +1881,15 @@ public fun test_only_fee_house_rate(fee_house: &FeeHouse): u64 {
 }
 
 #[test_only]
-public fun test_only_supply_ticket_fields<T>(
-    ticket: &SupplyTicket<T>,
+public fun test_only_scallop_supply_ticket_fields<T>(
+    ticket: &ScallopSupplyTicket<T>,
 ): (ID, u64, u64) {
     (ticket.pm_id, ticket.expected_scoin, ticket.principal)
 }
 
 #[test_only]
-public fun test_only_redeem_ticket_fields<T>(
-    ticket: &RedeemTicket<T>,
+public fun test_only_scallop_redeem_ticket_fields<T>(
+    ticket: &ScallopRedeemTicket<T>,
 ): (ID, u64, u64, u64) {
     (
         ticket.pm_id,
@@ -1685,7 +1937,7 @@ public fun test_only_init(ctx: &mut TxContext) {
     init(ctx)
 }
 
-// Pure-math twins of the (P, S, w) split done by `pull_from_lending`. These let
+// Pure-math twins of the (P, S, w) split done by `pull_from_scallop_lending`. These let
 // `#[random_test]` exercise the principal-per-scoin monotonicity property
 // without spinning up a PositionManager + Bag + Balance every iteration.
 
@@ -1737,21 +1989,41 @@ public fun spec_fee_house_rate(fee_house: &FeeHouse): u64 {
 }
 
 #[spec_only]
-public fun spec_supply_ticket_pm_id<T>(ticket: &SupplyTicket<T>): ID {
+public fun spec_scallop_supply_ticket_pm_id<T>(ticket: &ScallopSupplyTicket<T>): ID {
     ticket.pm_id
 }
 
 #[spec_only]
-public fun spec_supply_ticket_expected_scoin<T>(ticket: &SupplyTicket<T>): u64 {
+public fun spec_scallop_supply_ticket_expected_scoin<T>(ticket: &ScallopSupplyTicket<T>): u64 {
     ticket.expected_scoin
 }
 
 #[spec_only]
-public fun spec_redeem_ticket_pm_id<T>(ticket: &RedeemTicket<T>): ID {
+public fun spec_scallop_redeem_ticket_pm_id<T>(ticket: &ScallopRedeemTicket<T>): ID {
     ticket.pm_id
 }
 
 #[spec_only]
-public fun spec_redeem_ticket_expected_underlying<T>(ticket: &RedeemTicket<T>): u64 {
+public fun spec_scallop_redeem_ticket_expected_underlying<T>(ticket: &ScallopRedeemTicket<T>): u64 {
+    ticket.expected_underlying
+}
+
+#[spec_only]
+public fun spec_kai_supply_ticket_pm_id<T, YT>(ticket: &KaiSupplyTicket<T, YT>): ID {
+    ticket.pm_id
+}
+
+#[spec_only]
+public fun spec_kai_supply_ticket_expected_yt<T, YT>(ticket: &KaiSupplyTicket<T, YT>): u64 {
+    ticket.expected_yt
+}
+
+#[spec_only]
+public fun spec_kai_redeem_ticket_pm_id<T, YT>(ticket: &KaiRedeemTicket<T, YT>): ID {
+    ticket.pm_id
+}
+
+#[spec_only]
+public fun spec_kai_redeem_ticket_expected_underlying<T, YT>(ticket: &KaiRedeemTicket<T, YT>): u64 {
     ticket.expected_underlying
 }

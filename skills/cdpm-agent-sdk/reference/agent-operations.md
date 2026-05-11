@@ -243,24 +243,24 @@ async function agentTransferFeeToBalance(
 
 ## Scallop Lending (Supply / Redeem Idle Balance)
 
-cdpm exposes a hot-potato lending API shared by owner / agent / whitelisted protocol bots. Authorization is decided in `assert_caller_authorized` inside `start_supply` and `start_redeem`: agents pass when their address is in `pm.agents`. `finish_supply` / `finish_redeem` only check `ticket.pm_id == object::id(pm)`.
+cdpm exposes a hot-potato lending API shared by owner / agent / whitelisted protocol bots. Authorization is decided in `assert_caller_authorized` inside `scallop_start_supply` and `scallop_start_redeem`: agents pass when their address is in `pm.agents`. `scallop_finish_supply` / `scallop_finish_redeem` only check `ticket.pm_id == object::id(pm)`.
 
 ### Constraints Agents Should Know
 
 - **One vault per underlying T**: `pm.lending` keys on the underlying `T` only. The sCoin type is structurally pinned to `MarketCoin<T>` by the type system, so a fake-sCoin variant cannot be supplied — there is no longer a separate `S` generic to mismatch.
-- **Yield fee applies to agents**: `finish_redeem` computes `fee_amount = floor(max(0, redeemed − principal_portion) × fee_house.fee_rate / 10_000)` regardless of caller, so agent redeems pay the same yield fee as owner / protocol redeems.
-- **Owner-only**: `user_extract_market_coin<T>` aborts with `ENotOwner (1001)` for agents. If Scallop is unreachable, only the owner can rescue raw sCoin.
-- **Agents cannot short-change the vault**: `finish_supply` requires `Coin<MarketCoin<T>>` (the only way to obtain a non-zero `Coin<MarketCoin<T>>` is through Scallop's `mint`, since `MarketCoin` has only `drop` and no public constructor) and asserts `actual >= ticket.expected_scoin`. The same two-axis defense applies on redeem.
+- **Yield fee applies to agents**: `scallop_finish_redeem` computes `fee_amount = floor(max(0, redeemed − principal_portion) × fee_house.fee_rate / 10_000)` regardless of caller, so agent redeems pay the same yield fee as owner / protocol redeems.
+- **Owner-only**: `user_extract_scallop_market_coin<T>` aborts with `ENotOwner (1001)` for agents. If Scallop is unreachable, only the owner can rescue raw sCoin.
+- **Agents cannot short-change the vault**: `scallop_finish_supply` requires `Coin<MarketCoin<T>>` (the only way to obtain a non-zero `Coin<MarketCoin<T>>` is through Scallop's `mint`, since `MarketCoin` has only `drop` and no public constructor) and asserts `actual >= ticket.expected_scoin`. The same two-axis defense applies on redeem.
 
 ### PTB Recipe — Agent Supply
 
-The first command of any supply PTB **MUST** be `protocol::accrue_interest::accrue_interest_for_market`. cdpm reads `balance_sheet` view-only; without a fresh accrual the predicted `expected_scoin` exceeds what Scallop actually mints, and `finish_supply` aborts with `EAmountShortfall (1009)`.
+The first command of any supply PTB **MUST** be `protocol::accrue_interest::accrue_interest_for_market`. cdpm reads `balance_sheet` view-only; without a fresh accrual the predicted `expected_scoin` exceeds what Scallop actually mints, and `scallop_finish_supply` aborts with `EAmountShortfall (1009)`.
 
 ```
 1. protocol::accrue_interest::accrue_interest_for_market(version, market, clock)
-2. cdpm::start_supply<T>(access, pm, market, amount)              → (coin_t, ticket)
+2. cdpm::scallop_start_supply<T>(access, pm, market, amount)              → (coin_t, ticket)
 3. protocol::mint::mint<T>(version, market, coin_t, clock)        → coin_market<T>
-4. cdpm::finish_supply<T>(pm, ticket, coin_market)
+4. cdpm::scallop_finish_supply<T>(pm, ticket, coin_market)
 ```
 
 ```typescript
@@ -283,7 +283,7 @@ async function agentSupplyToScallop(
   });
 
   const [coinT, ticket] = tx.moveCall({
-    target: `${CDPM_PACKAGE}::cdpm::start_supply`,
+    target: `${CDPM_PACKAGE}::cdpm::scallop_start_supply`,
     typeArguments: [underlyingCoinType],
     arguments: [
       tx.object(CDPM_MAINNET.ACCESS_LIST_ID),
@@ -305,7 +305,7 @@ async function agentSupplyToScallop(
   });
 
   tx.moveCall({
-    target: `${CDPM_PACKAGE}::cdpm::finish_supply`,
+    target: `${CDPM_PACKAGE}::cdpm::scallop_finish_supply`,
     typeArguments: [underlyingCoinType],
     arguments: [tx.object(pmId), ticket, coinMarket],
   });
@@ -320,9 +320,9 @@ Same accrual-first rule. Net underlying (after yield fee) lands back in `pm.bala
 
 ```
 1. protocol::accrue_interest::accrue_interest_for_market(version, market, clock)
-2. cdpm::start_redeem<T>(access, pm, market, scoin_amount)            → (coin_market, ticket)
+2. cdpm::scallop_start_redeem<T>(access, pm, market, scoin_amount)            → (coin_market, ticket)
 3. protocol::redeem::redeem<T>(version, market, coin_market, clock)   → coin_t
-4. cdpm::finish_redeem<T>(pm, fee_house, ticket, coin_t)
+4. cdpm::scallop_finish_redeem<T>(pm, fee_house, ticket, coin_t)
 ```
 
 ```typescript
@@ -345,7 +345,7 @@ async function agentRedeemFromScallop(
   });
 
   const [coinMarket, ticket] = tx.moveCall({
-    target: `${CDPM_PACKAGE}::cdpm::start_redeem`,
+    target: `${CDPM_PACKAGE}::cdpm::scallop_start_redeem`,
     typeArguments: [underlyingCoinType],
     arguments: [
       tx.object(CDPM_MAINNET.ACCESS_LIST_ID),
@@ -367,7 +367,7 @@ async function agentRedeemFromScallop(
   });
 
   tx.moveCall({
-    target: `${CDPM_PACKAGE}::cdpm::finish_redeem`,
+    target: `${CDPM_PACKAGE}::cdpm::scallop_finish_redeem`,
     typeArguments: [underlyingCoinType],
     arguments: [
       tx.object(pmId),
@@ -381,9 +381,9 @@ async function agentRedeemFromScallop(
 }
 ```
 
-### Sizing Redemptions Before Calling `start_redeem`
+### Sizing Redemptions Before Calling `scallop_start_redeem`
 
-Agent bots typically know "I need `K` underlying to fund a rebalance" and must compute `market_coin_amount` from that. `start_redeem` takes sCoin, not underlying, so the bot has to invert `compute_expected_underlying` (and the yield-fee deduction) before signing.
+Agent bots typically know "I need `K` underlying to fund a rebalance" and must compute `market_coin_amount` from that. `scallop_start_redeem` takes sCoin, not underlying, so the bot has to invert `compute_expected_underlying_scallop` (and the yield-fee deduction) before signing.
 
 There are two practical inverses:
 
@@ -432,8 +432,8 @@ async function agentSizedRedeem(
 }
 ```
 
-The closed-form approximation is occasionally off-by-one due to per-step floors inside `finish_redeem`; the iterative helper bumps `N` upward by 1 sCoin until forward simulation confirms `>= desiredNet`. Re-snapshot the reserve and vault *after* `accrue_interest_for_market` and before sizing — stale snapshots can leave the bot 1-2 underlying short on the very next block.
+The closed-form approximation is occasionally off-by-one due to per-step floors inside `scallop_finish_redeem`; the iterative helper bumps `N` upward by 1 sCoin until forward simulation confirms `>= desiredNet`. Re-snapshot the reserve and vault *after* `accrue_interest_for_market` and before sizing — stale snapshots can leave the bot 1-2 underlying short on the very next block.
 
 ### Tickets Are Hot Potatoes
 
-`SupplyTicket<T>` and `RedeemTicket<T>` have **no `drop` ability** — the only way to discharge them is via the matching `finish_*` call inside the same PTB. If your strategy chains conditional commands, never branch the ticket out of the success path.
+`ScallopSupplyTicket<T>` and `ScallopRedeemTicket<T>` have **no `drop` ability** — the only way to discharge them is via the matching `finish_*` call inside the same PTB. If your strategy chains conditional commands, never branch the ticket out of the success path.

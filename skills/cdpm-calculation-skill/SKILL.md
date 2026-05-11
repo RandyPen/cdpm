@@ -1,13 +1,13 @@
 ---
 name: cdpm-calculation-skill
-description: CDPM calculation utilities using Cetus DLMM SDK plus the Scallop lending math used by start_supply / start_redeem / finish_redeem. Provides liquidity calculation, bin price math, position management, fee calculations, and yield-fee accounting. Use when performing mathematical operations for CDPM positions.
+description: CDPM calculation utilities using Cetus DLMM SDK plus the Scallop and Kai SAV lending math used by scallop_start_supply / scallop_start_redeem / scallop_finish_redeem and their Kai counterparts. Provides liquidity calculation, bin price math, position management, fee calculations, and yield-fee accounting for both lending integrations. Use when performing mathematical operations for CDPM positions.
 ---
 
 # CDPM Calculation Guide
 
 ## Overview
 
-This skill provides calculation utilities for CDPM (Cetus DLMM Position Manager) using the **Cetus DLMM SDK**, plus off-chain twins of the Scallop lending math the cdpm contract performs on-chain. All Cetus calculations should use the SDK for accuracy and to handle edge cases properly; the Scallop formulas mirror the on-chain implementations in `sources/cdpm.move`.
+This skill provides calculation utilities for CDPM (Cetus DLMM Position Manager) using the **Cetus DLMM SDK**, plus off-chain twins of **both** lending integrations' math the cdpm contract performs on-chain — Scallop (`scallop_*`) and Kai SAV (`kai_*`). All Cetus calculations should use the SDK for accuracy and to handle edge cases properly; the Scallop and Kai formulas mirror the on-chain implementations in `sources/cdpm.move`. The two integrations share `pm.lending: Bag`, the hot-potato ticket pattern, and a single `fee_house.fee_rate` knob, so the principal-amortization and yield-fee math is structurally identical — only the `compute_expected_*` predictors differ (Scallop reads `balance_sheet`, Kai reads `total_available_balance` + `total_yt_supply`).
 
 ## Installation
 
@@ -32,6 +32,7 @@ import { BinUtils, FeeUtils } from '@cetusprotocol/dlmm-sdk/utils'
 - **[Fee Calculations](reference/fee-calculations.md)** - Variable fee, protocol fee, composition fee
 - **[Position Query](reference/position-query.md)** - Query PositionManager assets, fees, and rewards
 - **[Scallop Lending Math](reference/scallop-lending-math.md)** - Expected sCoin / underlying, principal amortization, yield-fee deduction, **redemption sizing** (inverse formulas: sCoin to burn for target underlying / target net-after-fee, with worked example)
+- **[Kai SAV Lending Math](reference/kai-lending-math.md)** - Expected YT / underlying for Kai's `<T, YT>` vault, principal amortization, yield-fee deduction, **redemption sizing** (inverse formulas: YT to burn for target underlying / target net-after-fee, with worked example)
 
 ### Advanced Topics
 - **[Price Conversion](reference/price-conversion.md)** - Compare CDPM prices with external exchanges

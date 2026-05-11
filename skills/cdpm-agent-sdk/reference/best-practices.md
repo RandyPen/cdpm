@@ -105,24 +105,32 @@ async function executeWithGasOptimization(
 }
 ```
 
-## Scallop Lending Pre-Flight
+## Lending Pre-Flight
 
-When chaining a supply or redeem, the **first** PTB command must be `protocol::accrue_interest::accrue_interest_for_market(version, market, clock)`. cdpm only reads Scallop's `balance_sheet` view-only (`compute_expected_scoin` / `compute_expected_underlying`), so a stale accrual will make the predicted scoin/underlying exceed what Scallop actually mints/redeems and `finish_supply` / `finish_redeem` will abort with `EAmountShortfall (1009)`.
+cdpm exposes **two** lending integrations with different pre-flight needs.
 
-Recommended PTB shape for an agent:
+### Scallop (`scallop_start_*` / `scallop_finish_*`)
+
+When chaining a supply or redeem, the **first** PTB command must be `protocol::accrue_interest::accrue_interest_for_market(version, market, clock)`. cdpm only reads Scallop's `balance_sheet` view-only (`compute_expected_scoin` / `compute_expected_underlying_scallop`), so a stale accrual will make the predicted scoin/underlying exceed what Scallop actually mints/redeems and `scallop_finish_supply` / `scallop_finish_redeem` will abort with `EAmountShortfall (1009)`.
+
+Recommended PTB shape:
 
 ```
 1. accrue_interest_for_market
-2. cdpm::start_supply  | cdpm::start_redeem
+2. cdpm::scallop_start_supply  | cdpm::scallop_start_redeem
 3. protocol::mint::mint | protocol::redeem::redeem
-4. cdpm::finish_supply | cdpm::finish_redeem
+4. cdpm::scallop_finish_supply | cdpm::scallop_finish_redeem
 ```
 
-Other agent-side notes:
+### Kai SAV (`kai_start_*` / `kai_finish_*`)
 
-- One vault per underlying `T`. The sCoin type is structurally pinned to `MarketCoin<T>` by the type system, so agents cannot supply a fake or alternate sCoin — there is no `S` generic to mismatch.
-- Agent redeems still pay the protocol yield fee (`fee_house.fee_rate × interest_portion`) just like owner / protocol redeems.
-- Agents cannot short-change the vault: `finish_supply` only accepts `Coin<MarketCoin<T>>` (the only way to obtain a non-zero `Coin<MarketCoin<T>>` is through Scallop's `mint`, since `MarketCoin` has only `drop` and no public constructor) and asserts `actual >= ticket.expected_scoin`.
+**No pre-flight accrual command.** Kai's `total_available_balance(vault, clock)` already folds in time-locked profit via `tlb::max_withdrawable`, and cdpm's `compute_expected_yt` / `compute_expected_underlying_kai` read the same auto-accruing pair. Re-snapshot the vault immediately before signing — `total_available_balance` ticks every block as time-locked profit unlocks, and stale snapshots can leave the bot 1-2 underlying short. See [`kai-lending.md`](./kai-lending.md) for the Kai-specific PTB recipe (which includes a multi-step strategy walk on the redeem path).
+
+### Shared agent-side notes
+
+- One Scallop vault per underlying `T`; one Kai vault per `(T, YT)` pair (bag keys differ — `type_name<T>` vs `type_name<YT>` — so the same underlying can hold both simultaneously). The sCoin type is structurally pinned to `MarketCoin<T>`, and `Coin<YT>` is type-pinned to Kai's `Vault<T, YT>` (whose `TreasuryCap` is private). Agents cannot supply a fake market coin or YT.
+- Agent redeems pay the protocol yield fee (`fee_house.fee_rate × interest_portion`) on **both** Scallop and Kai paths, just like owner / protocol redeems. The same `fee_house.fee_rate` is shared.
+- Agents cannot short-change either vault: `scallop_finish_supply` asserts `actual >= ticket.expected_scoin`; `kai_finish_supply` asserts `actual >= ticket.expected_yt`.
 
 ## Surfacing Close-Position Warnings
 
@@ -130,7 +138,7 @@ Agents do **not** call `user_close_pm` themselves — only the position owner ca
 
 > `pool::close_position` (used internally by `user_close_pm`) only returns underlying tokens and accumulated trading fees. Any **incentive reward tokens** still held by the position will be destroyed together with the `ClosePositionCert`. The owner's PTB must call `user_collect_reward<CoinTypeA, CoinTypeB, RewardType>` once for each reward token on the pool (typically 1-3 types) **before** `user_close_pm`, in the same transaction.
 
-> Additionally, `user_close_pm` now asserts `bag::is_empty(&pm.lending)` and aborts with `ELendingNotEmpty (1004)` otherwise. Drain every `ScallopVault<T>` first — agents can run the full `accrue_interest → start_redeem → redeem::redeem → finish_redeem` PTB, but the **owner-only** `user_extract_market_coin` is the rescue path when Scallop is unreachable.
+> Additionally, `user_close_pm` now asserts `bag::is_empty(&pm.lending)` and aborts with `ELendingNotEmpty (1004)` otherwise — the same assertion covers both Scallop `ScallopVault<T>` entries and Kai `KaiVault<T, YT>` entries. Agents can run the full Scallop redeem PTB (`accrue_interest → scallop_start_redeem → redeem::redeem → scallop_finish_redeem`) or the full Kai redeem PTB (`kai_start_redeem → vault::withdraw → strategy walk → redeem_withdraw_ticket → kai_finish_redeem`) to drain entries, but the **owner-only** `user_extract_scallop_market_coin` and `user_extract_kai_yt` are the rescue paths when the upstream protocol is unreachable.
 
 See the user-sdk workflow (`cdpm-user-sdk/reference/workflows.md`, section "Close Position Safely") for the complete PTB example to reuse when building the owner-facing transaction.
 

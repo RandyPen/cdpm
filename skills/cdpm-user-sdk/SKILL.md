@@ -1,17 +1,17 @@
 ---
 name: cdpm-user-sdk
-description: TypeScript SDK guide for CDPM (Cetus DLMM Position Manager) end-users. Provides PTB construction patterns for creating positions, managing liquidity, authorizing agents, collecting fees, and supplying/redeeming idle funds via Scallop lending. Use when users need to interact with CDPM contract through TypeScript SDK.
+description: TypeScript SDK guide for CDPM (Cetus DLMM Position Manager) end-users. Provides PTB construction patterns for creating positions, managing liquidity, authorizing agents, collecting fees, and supplying/redeeming idle funds via Scallop lending or Kai SAV lending. Use when users need to interact with CDPM contract through TypeScript SDK.
 ---
 
 # CDPM User SDK Guide
 
 ## Overview
 
-CDPM (Cetus DLMM Position Manager) is a proxy contract for managing Cetus DLMM positions with support for user self-management, agent delegation, protocol-managed operations, and optional Scallop lending integration for idle funds.
+CDPM (Cetus DLMM Position Manager) is a proxy contract for managing Cetus DLMM positions with support for user self-management, agent delegation, protocol-managed operations, and two optional lending integrations for idle funds: **Scallop** (single-generic `<T>` market coin) and **Kai SAV** (two-generic `<T, YT>` strategy-aggregating vault). Both integrations share `pm.lending: Bag`, the hot-potato ticket pattern, and a single `fee_house.fee_rate` knob.
 
 **Package Address**: `0x0000000000000000000000000000000000000000000000000000000000000000`
 
-> The `PositionManager` struct now contains a fourth bag, `lending: Bag`, keyed by underlying coin type and storing per-(T, S) `ScallopVault` records. See [Scallop Lending](reference/scallop-lending.md) for end-user PTB recipes.
+> The `PositionManager` struct now contains a fourth bag, `lending: Bag`, holding both Scallop `ScallopVault<T>` entries (keyed by `type_name<T>`) and Kai SAV `KaiVault<T, YT>` entries (keyed by `type_name<YT>`) — both can coexist on a single PM. See [Scallop Lending](reference/scallop-lending.md) and [Kai SAV Lending](reference/kai-lending.md) for end-user PTB recipes.
 
 ## Quick Start
 
@@ -47,6 +47,9 @@ const CDPM_PACKAGE = '0x00000000000000000000000000000000000000000000000000000000
 
 ### Scallop Lending (Idle Funds)
 - **[Scallop Lending](reference/scallop-lending.md)** - Hot-potato supply/redeem PTBs, owner-only escape hatch, yield-fee math
+
+### Kai SAV Lending (Idle Funds)
+- **[Kai SAV Lending](reference/kai-lending.md)** - Two-generic `<T, YT>` hot-potato supply/redeem with strategy walk, owner-only `user_extract_kai_yt` escape, shared yield-fee math
 
 ### Web Development & Queries
 - **[Web Query Guide](reference/web-query.md)** - GraphQL queries for PositionManagers
@@ -107,17 +110,17 @@ try {
   } else if (e.message.includes('EInvalidFeeRate')) { // 1003
     console.error('Invalid fee rate configuration (cap is 30% / 3000 bp)');
   } else if (e.message.includes('ELendingNotEmpty')) {// 1004
-    console.error('PositionManager.lending is non-empty — drain Scallop vaults before user_close_pm');
+    console.error('PositionManager.lending is non-empty — drain every Scallop AND Kai vault entry before user_close_pm');
   } else if (e.message.includes('ENoSuchVault')) {    // 1005
-    console.error('No ScallopVault for that underlying coin type');
+    console.error('No ScallopVault<T> or KaiVault<T, YT> entry in pm.lending for the requested key');
   } else if (e.message.includes('EReserveEmpty')) {   // 1006
-    console.error('Scallop reserve has zero supply or zero (cash+debt-revenue) — accrue_interest first?');
+    console.error('Lending reserve degenerate. Scallop: zero supply or zero (cash+debt-revenue) — call accrue_interest_for_market first. Kai: total_yt_supply == 0.');
   } else if (e.message.includes('EZeroExpected')) {   // 1007
-    console.error('start_supply/start_redeem amount too small — would yield 0 scoin/underlying');
+    console.error('scallop_start_* / kai_start_* amount too small — would yield 0 scoin / yt / underlying');
   } else if (e.message.includes('EWrongPm')) {        // 1008
-    console.error('Hot-potato ticket consumed against a different PositionManager');
+    console.error('Hot-potato ticket (Scallop or Kai) consumed against a different PositionManager');
   } else if (e.message.includes('EAmountShortfall')) {// 1009
-    console.error('finish_* received Coin with value < ticket.expected — Scallop returned less than predicted');
+    console.error('finish_* received Coin with value < ticket.expected. Scallop: stale accrual. Kai: vault state moved between snapshot and signing.');
   } else {
     console.error('Transaction failed:', e);
   }

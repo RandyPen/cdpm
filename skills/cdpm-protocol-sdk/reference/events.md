@@ -87,10 +87,10 @@ interface ProtocolRewardCollected {
 
 ## Scallop Lending Events
 
-These three events fire from the shared hot-potato API regardless of which caller initiated the PTB (owner / agent / protocol). They intentionally omit a `by` field — use the Sui event envelope's `event.sender` to attribute the action.
+These three events fire from the shared Scallop hot-potato API regardless of which caller initiated the PTB (owner / agent / protocol). They intentionally omit a `by` field — use the Sui event envelope's `event.sender` to attribute the action.
 
 ```typescript
-// Emitted by finish_supply
+// Emitted by scallop_finish_supply
 interface ScallopSupplied {
   pm_id: string;
   coin_type: string;            // type_name<T> — sCoin type is always MarketCoin<T>
@@ -98,7 +98,7 @@ interface ScallopSupplied {
   market_coin_minted: string;   // sCoin received and added to pm.lending
 }
 
-// Emitted by finish_redeem
+// Emitted by scallop_finish_redeem
 interface ScallopRedeemed {
   pm_id: string;
   coin_type: string;
@@ -109,12 +109,48 @@ interface ScallopRedeemed {
   fee_amount: string;           // protocol yield fee deducted from interest
 }
 
-// Emitted by user_extract_market_coin (owner-only escape hatch)
-interface MarketCoinExtracted {
+// Emitted by user_extract_scallop_market_coin (owner-only escape hatch)
+interface ScallopMarketCoinExtracted {
   pm_id: string;
   coin_type: string;
   market_coin_amount: string;   // raw sCoin transferred to owner
   principal_removed: string;    // principal slice subtracted from the vault
+}
+```
+
+## Kai SAV Lending Events
+
+Same shape as the Scallop events, with the additional `yt_type` field carrying the YT generic for human-readable reporting (the bag key is `type_name<YT>`, but `coin_type` is still required to disambiguate from a hypothetical second YT over the same underlying). No `by` field — use `event.sender` from the envelope.
+
+```typescript
+// Emitted by kai_finish_supply
+interface KaiSupplied {
+  pm_id: string;
+  coin_type: string;            // type_name<T>
+  yt_type: string;              // type_name<YT>
+  deposit_amount: string;       // underlying transferred to Kai's Vault<T, YT>
+  yt_minted: string;            // YT received and added to pm.lending
+}
+
+// Emitted by kai_finish_redeem
+interface KaiRedeemed {
+  pm_id: string;
+  coin_type: string;
+  yt_type: string;
+  yt_burned: string;
+  redeemed_amount: string;      // underlying received from Kai's vault::redeem_withdraw_ticket, pre-fee
+  principal_portion: string;
+  interest: string;
+  fee_amount: string;           // protocol yield fee — shares fee_house.fee_rate with Scallop
+}
+
+// Emitted by user_extract_kai_yt (owner-only escape hatch)
+interface KaiYTExtracted {
+  pm_id: string;
+  coin_type: string;
+  yt_type: string;
+  yt_amount: string;            // raw YT transferred to owner
+  principal_removed: string;    // principal slice subtracted from the KaiVault entry
 }
 ```
 
