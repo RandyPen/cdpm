@@ -7,7 +7,7 @@ use sui::event;
 use sui::vec_set::{Self, VecSet};
 use sui::bag::{Self, Bag};
 use sui::balance::{Self, Balance};
-use sui::coin::Coin;
+use sui::coin::{Self, Coin};
 use sui::table::{Self, Table};
 use sui::clock::Clock;
 
@@ -36,6 +36,7 @@ const EReserveEmpty: u64      = 1006;     // Scallop reserve has zero supply or 
 const EZeroExpected: u64      = 1007;     // start_* would yield 0 scoin/underlying (amount too small)
 const EWrongPm: u64           = 1008;     // hot-potato ticket consumed against a different PM
 const EAmountShortfall: u64   = 1009;     // finish_* received Coin with value < ticket.expected
+const ENoSuchBalance: u64     = 1010;     // withdraw_from_balance/_fee called for an absent type
 
 // ============ Data Structures ============
 public struct AccessList has key {
@@ -142,7 +143,6 @@ public struct LiquidityAdded has copy, drop {
     bins: vector<u32>,
     amount_a: u64,
     amount_b: u64,
-    by: address,
 }
 
 public struct LiquidityRemoved has copy, drop {
@@ -152,7 +152,6 @@ public struct LiquidityRemoved has copy, drop {
     liquidity_shares: vector<u128>,
     amount_a: u64,
     amount_b: u64,
-    by: address,
 }
 
 public struct FeeCollected has copy, drop {
@@ -162,7 +161,6 @@ public struct FeeCollected has copy, drop {
     coin_type_b: String,
     amount_a: u64,
     amount_b: u64,
-    by: address,
 }
 
 public struct RewardCollected has copy, drop {
@@ -170,7 +168,6 @@ public struct RewardCollected has copy, drop {
     pool_id: ID,
     coin_type: String,
     amount: u64,
-    by: address,
 }
 
 public struct ProtocolFeeCollected has copy, drop {
@@ -270,7 +267,6 @@ public struct ProtocolLiquidityAdded has copy, drop {
     bins: vector<u32>,
     amount_a: u64,
     amount_b: u64,
-    by: address,
 }
 
 public struct ProtocolLiquidityRemoved has copy, drop {
@@ -280,7 +276,6 @@ public struct ProtocolLiquidityRemoved has copy, drop {
     liquidity_shares: vector<u128>,
     amount_a: u64,
     amount_b: u64,
-    by: address,
 }
 
 public struct AgentLiquidityAdded has copy, drop {
@@ -289,7 +284,6 @@ public struct AgentLiquidityAdded has copy, drop {
     bins: vector<u32>,
     amount_a: u64,
     amount_b: u64,
-    by: address,
 }
 
 public struct AgentLiquidityRemoved has copy, drop {
@@ -299,7 +293,6 @@ public struct AgentLiquidityRemoved has copy, drop {
     liquidity_shares: vector<u128>,
     amount_a: u64,
     amount_b: u64,
-    by: address,
 }
 
 public struct AgentFeeCollected has copy, drop {
@@ -309,7 +302,6 @@ public struct AgentFeeCollected has copy, drop {
     coin_type_b: String,
     amount_a: u64,
     amount_b: u64,
-    by: address,
 }
 
 public struct AgentRewardCollected has copy, drop {
@@ -317,7 +309,6 @@ public struct AgentRewardCollected has copy, drop {
     pool_id: ID,
     coin_type: String,
     amount: u64,
-    by: address,
 }
 
 public struct ScallopSupplied has copy, drop {
@@ -589,7 +580,6 @@ public fun user_add_liquidity_to_position<CoinTypeA, CoinTypeB>(
         bins: bins_copy,
         amount_a,
         amount_b,
-        by: ctx.sender(),
     });
 }
 
@@ -640,7 +630,6 @@ public fun user_remove_liquidity_from_position<CoinTypeA, CoinTypeB>(
         liquidity_shares,
         amount_a,
         amount_b,
-        by: ctx.sender(),
     });
 
     (balance_a.into_coin(ctx), balance_b.into_coin(ctx))
@@ -671,7 +660,6 @@ public fun user_collect_fee<CoinTypeA, CoinTypeB>(
         coin_type_b: type_name::with_defining_ids<CoinTypeB>().into_string(),
         amount_a,
         amount_b,
-        by: ctx.sender(),
     });
 
     (balance_a.into_coin(ctx), balance_b.into_coin(ctx))
@@ -699,7 +687,6 @@ public fun user_collect_reward<CoinTypeA, CoinTypeB, RewardType>(
         pool_id: object::id(pool),
         coin_type: type_name::with_defining_ids<RewardType>().into_string(),
         amount,
-        by: ctx.sender(),
     });
 
     balance_reward.into_coin(ctx)
@@ -854,7 +841,6 @@ public fun protocol_add_liquidity<CoinTypeA, CoinTypeB>(
         bins: bins_copy,
         amount_a: used_a,
         amount_b: used_b,
-        by: ctx.sender(),
     });
 }
 
@@ -893,7 +879,6 @@ public fun protocol_remove_liquidity<CoinTypeA, CoinTypeB>(
         liquidity_shares,
         amount_a,
         amount_b,
-        by: ctx.sender(),
     });
 }
 
@@ -1029,7 +1014,6 @@ public fun agent_add_liquidity<CoinTypeA, CoinTypeB>(
         bins: bins_copy,
         amount_a: used_a,
         amount_b: used_b,
-        by: ctx.sender(),
     });
 }
 
@@ -1066,7 +1050,6 @@ public fun agent_remove_liquidity<CoinTypeA, CoinTypeB>(
         liquidity_shares,
         amount_a,
         amount_b,
-        by: ctx.sender(),
     });
 }
 
@@ -1097,7 +1080,6 @@ public fun agent_collect_fee<CoinTypeA, CoinTypeB>(
         coin_type_b: type_name::with_defining_ids<CoinTypeB>().into_string(),
         amount_a,
         amount_b,
-        by: ctx.sender(),
     });
 }
 
@@ -1124,7 +1106,6 @@ public fun agent_collect_reward<CoinTypeA, CoinTypeB, RewardType>(
         pool_id: object::id(pool),
         coin_type: type_name::with_defining_ids<RewardType>().into_string(),
         amount,
-        by: ctx.sender(),
     });
 }
 
@@ -1285,6 +1266,7 @@ fun add_to_balance<T>(
     pm: &mut PositionManager,
     coin: Coin<T>,
 ) {
+    if (coin.value() == 0) { coin.destroy_zero(); return };
     let coin_type = type_name::with_defining_ids<T>().into_string();
     if (bag::contains<String>(&pm.balance, coin_type)) {
         balance::join<T>(bag::borrow_mut(&mut pm.balance, coin_type), coin.into_balance());
@@ -1298,7 +1280,9 @@ fun withdraw_from_balance<T>(
     amount: u64,
     ctx: &mut TxContext,
 ): Coin<T> {
+    if (amount == 0) return coin::zero<T>(ctx);
     let coin_type = type_name::with_defining_ids<T>().into_string();
+    assert!(bag::contains<String>(&pm.balance, coin_type), ENoSuchBalance);
     let balance_bm = bag::borrow_mut<String, Balance<T>>(&mut pm.balance, coin_type);
     let balance_amount = balance::value<T>(balance_bm);
     if (amount >= balance_amount) {
@@ -1312,6 +1296,7 @@ fun add_to_fee<T>(
     pm: &mut PositionManager,
     coin: Coin<T>,
 ) {
+    if (coin.value() == 0) { coin.destroy_zero(); return };
     let coin_type = type_name::with_defining_ids<T>().into_string();
     if (bag::contains<String>(&pm.fee, coin_type)) {
         balance::join<T>(bag::borrow_mut(&mut pm.fee, coin_type), coin.into_balance());
@@ -1325,7 +1310,9 @@ fun withdraw_from_fee<T>(
     amount: u64,
     ctx: &mut TxContext,
 ): Coin<T> {
+    if (amount == 0) return coin::zero<T>(ctx);
     let coin_type = type_name::with_defining_ids<T>().into_string();
+    assert!(bag::contains<String>(&pm.fee, coin_type), ENoSuchBalance);
     let balance_bm = bag::borrow_mut<String, Balance<T>>(&mut pm.fee, coin_type);
     let balance_amount = balance::value<T>(balance_bm);
     if (amount >= balance_amount) {
@@ -1445,6 +1432,9 @@ fun compute_expected_underlying_scallop<T>(market: &Market, scoin_amount: u64): 
     let revenue_u = revenue as u128;
     assert!(cash_u + debt_u >= revenue_u, EReserveEmpty);
     let numer_extra = cash_u + debt_u - revenue_u;
+    // u128 is sufficient. Scallop enforces (cash + debt - revenue) ≤ u64::MAX
+    // via u64 arithmetic in reserve.move (`accrue_interest`, `into_underlying_coin_amount`),
+    // so numer_extra ≤ 2^64 - 1 and the product scoin_amount * numer_extra ≤ (2^64 - 1)^2 < 2^128.
     (((scoin_amount as u128) * numer_extra / (supply as u128)) as u64)
 }
 

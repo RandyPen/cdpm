@@ -150,8 +150,9 @@ public struct Record has key {
 **Capabilities:**
 - Add/remove liquidity (using balance)
 - Collect fees/rewards (to fee bag)
-- Cannot withdraw funds
-- Cannot modify PositionManager configuration
+- **Move fees from `fee` bag back into `balance`** via `agent_transfer_fee_to_balance` (intentional auto-compound surface — see §Permission Boundaries below)
+- Cannot transfer funds out of the PositionManager
+- Cannot modify PositionManager configuration (owner / agents list / position open or close)
 
 **Functions:** All `agent_*` functions
 
@@ -189,6 +190,16 @@ public struct Record has key {
 *With protocol fee deduction
 †To fee bag only
 ‡Without fee collection
+
+### Permission Boundaries — Operational Notes
+
+These are intentional design choices. Front-ends and SDKs MUST surface them:
+
+1. **Agents may auto-compound fees.** `agent_transfer_fee_to_balance<T>` lets an authorized agent migrate accumulated `fee` bag entries into `balance`, where they can be redeployed as liquidity by `agent_add_liquidity`. Owners who want fees to settle into a withdraw-only bucket should NOT keep an agent authorized while fees accrue. Funds never leave the PositionManager — only the bucket changes — but the agent does effectively control reinvestment of realized fees.
+
+2. **`user_close_pm` requires zero pending pool rewards.** `pool::close_position` returns a `ClosePositionCert` whose embedded reward state must be drained before `pool::destroy_close_position_cert` is called; otherwise Cetus aborts with `EPositionRewardNotZero`. CDPM does not iterate reward types inside `user_close_pm` (reward types are generic and unknown to the function). Caller responsibility: invoke `user_collect_reward<CoinTypeA, CoinTypeB, R>` for **every** reward type the underlying pool emits, in the same PTB or earlier transactions, before calling `user_close_pm`. SDKs should query the pool's reward types and emit the matching collect calls automatically. Same applies to `pm.lending` — redeem all Scallop / Kai positions first, otherwise close aborts with `ELendingNotEmpty`.
+
+3. **`withdraw_from_balance` / `withdraw_from_fee` short-circuit `amount == 0` to `coin::zero<T>(ctx)`** (no Bag access). Single-sided `protocol_/agent_add_liquidity` therefore works without seeding the unused side. Callers requesting `amount > 0` of a type the PM has never held still abort with `ENoSuchBalance` (1010); SDKs should query the bag before requesting a positive withdraw.
 
 ## Fee Mechanism
 
