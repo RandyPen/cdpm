@@ -203,6 +203,51 @@ async function userRedeemFromScallop(
 
 The post-fee underlying lands back in `pm.balance[T]`; you can withdraw it later with `user_remove_liquidity_from_balance`.
 
+### Sizing Redemptions
+
+`start_redeem` takes a `market_coin_amount` (sCoin), but most callers think in terms of *underlying they need*. Two inverses cover the realistic cases:
+
+- **Pre-fee target.** I want at least `K` underlying out of Scallop, fee aside. `scoin_to_burn = ceil(K × supply / denom)` where `denom = cash + debt − revenue`.
+- **Post-fee target.** I want at least `K` net underlying credited to `pm.balance[T]` after the yield fee. The closed form is `N ≈ ceil(K / (p × (1 − r) + r × π))` when there is interest (the typical case `p > π`), where `p = denom / supply`, `π = principal / scoinTotal`, `r = fee_rate / 10000`.
+
+Both formulas use **ceiling** division — Scallop floors the actual underlying delivered, so flooring `N` would risk receiving 1 unit fewer than `K`. Cross-link: the full derivation, edge cases (no-interest branch, vault drain, socialized loss), and an iterative refinement helper live in [`cdpm-calculation-skill/reference/scallop-lending-math.md`](../../cdpm-calculation-skill/reference/scallop-lending-math.md) section 7.
+
+```typescript
+import {
+  scoinToBurnForTargetUnderlying,
+  scoinToBurnForTargetNet,
+} from './scallop-lending-math'; // your local copy
+
+// "Give me 100 underlying out of Scallop, fee aside."
+const nPreFee = scoinToBurnForTargetUnderlying(
+  reserveSnapshot,
+  100_000_000n,             // K, in underlying base units
+  vaultSnapshot.scoinTotal,
+);
+
+// "Credit at least 100 underlying to pm.balance after the yield fee."
+const nPostFee = scoinToBurnForTargetNet(
+  reserveSnapshot,
+  vaultSnapshot,
+  100_000_000n,             // K
+  2_000n,                   // 2000 bp = 20%
+);
+
+// Feed it straight into start_redeem.
+tx.moveCall({
+  target: `${CDPM_PACKAGE}::cdpm::start_redeem`,
+  typeArguments: [underlyingCoinType],
+  arguments: [
+    tx.object(CDPM_MAINNET.ACCESS_LIST_ID),
+    tx.object(pmId),
+    tx.object(SCALLOP_MARKET_ID),
+    tx.pure.u64(nPostFee),  // sentinel MAX_U64 drains the whole vault
+  ],
+});
+```
+
+If the helper returns `MAX_U64` it means the vault cannot satisfy your target; passing `MAX_U64` to `start_redeem` drains the entire vault and returns whatever Scallop pays out.
+
 ---
 
 ## Owner-Only Escape: Extract Raw sCoin

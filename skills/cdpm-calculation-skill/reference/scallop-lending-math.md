@@ -181,7 +181,7 @@ Important properties:
 
 ## 6. End-to-End Prediction Helper
 
-Wrap the four formulas to predict the post-redeem `pm.balance[T]` delta given a snapshot:
+Wrap the four formulas to predict the post-redeem `pm.balance[T]` delta given a snapshot. The same `ReserveSnapshot` / `VaultSnapshot` types are reused by the inverse helpers in section 7.
 
 ```typescript
 interface ReserveSnapshot {
@@ -223,11 +223,218 @@ function predictRedeem(
 }
 ```
 
-Live Scallop redeem may pay slightly more than `expectedUnderlying` (the contract only asserts `>=`); use `expectedUnderlying` as the conservative lower bound for your strategy logic.
+Live Scallop redeem may pay slightly more than `expectedUnderlying` (the contract only asserts `>=`); use `expectedUnderlying` as the conservative lower bound for your strategy logic. The same applies to `toBalance`: it is a lower bound on what actually lands in `pm.balance[T]` after `finish_redeem`.
+
+### 6.1 Forward direction — "I burn N sCoin, what do I net?"
+
+Already covered by `predictRedeem(reserve, vault, N, feeRateBp).toBalance`. This is the answer to *"what underlying lands in `pm.balance[T]`?"*. See section 3 for the raw `compute_expected_underlying` formula and section 5 for the yield-fee deduction.
 
 ---
 
-## 7. Reading Reserve State Off-Chain
+## 7. Inverse Direction — Sizing Redemptions
+
+The forward formulas in sections 2-6 answer "given an `N` sCoin to burn, what comes back?". The inverse — "I need at least `K` underlying, what `N` do I feed `start_redeem`?" — is what bots and rebalancing strategies actually need at call sites.
+
+### 7.1 Inverse: sCoin to burn for target underlying (pre-fee)
+
+`compute_expected_underlying` is `floor(N × denom / supply)`. To guarantee the on-chain output is `>= K`, invert with **ceiling** division:
+
+```
+scoin_to_burn = ceil(K × supply / denom)
+              = (K × supply + denom − 1) / denom    // integer ceil
+```
+
+Use ceiling because Scallop's redeem floors the underlying output. If you ask for `floor(K × supply / denom)` sCoin you may receive 1 unit fewer than `K`. Ceiling rounds up so you receive `>= K` (possibly 1 unit more, never 1 unit less).
+
+If the resulting `scoin_to_burn` exceeds `vault.scoinTotal`, the user wants more underlying than the vault contains. Either lower the target or `MAX_U64`-redeem the whole vault and accept whatever drains.
+
+```typescript
+const MAX_U64 = (1n << 64n) - 1n;
+
+function ceilDiv(a: bigint, b: bigint): bigint {
+  if (b <= 0n) throw new Error('ceilDiv: divisor must be positive');
+  return (a + b - 1n) / b;
+}
+
+/**
+ * Inverse of `compute_expected_underlying`. Returns the smallest `N` such that
+ * `floor(N × denom / supply) >= desiredUnderlying`.
+ *
+ * Throws `EReserveEmpty (1006)` when `denom == 0` or `cash + debt < revenue`.
+ * Returns `MAX_U64` when the vault cannot satisfy the target — caller should
+ * either drain (`MAX_U64`-redeem) or downsize the request.
+ */
+function scoinToBurnForTargetUnderlying(
+  reserve: ReserveSnapshot,
+  desiredUnderlying: bigint,
+  vaultScoinTotal: bigint,
+): bigint {
+  if (desiredUnderlying <= 0n) return 0n;
+  if (reserve.supply === 0n) throw new Error('EReserveEmpty (1006)');
+  if (reserve.cash + reserve.debt < reserve.revenue) {
+    throw new Error('EReserveEmpty (1006)');
+  }
+  const denom = reserve.cash + reserve.debt - reserve.revenue;
+  if (denom === 0n) throw new Error('EReserveEmpty (1006)');
+
+  const n = ceilDiv(desiredUnderlying * reserve.supply, denom);
+  return n > vaultScoinTotal ? MAX_U64 : n;
+}
+```
+
+Note the `MAX_U64` sentinel: callers can pass that straight into `start_redeem`'s `market_coin_amount`; `pull_from_lending` clamps to the vault's `scoinTotal` and removes the vault entry, returning whatever the live reserve pays out.
+
+### 7.2 Inverse: sCoin to burn for target **net** underlying (after yield-fee)
+
+This is the practically useful inverse for an agent / bot driving redeems. Solve for `N` (sCoin to burn) such that the post-fee underlying credited to `pm.balance[T]` is `>= K`:
+
+```
+Let r = fee_rate / 10000           (e.g. 0.20 for 2000 bp)
+Let π = P_vault / S_vault          (per-scoin principal share)
+Let p = denom / supply             (per-scoin underlying value, "ε")
+
+Per-sCoin redemption (real-arithmetic, ignoring floors):
+  underlying_per_scoin        = p
+  principal_portion_per_scoin ≈ π
+  interest_per_scoin          = max(0, p − π)
+  fee_per_scoin               = r × interest_per_scoin
+  net_per_scoin               = p − fee_per_scoin
+                              = p − r × max(0, p − π)
+                              = p × (1 − r) + r × π     when p >  π   (typical, ε > 1)
+                              = p                        when p <= π  (no interest, no fee)
+
+So:
+  N ≈ ceil(K / net_per_scoin)
+    = ceil(K × 10000 × S_vault
+           / ((10000 − r_bp) × denom × S_vault / supply + r_bp × P_vault))    when p >  π
+    = ceil(K × supply / denom)                                                 when p <= π
+```
+
+The closed form is an *approximation* because each on-chain step floors independently:
+
+1. `principal_portion = floor(P × N / S)` discards up to `1` unit of principal.
+2. `expected_underlying = floor(N × denom / supply)` discards up to `1` unit of underlying.
+3. `fee_amount = floor(interest × r_bp / 10000)` discards up to `1` unit of fee.
+
+Each floor pushes `net` slightly *higher* than the closed-form predicts (less fee paid, less interest counted), which is safe — the closed form is a conservative *lower bound* on `net`, so the resulting `N` is occasionally 1 unit larger than the true minimum. That is acceptable; it never under-funds. Use the iterative refinement helper below if you want the exact minimum `N`.
+
+```typescript
+const FEE_DENOMINATOR = 10_000n;
+
+/**
+ * Closed-form approximation: smallest `N` such that the post-fee net
+ * underlying credited to `pm.balance[T]` is `>= desiredNet`.
+ *
+ * Returns 0 when `desiredNet <= 0`. Returns `MAX_U64` when the vault cannot
+ * satisfy the request — caller should drain.
+ */
+function scoinToBurnForTargetNetClosedForm(
+  reserve: ReserveSnapshot,
+  vault: VaultSnapshot,
+  desiredNet: bigint,
+  feeRateBp: bigint,
+): bigint {
+  if (desiredNet <= 0n) return 0n;
+  if (reserve.supply === 0n) throw new Error('EReserveEmpty (1006)');
+  if (reserve.cash + reserve.debt < reserve.revenue) {
+    throw new Error('EReserveEmpty (1006)');
+  }
+  if (vault.scoinTotal === 0n) return MAX_U64;
+  const denom = reserve.cash + reserve.debt - reserve.revenue;
+  if (denom === 0n) throw new Error('EReserveEmpty (1006)');
+
+  // p = denom / supply, π = P_vault / S_vault. Compare without dividing.
+  // p > π  ⇔  denom × S_vault > supply × P_vault
+  const pTimesS = denom * vault.scoinTotal;
+  const piTimesS = reserve.supply * vault.principalTotal;
+  const interestExists = pTimesS > piTimesS;
+
+  let n: bigint;
+  if (!interestExists) {
+    // No interest, no fee — pure ceil(K × supply / denom).
+    n = ceilDiv(desiredNet * reserve.supply, denom);
+  } else {
+    // net_per_scoin = ((10000 − r) × denom × S_vault + r × supply × P_vault)
+    //                 / (10000 × supply × S_vault)
+    // N = ceil(desiredNet / net_per_scoin)
+    //   = ceil(desiredNet × 10000 × supply × S_vault
+    //          / ((10000 − r) × denom × S_vault + r × supply × P_vault))
+    const r = feeRateBp;
+    const numer =
+      desiredNet * FEE_DENOMINATOR * reserve.supply * vault.scoinTotal;
+    const denomTerm =
+      (FEE_DENOMINATOR - r) * denom * vault.scoinTotal +
+      r * reserve.supply * vault.principalTotal;
+    if (denomTerm === 0n) return MAX_U64;
+    n = ceilDiv(numer, denomTerm);
+  }
+
+  return n > vault.scoinTotal ? MAX_U64 : n;
+}
+
+/**
+ * Iterative refinement: starts from the closed-form approximation and bumps
+ * `N` upward by 1 sCoin at a time until forward simulation
+ * (`predictRedeem.toBalance`) confirms `>= desiredNet`. Caps at a small
+ * iteration budget — in practice the closed form is exact or off-by-one.
+ *
+ * Returns either the minimum `N` that satisfies the target or `MAX_U64` when
+ * the vault cannot.
+ */
+function scoinToBurnForTargetNet(
+  reserve: ReserveSnapshot,
+  vault: VaultSnapshot,
+  desiredNet: bigint,
+  feeRateBp: bigint,
+  maxIterations: bigint = 8n,
+): bigint {
+  let n = scoinToBurnForTargetNetClosedForm(
+    reserve, vault, desiredNet, feeRateBp,
+  );
+  if (n === MAX_U64) return MAX_U64;
+
+  for (let i = 0n; i < maxIterations; i++) {
+    if (n > vault.scoinTotal) return MAX_U64;
+    if (n === 0n) { n = 1n; continue; }
+    const sim = predictRedeem(reserve, vault, n, feeRateBp);
+    if (sim.toBalance >= desiredNet) return n;
+    n += 1n;
+  }
+  // Fell through the budget — vault probably cannot satisfy the request.
+  return n > vault.scoinTotal ? MAX_U64 : n;
+}
+```
+
+**Caveats:**
+
+- The closed-form denominator `((10000 − r) × denom × S + r × supply × P)` can be very large under realistic mainnet values; `bigint` handles it without overflow but be aware that intermediate products are `O(u64⁴)`.
+- The split between "interest exists" and "no interest" is a strict `>` on the cross-multiplied comparison. Equality (`p == π`) is degenerate — typically only at vault initialization before any yield has accrued, where there is also no interest to fee.
+- In a *socialized loss* scenario where Scallop's reserve underflows and `denom < principal_per_scoin × supply / S_vault`, the per-scoin underlying drops below the per-scoin principal. The closed form correctly falls into the `interestExists = false` branch (no fee), but the redeemed amount is also less than the principal slice. Net is just `expected_underlying`; the fee path stays `0`. cdpm itself does not surface a special error for this — `finish_redeem` simply skips the fee branch and forwards the full underlying.
+
+### 7.3 Worked Example
+
+Vault state: `S_vault = 1000` sCoin, `P_vault = 950` underlying (principal). Reserve: `cash + debt − revenue = 1100`, `supply = 1050`. Fee rate = `2000` bp = 20%.
+
+Implied per-sCoin values: `p = 1100/1050 ≈ 1.0476`, `π = 950/1000 = 0.95`. Since `p > π`, interest exists.
+
+**Goal:** redeem so that `>= 100` underlying lands in `pm.balance[T]` net of fee.
+
+1. `net_per_scoin = 1.0476 × 0.8 + 0.2 × 0.95 = 0.8381 + 0.19 = 1.0281`
+2. Closed-form `N ≈ ceil(100 / 1.0281) = 98` sCoin.
+3. Forward simulation with `N = 98`:
+   - `principal_portion = floor(950 × 98 / 1000) = floor(93.1) = 93`
+   - `expected_underlying = floor(98 × 1100 / 1050) = floor(102.67) = 102`
+   - `interest = 102 − 93 = 9`
+   - `fee = floor(9 × 2000 / 10000) = floor(1.8) = 1`
+   - `net = 102 − 1 = 101`  →  `101 >= 100`  ✓
+
+The forward sim confirms the closed form. The user feeds `start_redeem` with `market_coin_amount = 98`, the bot pays `1` underlying yield fee, and `pm.balance[T]` increases by `101`.
+
+If `desiredNet` had been `103`, the closed-form would have returned `N = 101`, and forward sim would have yielded `net = 103` exactly — the iterative refinement helper would not have needed to bump.
+
+---
+
+## 8. Reading Reserve State Off-Chain
 
 The simplest approach is a dry-run of the same accrue-then-read PTB:
 
@@ -243,10 +450,11 @@ Because cdpm imports the same view path (`protocol::reserve` + `x::wit_table`), 
 
 ---
 
-## 8. Safety Margins
+## 9. Safety Margins
 
 When sizing inputs:
 
 - For `start_supply<T>`: `coin_amount × supply >= denom_underlying` to avoid `EZeroExpected`. In practice deposit at least a few hundred MIST equivalents.
-- For `start_redeem<T>`: `scoin_amount × denom_underlying >= supply` for the same reason.
+- For `start_redeem<T>`: `scoin_amount × denom_underlying >= supply` for the same reason. The inverse helpers in section 7 already enforce ceiling rounding, so they cannot produce `N = 0` for any positive target.
 - For both, build in headroom against `EAmountShortfall` by either calling `accrue_interest_for_market` immediately before, or shaving a small slippage off `expected_*` and verifying live values match before signing.
+- When using `scoinToBurnForTargetNet` for a rebalancing bot: re-snapshot `reserve` and `vault` *after* the accrual command and before signing — sizing on stale snapshots can leave you 1-2 underlying short on the very next block.

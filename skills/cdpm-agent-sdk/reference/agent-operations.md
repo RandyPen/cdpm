@@ -381,6 +381,59 @@ async function agentRedeemFromScallop(
 }
 ```
 
+### Sizing Redemptions Before Calling `start_redeem`
+
+Agent bots typically know "I need `K` underlying to fund a rebalance" and must compute `market_coin_amount` from that. `start_redeem` takes sCoin, not underlying, so the bot has to invert `compute_expected_underlying` (and the yield-fee deduction) before signing.
+
+There are two practical inverses:
+
+- **Pre-fee target** — I need at least `K` underlying delivered by Scallop, ignoring fee:
+  ```
+  scoin_to_burn = ceil(K × supply / denom)            // denom = cash + debt − revenue
+  ```
+- **Post-fee target** — I need at least `K` net underlying credited to `pm.balance[T]`:
+  ```
+  Let r = fee_rate / 10000, π = P_vault / S_vault, p = denom / supply
+  N ≈ ceil(K / (p × (1 − r) + r × π))                  when p >  π   (interest exists)
+  N  = ceil(K × supply / denom)                        when p <= π   (no interest, no fee)
+  ```
+
+Both use **ceiling division** because Scallop's redeem floors the underlying output. The full derivation, edge cases, and an iterative refinement helper (`scoinToBurnForTargetNet`) live in [`cdpm-calculation-skill/reference/scallop-lending-math.md`](../../cdpm-calculation-skill/reference/scallop-lending-math.md) section 7.
+
+```typescript
+import {
+  scoinToBurnForTargetUnderlying,
+  scoinToBurnForTargetNet,
+} from './scallop-lending-math';
+
+// Bot strategy: "rebalance needs 100 USDC of dry powder, net of fee."
+async function agentSizedRedeem(
+  client: SuiGrpcClient,
+  signer: any,
+  pmId: string,
+  underlyingCoinType: string,
+  desiredNet: bigint,           // K in underlying base units
+  feeRateBp: bigint,            // read from FeeHouse.fee_rate
+) {
+  // 1. Dry-run the accrue+read PTB; snapshot reserve + vault state.
+  const reserve = await readReserveSnapshot(client, underlyingCoinType);
+  const vault   = await readVaultSnapshot(client, pmId, underlyingCoinType);
+
+  // 2. Solve for sCoin to burn.
+  const scoinAmount = scoinToBurnForTargetNet(
+    reserve, vault, desiredNet, feeRateBp,
+  );
+
+  // 3. Feed it into the agent redeem PTB. MAX_U64 drains the vault when the
+  //    target is unreachable.
+  return agentRedeemFromScallop(
+    client, signer, pmId, underlyingCoinType, scoinAmount,
+  );
+}
+```
+
+The closed-form approximation is occasionally off-by-one due to per-step floors inside `finish_redeem`; the iterative helper bumps `N` upward by 1 sCoin until forward simulation confirms `>= desiredNet`. Re-snapshot the reserve and vault *after* `accrue_interest_for_market` and before sizing — stale snapshots can leave the bot 1-2 underlying short on the very next block.
+
 ### Tickets Are Hot Potatoes
 
 `SupplyTicket<T>` and `RedeemTicket<T>` have **no `drop` ability** — the only way to discharge them is via the matching `finish_*` call inside the same PTB. If your strategy chains conditional commands, never branch the ticket out of the success path.

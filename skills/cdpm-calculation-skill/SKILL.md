@@ -31,7 +31,7 @@ import { BinUtils, FeeUtils } from '@cetusprotocol/dlmm-sdk/utils'
 - **[Position Management](reference/position-management.md)** - Position count, split bins into positions
 - **[Fee Calculations](reference/fee-calculations.md)** - Variable fee, protocol fee, composition fee
 - **[Position Query](reference/position-query.md)** - Query PositionManager assets, fees, and rewards
-- **[Scallop Lending Math](reference/scallop-lending-math.md)** - Expected sCoin / underlying, principal amortization, yield-fee deduction
+- **[Scallop Lending Math](reference/scallop-lending-math.md)** - Expected sCoin / underlying, principal amortization, yield-fee deduction, **redemption sizing** (inverse formulas: sCoin to burn for target underlying / target net-after-fee, with worked example)
 
 ### Advanced Topics
 - **[Price Conversion](reference/price-conversion.md)** - Compare CDPM prices with external exchanges
