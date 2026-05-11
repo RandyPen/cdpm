@@ -5,3 +5,4 @@ traces/*
 Pub.*.toml
 /tests
 *.md
+deck/
