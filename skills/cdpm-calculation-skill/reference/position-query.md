@@ -9,6 +9,8 @@ To query a PositionManager's assets and fees, you need to:
 2. Simulate a transaction to get position details (assets, fees, rewards)
 3. Parse and normalize the results
 
+> The `PositionManager` Move struct has a fourth bag, `lending: Bag`, keyed by underlying `type_name<T>` and storing per-T `ScallopVault<T> { scoin: Balance<MarketCoin<T>>, principal: u64 }`. The sCoin type is structurally pinned to `MarketCoin<T>` by the type system. To value the lending portion you also need a Scallop reserve snapshot — see `reference/scallop-lending-math.md` for the off-chain twins of `compute_expected_underlying` and the principal/yield-fee split.
+
 ## Setup
 
 ```typescript

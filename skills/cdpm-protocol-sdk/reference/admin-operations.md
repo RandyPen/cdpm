@@ -5,6 +5,8 @@
 
 ## Set Fee Rate
 
+> The contract enforces `fee_rate <= MAX_FEE_RATE = 3000` (30%) — `admin_set_fee` aborts with `EInvalidFeeRate (1003)` for higher values. The default initialised by `init` is `2000` (20%). The same rate is used for both Cetus protocol fee splits (`take_fee` inside `protocol_collect_*`) and the Scallop yield fee inside `finish_redeem`.
+
 ```typescript
 import { Transaction } from '@mysten/sui/transactions';
 
@@ -12,7 +14,7 @@ async function setFeeRate(
   client: SuiGrpcClient,
   signer: any,  // Must hold AdminCap
   feeHouseId: string,
-  newFeeRate: number  // 0-10000 (0-100%)
+  newFeeRate: number  // 0-3000 (0-30%); contract caps at 3000
 ) {
   const tx = new Transaction();
   

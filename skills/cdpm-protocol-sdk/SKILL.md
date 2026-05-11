@@ -1,6 +1,6 @@
 ---
 name: cdpm-protocol-sdk
-description: TypeScript SDK guide for CDPM protocol integration and management. Covers architecture, permission system, fee mechanics, and admin operations. Use when building protocol integrations, managing AccessList, or configuring protocol parameters.
+description: TypeScript SDK guide for CDPM protocol integration and management. Covers architecture, permission system, fee mechanics, admin operations, and the Scallop hot-potato supply/redeem API for agents-empty PMs. Use when building protocol integrations, managing AccessList, or configuring protocol parameters.
 ---
 
 # CDPM Protocol SDK Guide
@@ -24,8 +24,8 @@ import { SuiGrpcClient } from '@mysten/sui/grpc';
 - **[Fee Mechanics](reference/permission-system.md#fee-mechanics)** - Fee calculation and distribution
 
 ### Operations
-- **[Admin Operations](reference/admin-operations.md)** - Set fee rate, manage AccessList, collect fees
-- **[Protocol Operations](reference/protocol-operations.md)** - Protocol-managed liquidity operations
+- **[Admin Operations](reference/admin-operations.md)** - Set fee rate (cap 30%), manage AccessList, collect fees
+- **[Protocol Operations](reference/protocol-operations.md)** - Protocol-managed liquidity operations and Scallop supply/redeem
 
 ### Reference
 - **[Events](reference/events.md)** - Admin and protocol operation events
@@ -151,19 +151,32 @@ async function validateProtocolOperation(
 ## Error Handling
 
 ```typescript
+// Source: sources/cdpm.move, lines 28-36
 const ERROR_CODES = {
-  ENotOwner: 1001,        // Caller is not owner
-  ENotAllow: 1002,        // Caller not authorized
-  EInvalidFeeRate: 1003,  // Fee rate exceeds FEE_DENOMINATOR
+  ENotOwner:        1001, // Caller is not pm.owner
+  ENotAllow:        1002, // Caller not in agents / access list (or invariant broken)
+  EInvalidFeeRate:  1003, // admin_set_fee given rate > MAX_FEE_RATE (3000 / 30%)
+  ELendingNotEmpty: 1004, // user_close_pm called with non-empty lending Bag
+  ENoSuchVault:     1005, // pull_from_lending called for an absent (T) vault
+  EReserveEmpty:    1006, // Scallop reserve has zero supply or zero (cash+debt-revenue)
+  EZeroExpected:    1007, // start_supply / start_redeem would yield 0
+  EWrongPm:         1008, // Hot-potato ticket consumed against a different PM
+  EAmountShortfall: 1009, // finish_* received Coin with value < ticket.expected
 };
 
 function parseError(error: string): string {
   if (error.includes('ENotOwner')) {
     return 'Operation requires owner permission';
   } else if (error.includes('ENotAllow')) {
-    return 'Caller not in AccessList or position has active agents';
+    return 'Caller not in AccessList, or PositionManager has active agents';
   } else if (error.includes('EInvalidFeeRate')) {
-    return 'Fee rate must be between 0 and 10000';
+    return 'Fee rate must be between 0 and 3000 (30% cap enforced by admin_set_fee)';
+  } else if (error.includes('ELendingNotEmpty')) {
+    return 'PositionManager.lending is non-empty; drain ScallopVaults before user_close_pm';
+  } else if (error.includes('EReserveEmpty')) {
+    return 'Scallop reserve has zero supply or zero (cash+debt-revenue) — accrue_interest_for_market first';
+  } else if (error.includes('EAmountShortfall')) {
+    return 'finish_supply / finish_redeem Coin value < ticket.expected (likely stale Scallop accrual)';
   }
   return 'Unknown error';
 }

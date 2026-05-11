@@ -1,6 +1,6 @@
 ---
 name: cdpm-agent-sdk
-description: TypeScript SDK guide for AI agents managing CDPM positions. Defines permission boundaries, operation workflows, and automation strategies. Use when building automated liquidity management agents.
+description: TypeScript SDK guide for AI agents managing CDPM positions. Defines permission boundaries, operation workflows, automation strategies, and the Scallop hot-potato supply/redeem API agents share with owners and protocol bots. Use when building automated liquidity management agents.
 ---
 
 # CDPM Agent SDK Guide
@@ -22,20 +22,23 @@ import { SuiGrpcClient } from '@mysten/sui/grpc';
 
 | Operation | Description |
 |-----------|-------------|
-| ✅ Add Liquidity | Add liquidity using PositionManager balance |
-| ✅ Remove Liquidity | Remove liquidity and return to balance |
-| ✅ Collect Fees | Collect fees from position (goes to fee bag) |
-| ✅ Collect Rewards | Collect rewards (goes to fee bag) |
-| ✅ Transfer Fee to Balance | Move fees from fee bag to balance |
+| Add Liquidity | Add liquidity using PositionManager balance |
+| Remove Liquidity | Remove liquidity and return to balance |
+| Collect Fees | Collect fees from position (goes to fee bag) |
+| Collect Rewards | Collect rewards (goes to fee bag) |
+| Transfer Fee to Balance | Move fees from fee bag to balance |
+| Scallop `start_supply` / `finish_supply` | Park idle balance into Scallop |
+| Scallop `start_redeem` / `finish_redeem` | Pull underlying back; yield fee deducted from interest portion |
 
 ### What Agents CANNOT Do
 
 | Operation | Reason |
 |-----------|--------|
-| ❌ Withdraw Funds | Cannot move funds out of PositionManager |
-| ❌ Close Position | Only owner can close |
-| ❌ Authorize/Revoke Agents | Only owner can manage agents |
-| ❌ Modify PositionManager | Cannot change configuration |
+| Withdraw Funds | Cannot move funds out of PositionManager |
+| Close Position | Only owner can close |
+| Authorize/Revoke Agents | Only owner can manage agents |
+| Modify PositionManager | Cannot change configuration |
+| `user_extract_market_coin<T>` | Owner-only escape hatch — agents cannot pull raw sCoin |
 
 ### Permission Check
 
@@ -56,7 +59,7 @@ const isAuthorized = agents.includes(agentAddress);
 ## Topics
 
 ### Core Operations
-- **[Agent Operations](reference/agent-operations.md)** - Add/remove liquidity, collect fees, transfer fees
+- **[Agent Operations](reference/agent-operations.md)** - Add/remove liquidity, collect fees, transfer fees, supply/redeem Scallop lending
 - **[Automation Strategies](reference/automation-strategies.md)** - Auto-compounding, rebalancing, fee collection scheduler
 
 ### Monitoring & Best Practices

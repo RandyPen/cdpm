@@ -1,15 +1,17 @@
 ---
 name: cdpm-user-sdk
-description: TypeScript SDK guide for CDPM (Cetus DLMM Position Manager) end-users. Provides PTB construction patterns for creating positions, managing liquidity, authorizing agents, and collecting fees. Use when users need to interact with CDPM contract through TypeScript SDK.
+description: TypeScript SDK guide for CDPM (Cetus DLMM Position Manager) end-users. Provides PTB construction patterns for creating positions, managing liquidity, authorizing agents, collecting fees, and supplying/redeeming idle funds via Scallop lending. Use when users need to interact with CDPM contract through TypeScript SDK.
 ---
 
 # CDPM User SDK Guide
 
 ## Overview
 
-CDPM (Cetus DLMM Position Manager) is a proxy contract for managing Cetus DLMM positions with support for user self-management, agent delegation, and protocol-managed operations.
+CDPM (Cetus DLMM Position Manager) is a proxy contract for managing Cetus DLMM positions with support for user self-management, agent delegation, protocol-managed operations, and optional Scallop lending integration for idle funds.
 
 **Package Address**: `0x0000000000000000000000000000000000000000000000000000000000000000`
+
+> The `PositionManager` struct now contains a fourth bag, `lending: Bag`, keyed by underlying coin type and storing per-(T, S) `ScallopVault` records. See [Scallop Lending](reference/scallop-lending.md) for end-user PTB recipes.
 
 ## Quick Start
 
@@ -42,6 +44,9 @@ const CDPM_PACKAGE = '0x00000000000000000000000000000000000000000000000000000000
 ### Agent & Fee Management  
 - **[Agent Management](reference/agent-management.md)** - Authorize/revoke agents
 - **[Fee Collection](reference/fee-collection.md)** - Collect fees and rewards
+
+### Scallop Lending (Idle Funds)
+- **[Scallop Lending](reference/scallop-lending.md)** - Hot-potato supply/redeem PTBs, owner-only escape hatch, yield-fee math
 
 ### Web Development & Queries
 - **[Web Query Guide](reference/web-query.md)** - GraphQL queries for PositionManagers
@@ -95,12 +100,24 @@ Common errors and solutions:
 try {
   const result = await createPositionSmart(/* ... */);
 } catch (e) {
-  if (e.message.includes('ENotOwner')) {
+  if (e.message.includes('ENotOwner')) {              // 1001
     console.error('Only the owner can perform this operation');
-  } else if (e.message.includes('ENotAllow')) {
+  } else if (e.message.includes('ENotAllow')) {       // 1002
     console.error('Caller not authorized');
-  } else if (e.message.includes('EInvalidFeeRate')) {
-    console.error('Invalid fee rate configuration');
+  } else if (e.message.includes('EInvalidFeeRate')) { // 1003
+    console.error('Invalid fee rate configuration (cap is 30% / 3000 bp)');
+  } else if (e.message.includes('ELendingNotEmpty')) {// 1004
+    console.error('PositionManager.lending is non-empty — drain Scallop vaults before user_close_pm');
+  } else if (e.message.includes('ENoSuchVault')) {    // 1005
+    console.error('No ScallopVault for that underlying coin type');
+  } else if (e.message.includes('EReserveEmpty')) {   // 1006
+    console.error('Scallop reserve has zero supply or zero (cash+debt-revenue) — accrue_interest first?');
+  } else if (e.message.includes('EZeroExpected')) {   // 1007
+    console.error('start_supply/start_redeem amount too small — would yield 0 scoin/underlying');
+  } else if (e.message.includes('EWrongPm')) {        // 1008
+    console.error('Hot-potato ticket consumed against a different PositionManager');
+  } else if (e.message.includes('EAmountShortfall')) {// 1009
+    console.error('finish_* received Coin with value < ticket.expected — Scallop returned less than predicted');
   } else {
     console.error('Transaction failed:', e);
   }

@@ -46,3 +46,25 @@ const compositionFee = FeeUtils.calculateCompositionFee(
   '3000'      // Total fee rate (0.3%)
 )
 ```
+
+## cdpm Protocol Fee (Cetus + Scallop)
+
+cdpm uses a single `FeeHouse.fee_rate` (basis points, capped at 3000 = 30%) for two distinct paths:
+
+1. **Cetus protocol-tier fee split** — `take_fee` inside `protocol_collect_fee` / `protocol_collect_reward` shaves the protocol cut off the gross collected balance:
+
+   ```typescript
+   const FEE_DENOMINATOR = 10_000n;
+   const protocolCut = (grossAmount * BigInt(feeRateBp)) / FEE_DENOMINATOR;
+   const userPortion = grossAmount - protocolCut;
+   ```
+
+2. **Scallop yield fee** — `finish_redeem` deducts only from the interest portion:
+
+   ```typescript
+   const interest   = redeemedAmount > principalPortion ? redeemedAmount - principalPortion : 0n;
+   const yieldFee   = (interest * BigInt(feeRateBp)) / FEE_DENOMINATOR;
+   const toBalance  = redeemedAmount - yieldFee;
+   ```
+
+Both formulas floor and share the same `feeRateBp`. See `reference/scallop-lending-math.md` for the full Scallop redeem prediction (principal amortization, `compute_expected_underlying`, end-to-end helper).

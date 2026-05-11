@@ -105,11 +105,32 @@ async function executeWithGasOptimization(
 }
 ```
 
+## Scallop Lending Pre-Flight
+
+When chaining a supply or redeem, the **first** PTB command must be `protocol::accrue_interest::accrue_interest_for_market(version, market, clock)`. cdpm only reads Scallop's `balance_sheet` view-only (`compute_expected_scoin` / `compute_expected_underlying`), so a stale accrual will make the predicted scoin/underlying exceed what Scallop actually mints/redeems and `finish_supply` / `finish_redeem` will abort with `EAmountShortfall (1009)`.
+
+Recommended PTB shape for an agent:
+
+```
+1. accrue_interest_for_market
+2. cdpm::start_supply  | cdpm::start_redeem
+3. protocol::mint::mint | protocol::redeem::redeem
+4. cdpm::finish_supply | cdpm::finish_redeem
+```
+
+Other agent-side notes:
+
+- One vault per underlying `T`. The sCoin type is structurally pinned to `MarketCoin<T>` by the type system, so agents cannot supply a fake or alternate sCoin — there is no `S` generic to mismatch.
+- Agent redeems still pay the protocol yield fee (`fee_house.fee_rate × interest_portion`) just like owner / protocol redeems.
+- Agents cannot short-change the vault: `finish_supply` only accepts `Coin<MarketCoin<T>>` (the only way to obtain a non-zero `Coin<MarketCoin<T>>` is through Scallop's `mint`, since `MarketCoin` has only `drop` and no public constructor) and asserts `actual >= ticket.expected_scoin`.
+
 ## Surfacing Close-Position Warnings
 
 Agents do **not** call `user_close_pm` themselves — only the position owner can close a PositionManager. However, many agent UIs drive the owner's wallet through a "close" action, so the agent layer should surface the following warning whenever it initiates or hints at a close flow:
 
-> `pool::close_position` (used internally by `user_close_pm`) only returns underlying tokens and accumulated trading fees. Any **incentive reward tokens** still held by the position will be destroyed together with the `ClosePositionCert`. The owner's PTB must call `user_collect_reward<CoinTypeA, CoinTypeB, RewardType>` once for each reward token on the pool (typically 1–3 types) **before** `user_close_pm`, in the same transaction.
+> `pool::close_position` (used internally by `user_close_pm`) only returns underlying tokens and accumulated trading fees. Any **incentive reward tokens** still held by the position will be destroyed together with the `ClosePositionCert`. The owner's PTB must call `user_collect_reward<CoinTypeA, CoinTypeB, RewardType>` once for each reward token on the pool (typically 1-3 types) **before** `user_close_pm`, in the same transaction.
+
+> Additionally, `user_close_pm` now asserts `bag::is_empty(&pm.lending)` and aborts with `ELendingNotEmpty (1004)` otherwise. Drain every `ScallopVault<T>` first — agents can run the full `accrue_interest → start_redeem → redeem::redeem → finish_redeem` PTB, but the **owner-only** `user_extract_market_coin` is the rescue path when Scallop is unreachable.
 
 See the user-sdk workflow (`cdpm-user-sdk/reference/workflows.md`, section "Close Position Safely") for the complete PTB example to reuse when building the owner-facing transaction.
 

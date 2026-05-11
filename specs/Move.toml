@@ -1,0 +1,25 @@
+[package]
+name = "cdpm_specs"
+edition = "2024.beta"
+# Specs are only compiled by `sui-prover` (asymptotic.tech). Do NOT add this
+# package to a regular `sui move build` — the prover toolchain injects its own
+# `Sui` and `MoveStdlib` overrides (see SPEC.md). Regular sui CLI cannot
+# compile `#[spec(...)]` / `#[spec_only]` attributes.
+
+[dependencies]
+# `cdpm` is the package under verification. Its Move.toml carries the full
+# dependency closure (Sui, MoveStdlib, cetusdlmm, integer-mate, move-stl,
+# Scallop, X). The prover replaces the framework deps at verify time.
+cdpm = { local = ".." }
+Prover = { local = "../../sui-prover/packages/prover", override = true }
+
+[dev-dependencies]
+# Mirror cdpm's cetusdlmm override at the root so the asymptotic resolver
+# does not flag a regular-vs-dev conflict inside cdpm. Uses `rename-from`
+# because the patched package is named `CetusDlmm` (PascalCase) while cdpm
+# imports it via the lowercase address `cetusdlmm` (Sui CLI tolerates the
+# mismatch; sui-prover does not).
+CetusDlmm = { local = "/tmp/cetus-dlmm-patched/packages/dlmm", override = true, rename-from = "cetusdlmm" }
+
+[addresses]
+cdpm_specs = "0x0"

@@ -45,7 +45,30 @@ interface AgentRewardCollected {
   amount: string;
   by: string;
 }
+
+// Scallop supply (emitted by finish_supply, regardless of caller).
+// Note: there is NO `by` field — use `event.sender` from the event envelope
+// to distinguish owner / agent / protocol callers.
+interface ScallopSupplied {
+  pm_id: string;
+  coin_type: string;            // type_name<T> — sCoin type is always MarketCoin<T>
+  deposit_amount: string;       // underlying transferred to Scallop
+  market_coin_minted: string;   // sCoin received and added to pm.lending
+}
+
+// Scallop redeem (emitted by finish_redeem, regardless of caller).
+interface ScallopRedeemed {
+  pm_id: string;
+  coin_type: string;
+  market_coin_redeemed: string; // sCoin burned
+  redeemed_amount: string;      // underlying received pre-fee
+  principal_portion: string;    // principal slice this redeem consumed
+  interest: string;             // redeemed_amount − principal_portion (≥ 0)
+  fee_amount: string;           // protocol yield fee deducted from interest
+}
 ```
+
+> Sui event envelopes carry `event.sender`; the cdpm payload no longer includes a `by` field for the Scallop events to keep payload size constant across callers.
 
 ## Event Subscription
 

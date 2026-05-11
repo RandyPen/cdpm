@@ -200,3 +200,198 @@ async function protocolCollectFeesAuto(
   );
 }
 ```
+
+## Scallop Lending (Supply / Redeem)
+
+The Scallop hot-potato API is open to whitelisted protocol bots, but only when `pm.agents` is empty (the protocol-tier invariant). `assert_caller_authorized` inside `start_supply` / `start_redeem` lets the bot through under the union `is_owner || is_agent || (is_in_access_list && pm.agents.is_empty())`.
+
+`finish_supply` / `finish_redeem` only verify `ticket.pm_id == object::id(pm)` — the auth check is done up front.
+
+### Pre-flight: Accrue Interest First
+
+cdpm reads Scallop's `balance_sheet` view-only inside `compute_expected_scoin` / `compute_expected_underlying`. If the reserve hasn't been accrued in this block, the prediction will exceed what `mint::mint` / `redeem::redeem` actually return, and `finish_*` aborts cleanly with `EAmountShortfall (1009)`. The fix is the same for every caller: run `accrue_interest_for_market` as the **first** PTB command.
+
+### PTB Recipe — Protocol Supply
+
+```
+1. protocol::accrue_interest::accrue_interest_for_market(version, market, clock)
+2. cdpm::start_supply<T>(access, pm, market, amount)              → (coin_t, ticket)
+3. protocol::mint::mint<T>(version, market, coin_t, clock)        → coin_market<T>
+4. cdpm::finish_supply<T>(pm, ticket, coin_market)
+```
+
+```typescript
+async function protocolSupplyToScallop(
+  client: SuiGrpcClient,
+  signer: any,                 // Must be in AccessList.allow
+  accessListId: string,
+  pmId: string,
+  underlyingCoinType: string,
+  amount: bigint,
+) {
+  const tx = new Transaction();
+
+  tx.moveCall({
+    target: `${SCALLOP_PROTOCOL}::accrue_interest::accrue_interest_for_market`,
+    arguments: [
+      tx.object(SCALLOP_VERSION_ID),
+      tx.object(SCALLOP_MARKET_ID),
+      tx.object('0x6'),
+    ],
+  });
+
+  const [coinT, ticket] = tx.moveCall({
+    target: `${CDPM_PACKAGE}::cdpm::start_supply`,
+    typeArguments: [underlyingCoinType],
+    arguments: [
+      tx.object(accessListId),
+      tx.object(pmId),
+      tx.object(SCALLOP_MARKET_ID),
+      tx.pure.u64(amount),
+    ],
+  });
+
+  const [coinMarket] = tx.moveCall({
+    target: `${SCALLOP_PROTOCOL}::mint::mint`,
+    typeArguments: [underlyingCoinType],
+    arguments: [
+      tx.object(SCALLOP_VERSION_ID),
+      tx.object(SCALLOP_MARKET_ID),
+      coinT,
+      tx.object('0x6'),
+    ],
+  });
+
+  tx.moveCall({
+    target: `${CDPM_PACKAGE}::cdpm::finish_supply`,
+    typeArguments: [underlyingCoinType],
+    arguments: [tx.object(pmId), ticket, coinMarket],
+  });
+
+  return await client.signAndExecuteTransaction({ signer, transaction: tx });
+}
+```
+
+### PTB Recipe — Protocol Redeem (Yield Fee Applies)
+
+`finish_redeem` deducts `floor(max(0, redeemed − principal_portion) × fee_house.fee_rate / 10_000)` from the interest portion before adding the rest to `pm.balance[T]`. Protocol callers pay the same yield fee as owner / agent.
+
+```
+1. protocol::accrue_interest::accrue_interest_for_market(version, market, clock)
+2. cdpm::start_redeem<T>(access, pm, market, scoin_amount)            → (coin_market, ticket)
+3. protocol::redeem::redeem<T>(version, market, coin_market, clock)   → coin_t
+4. cdpm::finish_redeem<T>(pm, fee_house, ticket, coin_t)
+```
+
+```typescript
+async function protocolRedeemFromScallop(
+  client: SuiGrpcClient,
+  signer: any,
+  accessListId: string,
+  feeHouseId: string,
+  pmId: string,
+  underlyingCoinType: string,
+  scoinAmount: bigint,
+) {
+  const tx = new Transaction();
+
+  tx.moveCall({
+    target: `${SCALLOP_PROTOCOL}::accrue_interest::accrue_interest_for_market`,
+    arguments: [
+      tx.object(SCALLOP_VERSION_ID),
+      tx.object(SCALLOP_MARKET_ID),
+      tx.object('0x6'),
+    ],
+  });
+
+  const [coinMarket, ticket] = tx.moveCall({
+    target: `${CDPM_PACKAGE}::cdpm::start_redeem`,
+    typeArguments: [underlyingCoinType],
+    arguments: [
+      tx.object(accessListId),
+      tx.object(pmId),
+      tx.object(SCALLOP_MARKET_ID),
+      tx.pure.u64(scoinAmount),
+    ],
+  });
+
+  const [coinT] = tx.moveCall({
+    target: `${SCALLOP_PROTOCOL}::redeem::redeem`,
+    typeArguments: [underlyingCoinType],
+    arguments: [
+      tx.object(SCALLOP_VERSION_ID),
+      tx.object(SCALLOP_MARKET_ID),
+      coinMarket,
+      tx.object('0x6'),
+    ],
+  });
+
+  tx.moveCall({
+    target: `${CDPM_PACKAGE}::cdpm::finish_redeem`,
+    typeArguments: [underlyingCoinType],
+    arguments: [
+      tx.object(pmId),
+      tx.object(feeHouseId),
+      ticket,
+      coinT,
+    ],
+  });
+
+  return await client.signAndExecuteTransaction({ signer, transaction: tx });
+}
+```
+
+### Sizing Redemptions Before Calling `start_redeem`
+
+Protocol bots, like agents, usually know "I need `K` underlying for the next operation" and must compute `market_coin_amount` from that. `start_redeem` takes sCoin, not underlying, so the bot has to invert `compute_expected_underlying` (and the yield-fee deduction) before signing.
+
+Two practical inverses:
+
+- **Pre-fee target** — I need at least `K` underlying out of Scallop, ignoring fee:
+  ```
+  scoin_to_burn = ceil(K × supply / denom)            // denom = cash + debt − revenue
+  ```
+- **Post-fee target** — I need at least `K` net underlying credited to `pm.balance[T]`:
+  ```
+  Let r = fee_rate / 10000, π = P_vault / S_vault, p = denom / supply
+  N ≈ ceil(K / (p × (1 − r) + r × π))                  when p >  π   (interest exists)
+  N  = ceil(K × supply / denom)                        when p <= π   (no interest, no fee)
+  ```
+
+Both use **ceiling division** because Scallop's redeem floors the underlying output. Asking for `floor(N)` risks receiving 1 unit fewer than the target. The full derivation, edge cases, and an iterative refinement helper (`scoinToBurnForTargetNet`) live in [`cdpm-calculation-skill/reference/scallop-lending-math.md`](../../cdpm-calculation-skill/reference/scallop-lending-math.md) section 7.
+
+```typescript
+import {
+  scoinToBurnForTargetUnderlying,
+  scoinToBurnForTargetNet,
+} from './scallop-lending-math';
+
+async function protocolSizedRedeem(
+  client: SuiGrpcClient,
+  signer: any,
+  accessListId: string,
+  feeHouseId: string,
+  pmId: string,
+  underlyingCoinType: string,
+  desiredNet: bigint,           // K in underlying base units
+  feeRateBp: bigint,            // read from FeeHouse.fee_rate
+) {
+  const reserve = await readReserveSnapshot(client, underlyingCoinType);
+  const vault   = await readVaultSnapshot(client, pmId, underlyingCoinType);
+
+  const scoinAmount = scoinToBurnForTargetNet(
+    reserve, vault, desiredNet, feeRateBp,
+  );
+
+  return protocolRedeemFromScallop(
+    client, signer, accessListId, feeHouseId,
+    pmId, underlyingCoinType, scoinAmount,
+  );
+}
+```
+
+`scoinToBurnForTargetNet` returns `MAX_U64` when the vault cannot satisfy `desiredNet`; passing that value to `start_redeem` drains the entire vault and removes its entry from `pm.lending`. Always re-snapshot reserve and vault *after* the `accrue_interest_for_market` command and before sizing — stale snapshots predict a higher `denom` than the live reserve and can leave the bot 1-2 underlying short.
+
+### Protocol Cannot Call `user_extract_market_coin`
+
+`user_extract_market_coin<T>` aborts with `ENotOwner (1001)` for anyone other than `pm.owner`. Protocol bots cannot use the escape hatch — they must always go through the full Scallop redeem path.

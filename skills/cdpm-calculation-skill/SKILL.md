@@ -1,13 +1,13 @@
 ---
 name: cdpm-calculation-skill
-description: CDPM calculation utilities using Cetus DLMM SDK. Provides liquidity calculation, bin price math, position management, and fee calculations. Use when performing mathematical operations for CDPM positions.
+description: CDPM calculation utilities using Cetus DLMM SDK plus the Scallop lending math used by start_supply / start_redeem / finish_redeem. Provides liquidity calculation, bin price math, position management, fee calculations, and yield-fee accounting. Use when performing mathematical operations for CDPM positions.
 ---
 
 # CDPM Calculation Guide
 
 ## Overview
 
-This skill provides calculation utilities for CDPM (Cetus DLMM Position Manager) using the **Cetus DLMM SDK**. All calculations should use the SDK for accuracy and to handle edge cases properly.
+This skill provides calculation utilities for CDPM (Cetus DLMM Position Manager) using the **Cetus DLMM SDK**, plus off-chain twins of the Scallop lending math the cdpm contract performs on-chain. All Cetus calculations should use the SDK for accuracy and to handle edge cases properly; the Scallop formulas mirror the on-chain implementations in `sources/cdpm.move`.
 
 ## Installation
 
@@ -31,6 +31,7 @@ import { BinUtils, FeeUtils } from '@cetusprotocol/dlmm-sdk/utils'
 - **[Position Management](reference/position-management.md)** - Position count, split bins into positions
 - **[Fee Calculations](reference/fee-calculations.md)** - Variable fee, protocol fee, composition fee
 - **[Position Query](reference/position-query.md)** - Query PositionManager assets, fees, and rewards
+- **[Scallop Lending Math](reference/scallop-lending-math.md)** - Expected sCoin / underlying, principal amortization, yield-fee deduction, **redemption sizing** (inverse formulas: sCoin to burn for target underlying / target net-after-fee, with worked example)
 
 ### Advanced Topics
 - **[Price Conversion](reference/price-conversion.md)** - Compare CDPM prices with external exchanges
