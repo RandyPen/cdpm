@@ -203,21 +203,27 @@ async function protocolCollectFeesAuto(
 
 ## Scallop Lending (Supply / Redeem)
 
+> **REQUIRED — every Scallop PTB starts with `accrue_interest_for_market`.**
+> `protocol::accrue_interest::accrue_interest_for_market(version, market, clock)`
+> MUST be **command 0** of any PTB that touches `scallop_start_supply` or
+> `scallop_start_redeem`. cdpm aborts with `EStaleScallopState (1011)` otherwise.
+> The Scallop SDK does NOT inject this call. No SDK shortcut. No optional path.
+
 The Scallop hot-potato API is open to whitelisted protocol bots, but only when `pm.agents` is empty (the protocol-tier invariant). `assert_caller_authorized` inside `scallop_start_supply` / `scallop_start_redeem` lets the bot through under the union `is_owner || is_agent || (is_in_access_list && pm.agents.is_empty())`.
 
 `scallop_finish_supply` / `scallop_finish_redeem` only verify `ticket.pm_id == object::id(pm)` — the auth check is done up front.
 
-### Pre-flight: Accrue Interest First
+### Pre-flight: Accrue Interest First (Enforced)
 
-cdpm reads Scallop's `balance_sheet` view-only inside `compute_expected_scoin` / `compute_expected_underlying_scallop`. If the reserve hasn't been accrued in this block, the prediction will exceed what `mint::mint` / `redeem::redeem` actually return, and `finish_*` aborts cleanly with `EAmountShortfall (1009)`. The fix is the same for every caller: run `accrue_interest_for_market` as the **first** PTB command.
+cdpm now enforces freshness: `scallop_start_supply` / `scallop_start_redeem` take `&Clock` and assert `borrow_dynamics::last_updated_by_type(market.borrow_dynamics(), type<T>) == clock::timestamp_ms(clock) / 1000`. Omitting `protocol::accrue_interest::accrue_interest_for_market(version, market, clock)` as command 0 aborts at the cdpm boundary with `EStaleScallopState (1011)` before any balance is touched. `scallop_finish_*` also re-take `&Market` and assert canonical-id match (`EWrongMarket = 1012`).
 
 ### PTB Recipe — Protocol Supply
 
 ```
 1. protocol::accrue_interest::accrue_interest_for_market(version, market, clock)
-2. cdpm::scallop_start_supply<T>(access, pm, market, amount)              → (coin_t, ticket)
-3. protocol::mint::mint<T>(version, market, coin_t, clock)        → coin_market<T>
-4. cdpm::scallop_finish_supply<T>(pm, ticket, coin_market)
+2. cdpm::scallop_start_supply<T>(access, pm, market, clock, amount)       → (coin_t, ticket)
+3. protocol::mint::mint<T>(version, market, coin_t, clock)                → coin_market<T>
+4. cdpm::scallop_finish_supply<T>(pm, market, ticket, coin_market)
 ```
 
 ```typescript
@@ -231,6 +237,8 @@ async function protocolSupplyToScallop(
 ) {
   const tx = new Transaction();
 
+  // REQUIRED PTB[0] — cdpm asserts EStaleScallopState (1011) without this.
+  // NOT injected by scallopTx.deposit / depositQuick.
   tx.moveCall({
     target: `${SCALLOP_PROTOCOL}::accrue_interest::accrue_interest_for_market`,
     arguments: [
@@ -247,6 +255,7 @@ async function protocolSupplyToScallop(
       tx.object(accessListId),
       tx.object(pmId),
       tx.object(SCALLOP_MARKET_ID),
+      tx.object('0x6'),
       tx.pure.u64(amount),
     ],
   });
@@ -265,7 +274,12 @@ async function protocolSupplyToScallop(
   tx.moveCall({
     target: `${CDPM_PACKAGE}::cdpm::scallop_finish_supply`,
     typeArguments: [underlyingCoinType],
-    arguments: [tx.object(pmId), ticket, coinMarket],
+    arguments: [
+      tx.object(pmId),
+      tx.object(SCALLOP_MARKET_ID),
+      ticket,
+      coinMarket,
+    ],
   });
 
   return await client.signAndExecuteTransaction({ signer, transaction: tx });
@@ -278,9 +292,9 @@ async function protocolSupplyToScallop(
 
 ```
 1. protocol::accrue_interest::accrue_interest_for_market(version, market, clock)
-2. cdpm::scallop_start_redeem<T>(access, pm, market, scoin_amount)            → (coin_market, ticket)
-3. protocol::redeem::redeem<T>(version, market, coin_market, clock)   → coin_t
-4. cdpm::scallop_finish_redeem<T>(pm, fee_house, ticket, coin_t)
+2. cdpm::scallop_start_redeem<T>(access, pm, market, clock, scoin_amount) → (coin_market, ticket)
+3. protocol::redeem::redeem<T>(version, market, coin_market, clock)       → coin_t
+4. cdpm::scallop_finish_redeem<T>(pm, market, fee_house, ticket, coin_t)
 ```
 
 ```typescript
@@ -295,6 +309,8 @@ async function protocolRedeemFromScallop(
 ) {
   const tx = new Transaction();
 
+  // REQUIRED PTB[0] — cdpm asserts EStaleScallopState (1011) without this.
+  // NOT injected by scallopTx.deposit / depositQuick.
   tx.moveCall({
     target: `${SCALLOP_PROTOCOL}::accrue_interest::accrue_interest_for_market`,
     arguments: [
@@ -311,6 +327,7 @@ async function protocolRedeemFromScallop(
       tx.object(accessListId),
       tx.object(pmId),
       tx.object(SCALLOP_MARKET_ID),
+      tx.object('0x6'),
       tx.pure.u64(scoinAmount),
     ],
   });
@@ -331,6 +348,7 @@ async function protocolRedeemFromScallop(
     typeArguments: [underlyingCoinType],
     arguments: [
       tx.object(pmId),
+      tx.object(SCALLOP_MARKET_ID),
       tx.object(feeHouseId),
       ticket,
       coinT,

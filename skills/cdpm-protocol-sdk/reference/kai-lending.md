@@ -35,12 +35,34 @@ Unlike Scallop (which requires `protocol::accrue_interest::accrue_interest_for_m
 
 ## Protocol PTB Recipe: Supply
 
+`kai_start_supply` records `vault_id = object::id(vault)` on the ticket; `kai_finish_supply` re-takes `&Vault<T,YT>` and asserts the id matches, aborting with `EWrongVault (1013)` on mismatch. Reuse the same `tx.object(vaultObjectId)` handle across `start_*` and `finish_*`.
+
+Authoritative signatures:
+
+```move
+public fun kai_start_supply<T, YT>(
+    access: &AccessList,
+    pm: &mut PositionManager,
+    vault: &kai_vault::Vault<T, YT>,
+    amount: u64,
+    clock: &Clock,
+    ctx: &mut TxContext,
+): (Coin<T>, KaiSupplyTicket<T, YT>);
+
+public fun kai_finish_supply<T, YT>(
+    pm: &mut PositionManager,
+    vault: &kai_vault::Vault<T, YT>,
+    ticket: KaiSupplyTicket<T, YT>,
+    yt: Coin<YT>,
+);
+```
+
 3 commands:
 
 ```
 1. cdpm::kai_start_supply<T, YT>(access, pm, vault, amount, clock)        → (coin_t, ticket)
 2. kai_sav::vault::deposit<T, YT>(vault, coin_t.into_balance(), clock)    → balance_yt
-3. cdpm::kai_finish_supply<T, YT>(pm, ticket, balance_yt.into_coin())
+3. cdpm::kai_finish_supply<T, YT>(pm, vault, ticket, balance_yt.into_coin())
 ```
 
 ```typescript
@@ -88,7 +110,12 @@ async function protocolSupplyToKai(
   tx.moveCall({
     target: `${CDPM_PACKAGE}::cdpm::kai_finish_supply`,
     typeArguments: [underlyingCoinType, ytCoinType],
-    arguments: [tx.object(pmId), ticket, coinYT],
+    arguments: [
+      tx.object(pmId),
+      tx.object(vaultObjectId),
+      ticket,
+      coinYT,
+    ],
   });
 
   return await client.signAndExecuteTransaction({ signer: protocolSigner, transaction: tx });
@@ -101,13 +128,37 @@ async function protocolSupplyToKai(
 
 Variable length (4 + N commands). `vault::withdraw` returns a `WithdrawTicket` recording per-strategy `to_withdraw` quotas; the protocol bot's PTB has to walk every strategy with non-zero quota, then settle with `vault::redeem_withdraw_ticket`. The off-chain SDK is responsible for enumerating active strategies — cdpm does **not** track them.
 
+`kai_start_redeem` records `vault_id`; `kai_finish_redeem` re-takes `&Vault<T,YT>` and asserts the id matches (`EWrongVault = 1013`).
+
+Authoritative signatures:
+
+```move
+public fun kai_start_redeem<T, YT>(
+    access: &AccessList,
+    pm: &mut PositionManager,
+    vault: &kai_vault::Vault<T, YT>,
+    yt_amount: u64,
+    clock: &Clock,
+    ctx: &mut TxContext,
+): (Coin<YT>, KaiRedeemTicket<T, YT>);
+
+public fun kai_finish_redeem<T, YT>(
+    pm: &mut PositionManager,
+    vault: &kai_vault::Vault<T, YT>,
+    fee_house: &mut FeeHouse,
+    ticket: KaiRedeemTicket<T, YT>,
+    underlying: Coin<T>,
+    ctx: &mut TxContext,
+);
+```
+
 ```
 1. cdpm::kai_start_redeem<T, YT>(access, pm, vault, yt_amount, clock)          → (coin_yt, ticket)
 2. kai_sav::vault::withdraw<T, YT>(vault, coin_yt.into_balance(), clock)       → withdraw_ticket
 3..3+N. for each strategy s with to_withdraw(s) > 0:
         <strategy_module>::strategy_withdraw_for_vault(strategy, vault, withdraw_ticket, ...)
 3+N+1. balance_t = kai_sav::vault::redeem_withdraw_ticket<T, YT>(vault, withdraw_ticket)
-3+N+2. cdpm::kai_finish_redeem<T, YT>(pm, fee_house, ticket, balance_t.into_coin())
+3+N+2. cdpm::kai_finish_redeem<T, YT>(pm, vault, fee_house, ticket, balance_t.into_coin())
 ```
 
 ```typescript
@@ -176,6 +227,7 @@ async function protocolRedeemFromKai(
     typeArguments: [underlyingCoinType, ytCoinType],
     arguments: [
       tx.object(pmId),
+      tx.object(vaultObjectId),
       tx.object(CDPM_MAINNET.FEE_HOUSE_ID),
       ticket,
       coinT,
@@ -320,6 +372,7 @@ cdpm emits no extraction event for Kai lending — there is no wrapper-extract f
 | 1007 | `EZeroExpected` | Amount too small for the current vault ratio. Increase amount; for tiny TVL vaults, batch multiple PMs into one supply. |
 | 1008 | `EWrongPm` | Hot-potato ticket consumed against a different PM. Bug in batch construction — assert `pmId` consistency across all four cdpm move-calls in the batch. |
 | 1009 | `EAmountShortfall` | Vault state moved between snapshot and signing. Re-snapshot and retry; for large redeems, size with a small margin via `ytToBurnForTargetNet`. |
+| 1013 | `EWrongVault` | `kai_finish_*` received a `&Vault<T,YT>` whose id ≠ ticket.vault_id. Reuse the same `tx.object(vaultObjectId)` handle across `start_*` and `finish_*`. |
 
 External aborts that bubble up from Kai itself (cdpm does not produce these):
 

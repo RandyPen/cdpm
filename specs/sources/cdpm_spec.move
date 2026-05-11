@@ -25,7 +25,10 @@ use cdpm::cdpm::{
 };
 use sui::coin::Coin;
 use sui::tx_context::TxContext;
+use sui::object;
+use protocol::market::Market;
 use protocol::reserve::MarketCoin;
+use kai_sav::vault as kai_vault;
 
 // MAX_FEE_RATE in cdpm is `30 %` of FEE_DENOMINATOR (10_000) — capped at 3000.
 // EInvalidFeeRate = 1003.
@@ -72,15 +75,18 @@ public fun admin_set_fee_spec(
 #[spec(prove, ignore_abort, target = cdpm::scallop_finish_supply)]
 public fun scallop_finish_supply_spec<T>(
     pm: &mut PositionManager,
+    market: &Market,
     ticket: ScallopSupplyTicket<T>,
     scoin: Coin<MarketCoin<T>>,
 ) {
     // P-WrongPm (structural assertion, see comment above).
     asserts(cdpm::spec_scallop_supply_ticket_pm_id(&ticket) == object::id(pm));
+    // P-WrongMarket (F-03 canonical-object binding).
+    asserts(cdpm::spec_scallop_supply_ticket_market_id(&ticket) == object::id(market));
     // P-AmountShortfall (structural assertion, see comment above).
     asserts(scoin.value() >= cdpm::spec_scallop_supply_ticket_expected_scoin(&ticket));
 
-    cdpm::scallop_finish_supply<T>(pm, ticket, scoin);
+    cdpm::scallop_finish_supply<T>(pm, market, ticket, scoin);
 }
 
 // ---------------------------------------------------------------------------
@@ -97,6 +103,7 @@ public fun scallop_finish_supply_spec<T>(
 #[spec(prove, ignore_abort, target = cdpm::scallop_finish_redeem)]
 public fun scallop_finish_redeem_spec<T>(
     pm: &mut PositionManager,
+    market: &Market,
     fee_house: &mut FeeHouse,
     ticket: ScallopRedeemTicket<T>,
     underlying: Coin<T>,
@@ -104,10 +111,12 @@ public fun scallop_finish_redeem_spec<T>(
 ) {
     // P-WrongPm (structural assertion).
     asserts(cdpm::spec_scallop_redeem_ticket_pm_id(&ticket) == object::id(pm));
+    // P-WrongMarket (F-03 canonical-object binding).
+    asserts(cdpm::spec_scallop_redeem_ticket_market_id(&ticket) == object::id(market));
     // P-AmountShortfall (structural assertion).
     asserts(underlying.value() >= cdpm::spec_scallop_redeem_ticket_expected_underlying(&ticket));
 
-    cdpm::scallop_finish_redeem<T>(pm, fee_house, ticket, underlying, ctx);
+    cdpm::scallop_finish_redeem<T>(pm, market, fee_house, ticket, underlying, ctx);
 }
 
 // ---------------------------------------------------------------------------
@@ -130,13 +139,15 @@ public fun scallop_finish_redeem_spec<T>(
 #[spec(prove, ignore_abort, target = cdpm::kai_finish_supply)]
 public fun kai_finish_supply_spec<T, YT>(
     pm: &mut PositionManager,
+    vault: &kai_vault::Vault<T, YT>,
     ticket: KaiSupplyTicket<T, YT>,
     yt: Coin<YT>,
 ) {
     asserts(cdpm::spec_kai_supply_ticket_pm_id(&ticket) == object::id(pm));
+    asserts(cdpm::spec_kai_supply_ticket_vault_id(&ticket) == object::id(vault));
     asserts(yt.value() >= cdpm::spec_kai_supply_ticket_expected_yt(&ticket));
 
-    cdpm::kai_finish_supply<T, YT>(pm, ticket, yt);
+    cdpm::kai_finish_supply<T, YT>(pm, vault, ticket, yt);
 }
 
 // ---------------------------------------------------------------------------
@@ -149,13 +160,15 @@ public fun kai_finish_supply_spec<T, YT>(
 #[spec(prove, ignore_abort, target = cdpm::kai_finish_redeem)]
 public fun kai_finish_redeem_spec<T, YT>(
     pm: &mut PositionManager,
+    vault: &kai_vault::Vault<T, YT>,
     fee_house: &mut FeeHouse,
     ticket: KaiRedeemTicket<T, YT>,
     underlying: Coin<T>,
     ctx: &mut TxContext,
 ) {
     asserts(cdpm::spec_kai_redeem_ticket_pm_id(&ticket) == object::id(pm));
+    asserts(cdpm::spec_kai_redeem_ticket_vault_id(&ticket) == object::id(vault));
     asserts(underlying.value() >= cdpm::spec_kai_redeem_ticket_expected_underlying(&ticket));
 
-    cdpm::kai_finish_redeem<T, YT>(pm, fee_house, ticket, underlying, ctx);
+    cdpm::kai_finish_redeem<T, YT>(pm, vault, fee_house, ticket, underlying, ctx);
 }

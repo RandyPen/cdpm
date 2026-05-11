@@ -75,13 +75,37 @@ await client.signAndExecuteTransaction({ signer, transaction: tx });
 
 ## 4. Worked Examples
 
+> **REQUIRED for every Scallop example below.** Every PTB that calls
+> `cdpm::scallop_start_supply` or `cdpm::scallop_start_redeem` MUST begin with
+> `protocol::accrue_interest::accrue_interest_for_market(version, market, clock)`
+> as **command 0**. cdpm asserts `EStaleScallopState (1011)` at the boundary.
+> `scallopTx.deposit` / `depositQuick` do NOT inject this call
+> (`sui-scallop-sdk/src/builders/coreBuilder.ts:139-148, 335-358`). The Kai
+> examples have no analogous pre-step — Kai's `total_available_balance` is
+> already auto-accruing within the same PTB clock — but they DO need to re-pass
+> `&Vault` to `kai_finish_*` (`EWrongVault = 1013`).
+
 ### 4.1 Single-Protocol Supply (Picker → Scallop)
+
+The Scallop start-supply requires both `&Clock` and a fresh accrual; cdpm enforces this with `EStaleScallopState (1011)`. `scallopTx.deposit` only emits `mint::mint` (see `sui-scallop-sdk/src/builders/coreBuilder.ts:139-148`) — neither `deposit` nor `depositQuick` injects an accrue call — so you must call `accrue_interest_for_market` explicitly as command 0. The `scallop_finish_supply` re-takes `&Market` (canonical id binding — `EWrongMarket = 1012`).
 
 ```typescript
 import { Transaction } from '@mysten/sui/transactions';
 
 const tx = new Transaction();
 tx.setSender(senderAddress);
+const scallopTx = builder.createTxBlock(tx);
+
+// REQUIRED PTB[0] — cdpm asserts EStaleScallopState (1011) without this.
+// NOT injected by scallopTx.deposit / depositQuick.
+tx.moveCall({
+  target: `${SCALLOP_PROTOCOL}::accrue_interest::accrue_interest_for_market`,
+  arguments: [
+    tx.object(SCALLOP_VERSION_ID),
+    tx.object(SCALLOP_MARKET_ID),
+    tx.object('0x6'),
+  ],
+});
 
 const [coinT, ticket] = tx.moveCall({
   target: `${CDPM_PACKAGE}::cdpm::scallop_start_supply`,
@@ -90,17 +114,22 @@ const [coinT, ticket] = tx.moveCall({
     tx.object(ACCESS_LIST_ID),
     tx.object(pmId),
     tx.object(SCALLOP_MARKET_ID),
+    tx.object('0x6'),
     tx.pure.u64(amount),
   ],
 });
 
-const scallopTx  = builder.createTxBlock(tx);
-const coinMarket = scallopTx.deposit(coinT, 'usdc');   // wraps protocol::mint::mint, auto-accrues
+const coinMarket = scallopTx.deposit(coinT, 'usdc');   // wraps protocol::mint::mint
 
 tx.moveCall({
   target: `${CDPM_PACKAGE}::cdpm::scallop_finish_supply`,
   typeArguments: [underlyingCoinType],
-  arguments: [tx.object(pmId), ticket, coinMarket],
+  arguments: [
+    tx.object(pmId),
+    tx.object(SCALLOP_MARKET_ID),
+    ticket,
+    coinMarket,
+  ],
 });
 
 await client.signAndExecuteTransaction({ signer, transaction: tx });
@@ -134,10 +163,16 @@ const coinYT    = tx.moveCall({
   target: '0x2::coin::from_balance', typeArguments: [YT], arguments: [balanceYT],
 });
 
+// kai_finish_supply re-takes &Vault to assert canonical id (EWrongVault=1013).
 tx.moveCall({
   target: `${CDPM_PACKAGE}::cdpm::kai_finish_supply`,
   typeArguments: [T, YT],
-  arguments: [tx.object(pmId), ticket, coinYT],
+  arguments: [
+    tx.object(pmId),
+    tx.object(KAI_VAULT_ID),
+    ticket,
+    coinYT,
+  ],
 });
 
 await client.signAndExecuteTransaction({ signer, transaction: tx });
@@ -152,6 +187,17 @@ const tx = new Transaction();
 tx.setSender(senderAddress);
 const scallopTx = builder.createTxBlock(tx);
 
+// REQUIRED PTB[0] — cdpm asserts EStaleScallopState (1011) without this.
+// NOT injected by scallopTx.deposit / depositQuick.
+tx.moveCall({
+  target: `${SCALLOP_PROTOCOL}::accrue_interest::accrue_interest_for_market`,
+  arguments: [
+    tx.object(SCALLOP_VERSION_ID),
+    tx.object(SCALLOP_MARKET_ID),
+    tx.object('0x6'),
+  ],
+});
+
 // === Leg 1: redeem from Scallop. Net underlying lands in pm.balance[T] ===
 const [coinMarket, redeemTicket] = tx.moveCall({
   target: `${CDPM_PACKAGE}::cdpm::scallop_start_redeem`,
@@ -159,6 +205,7 @@ const [coinMarket, redeemTicket] = tx.moveCall({
   arguments: [
     tx.object(ACCESS_LIST_ID), tx.object(pmId),
     tx.object(SCALLOP_MARKET_ID),
+    tx.object('0x6'),
     tx.pure.u64(scoinAmount),                      // sized via §7 inverse helpers
   ],
 });
@@ -166,7 +213,13 @@ const coinT = scallopTx.withdraw(coinMarket, 'usdc');     // tx-result Coin<T>
 tx.moveCall({
   target: `${CDPM_PACKAGE}::cdpm::scallop_finish_redeem`,
   typeArguments: [T],
-  arguments: [tx.object(pmId), tx.object(FEE_HOUSE_ID), redeemTicket, coinT],
+  arguments: [
+    tx.object(pmId),
+    tx.object(SCALLOP_MARKET_ID),
+    tx.object(FEE_HOUSE_ID),
+    redeemTicket,
+    coinT,
+  ],
 });
 //   pm.balance[T] is now incremented by the post-fee underlying.
 
@@ -191,7 +244,12 @@ const coinYT    = tx.moveCall({
 tx.moveCall({
   target: `${CDPM_PACKAGE}::cdpm::kai_finish_supply`,
   typeArguments: [T, YT],
-  arguments: [tx.object(pmId), supplyTicket, coinYT],
+  arguments: [
+    tx.object(pmId),
+    tx.object(KAI_VAULT_ID),
+    supplyTicket,
+    coinYT,
+  ],
 });
 
 await client.signAndExecuteTransaction({ signer, transaction: tx });
@@ -211,6 +269,17 @@ Mirror of §4.3 — start with `kai_start_redeem` + `vault.withdraw(tx, balanceY
 const tx = new Transaction();
 tx.setSender(senderAddress);
 const scallopTx = builder.createTxBlock(tx);
+
+// REQUIRED PTB[0] for the supply leg — cdpm asserts EStaleScallopState (1011) without this.
+// NOT injected by scallopTx.deposit / depositQuick.
+tx.moveCall({
+  target: `${SCALLOP_PROTOCOL}::accrue_interest::accrue_interest_for_market`,
+  arguments: [
+    tx.object(SCALLOP_VERSION_ID),
+    tx.object(SCALLOP_MARKET_ID),
+    tx.object('0x6'),
+  ],
+});
 
 // === Leg 1: redeem from Kai. Net underlying lands in pm.balance[T] ===
 const [coinYT, redeemTicket] = tx.moveCall({
@@ -233,7 +302,13 @@ const coinT     = tx.moveCall({
 tx.moveCall({
   target: `${CDPM_PACKAGE}::cdpm::kai_finish_redeem`,
   typeArguments: [T, YT],
-  arguments: [tx.object(pmId), tx.object(FEE_HOUSE_ID), redeemTicket, coinT],
+  arguments: [
+    tx.object(pmId),
+    tx.object(KAI_VAULT_ID),
+    tx.object(FEE_HOUSE_ID),
+    redeemTicket,
+    coinT,
+  ],
 });
 
 // === Leg 2: supply that same underlying into Scallop ===
@@ -243,6 +318,7 @@ const [coinT2, supplyTicket] = tx.moveCall({
   arguments: [
     tx.object(ACCESS_LIST_ID), tx.object(pmId),
     tx.object(SCALLOP_MARKET_ID),
+    tx.object('0x6'),
     tx.pure.u64(supplyAmount),
   ],
 });
@@ -250,7 +326,12 @@ const coinMarket = scallopTx.deposit(coinT2, 'usdc');
 tx.moveCall({
   target: `${CDPM_PACKAGE}::cdpm::scallop_finish_supply`,
   typeArguments: [T],
-  arguments: [tx.object(pmId), supplyTicket, coinMarket],
+  arguments: [
+    tx.object(pmId),
+    tx.object(SCALLOP_MARKET_ID),
+    supplyTicket,
+    coinMarket,
+  ],
 });
 
 await client.signAndExecuteTransaction({ signer, transaction: tx });
@@ -276,6 +357,10 @@ await client.signAndExecuteTransaction({ signer, transaction: tx });
    Verify with `npm ls @mysten/sui` (or `pnpm why @mysten/sui`) that only one copy resolves.
 
 4. **Don't pass `*Quick` outputs into cdpm hot-potato finishes.** `*Quick` methods (`depositQuick`, `withdrawQuick`) source coins from the **wallet**, not from cdpm. They are useful for direct wallet-to-Scallop operations *outside* cdpm (e.g., a user with sCoin already in their wallet supplying or redeeming standalone), but they have no role inside a cdpm hot-potato flow. Feeding their output into `scallop_finish_*` produces one of two failure modes — neither silent: (a) if the `*Quick` output is below the ticket's `expected_*` value the PTB aborts at `EAmountShortfall (1009)`; (b) if it meets the threshold the PTB succeeds, but the bag's stored `principal` (which `scallop_start_supply` recorded from cdpm's own `coinT` source) no longer matches the underlying actually delivered to Scallop, breaking cdpm's principal accounting on the next redeem. Always source the inner-protocol coin from the cdpm `*_start_*` tx-result, never from a `*Quick` builder.
+
+6. **Reuse the same Market / Vault object handle across `start_*` and `finish_*`.** `scallop_start_supply` / `scallop_start_redeem` record `market_id = object::id(market)` on the ticket; `scallop_finish_*` re-takes `&Market` and asserts the id matches (`EWrongMarket = 1012`). The Kai mirror records `vault_id` and asserts on finish (`EWrongVault = 1013`). In practice this is automatic — keep the same `tx.object(SCALLOP_MARKET_ID)` / `tx.object(KAI_VAULT_ID)` reference visible to both calls.
+
+7. **Scallop pre-accrual is mandatory, not advisory.** `scallop_start_*` reads `borrow_dynamics::last_updated_by_type(market.borrow_dynamics(), type<T>)` and asserts equality with `clock::timestamp_ms(clock) / 1000`. Omitting `accrue_interest::accrue_interest_for_market(version, market, clock)` as command 0 aborts at the cdpm boundary with `EStaleScallopState (1011)` before any balance is touched. `scallopTx.deposit` / `scallopTx.withdraw` wrap the inner Scallop accrue; if you compose using raw move-calls only, add the accrue command explicitly. Kai has no analogous freshness check — `total_available_balance(vault, clock)` is race-free.
 
 5. **Re-snapshot inputs before signing.** Both protocols' state (`balance_sheet` for Scallop, `total_available_balance` for Kai) move every block. The picker (`scallop-lending-math.md` §10.4) and the sizing helpers (§7 in either file) rely on snapshots; for a rebalance PTB that does both a redeem and a supply, take a *single* snapshot just before signing and reuse it across both legs to keep the predictions internally consistent.
 

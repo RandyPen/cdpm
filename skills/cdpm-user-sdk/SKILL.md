@@ -46,10 +46,10 @@ const CDPM_PACKAGE = '0x00000000000000000000000000000000000000000000000000000000
 - **[Fee Collection](reference/fee-collection.md)** - Collect fees and rewards
 
 ### Scallop Lending (Idle Funds)
-- **[Scallop Lending](reference/scallop-lending.md)** - Hot-potato supply/redeem PTBs, owner-only escape hatch, yield-fee math
+- **[Scallop Lending](reference/scallop-lending.md)** - **REQUIRED PTB[0]: `protocol::accrue_interest::accrue_interest_for_market(version, market, clock)` — cdpm-enforced via `EStaleScallopState (1011)`, NOT injected by `scallopTx.deposit` / `depositQuick`.** Hot-potato supply/redeem PTBs; canonical `Market` re-binding on `finish_*` (`EWrongMarket = 1012`); yield-fee math; no wrapper-extract escape (exit only via the full redeem flow).
 
 ### Kai SAV Lending (Idle Funds)
-- **[Kai SAV Lending](reference/kai-lending.md)** - Two-generic `<T, YT>` hot-potato supply/redeem with strategy walk, owner-only `user_extract_kai_yt` escape, shared yield-fee math
+- **[Kai SAV Lending](reference/kai-lending.md)** - Two-generic `<T, YT>` hot-potato supply/redeem with strategy walk and canonical `Vault` re-binding on `finish_*`; shared yield-fee math; no wrapper-extract escape (exit only via the full redeem flow)
 
 ### Web Development & Queries
 - **[Web Query Guide](reference/web-query.md)** - GraphQL queries for PositionManagers
@@ -121,6 +121,14 @@ try {
     console.error('Hot-potato ticket (Scallop or Kai) consumed against a different PositionManager');
   } else if (e.message.includes('EAmountShortfall')) {// 1009
     console.error('finish_* received Coin with value < ticket.expected. Scallop: stale accrual. Kai: vault state moved between snapshot and signing.');
+  } else if (e.message.includes('ENoSuchBalance')) {  // 1010
+    console.error('withdraw_from_balance / withdraw_from_fee called for an absent type key');
+  } else if (e.message.includes('EStaleScallopState')) { // 1011
+    console.error('scallop_start_* called without accrue_interest::accrue_interest_for_market in the same PTB. Make it command 0 of the batch.');
+  } else if (e.message.includes('EWrongMarket')) {    // 1012
+    console.error('scallop_finish_* received a Market with id != ticket.market_id. Pass the same Market across start_* and finish_*.');
+  } else if (e.message.includes('EWrongVault')) {     // 1013
+    console.error('kai_finish_* received a Vault with id != ticket.vault_id. Pass the same Vault across start_* and finish_*.');
   } else {
     console.error('Transaction failed:', e);
   }

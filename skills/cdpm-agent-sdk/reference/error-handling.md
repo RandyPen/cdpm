@@ -3,17 +3,21 @@
 ## Common Agent Errors
 
 ```typescript
-// cdpm error codes (sources/cdpm.move, lines 28-36) — codes are SHARED between Scallop and Kai integrations.
+// cdpm error codes (sources/cdpm.move) — codes are SHARED between Scallop and Kai integrations.
 const CDPM_ERROR_CODES = {
-  ENotOwner:         1001, // Caller is not pm.owner (e.g. agent tried user_get_position / user_get_and_return_position)
-  ENotAllow:         1002, // assert_caller_authorized failed (or invariant broken)
-  EInvalidFeeRate:   1003, // admin_set_fee given rate > MAX_FEE_RATE (30%)
-  ELendingNotEmpty:  1004, // user_close_pm called with non-empty pm.lending (any Scallop or Kai entry)
-  ENoSuchVault:      1005, // scallop_start_redeem / kai_start_redeem called for an absent vault entry
-  EReserveEmpty:     1006, // Scallop reserve degenerate OR Kai vault total_yt_supply == 0
-  EZeroExpected:     1007, // scallop_start_* / kai_start_* would yield 0 — amount too small
-  EWrongPm:          1008, // Hot-potato ticket consumed against a different PM (Scallop or Kai)
-  EAmountShortfall:  1009, // finish_* received Coin with value < ticket.expected
+  ENotOwner:           1001, // Caller is not pm.owner (e.g. agent tried user_get_position / user_get_and_return_position)
+  ENotAllow:           1002, // assert_caller_authorized failed (or invariant broken)
+  EInvalidFeeRate:     1003, // admin_set_fee given rate > MAX_FEE_RATE (30%)
+  ELendingNotEmpty:    1004, // user_close_pm called with non-empty pm.lending (any Scallop or Kai entry)
+  ENoSuchVault:        1005, // scallop_start_redeem / kai_start_redeem called for an absent vault entry
+  EReserveEmpty:       1006, // Scallop reserve degenerate OR Kai vault total_yt_supply == 0
+  EZeroExpected:       1007, // scallop_start_* / kai_start_* would yield 0 — amount too small
+  EWrongPm:            1008, // Hot-potato ticket consumed against a different PM (Scallop or Kai)
+  EAmountShortfall:    1009, // finish_* received Coin with value < ticket.expected
+  ENoSuchBalance:      1010, // withdraw_from_balance / withdraw_from_fee for an absent type key
+  EStaleScallopState:  1011, // scallop_start_* called before accrue_interest_for_market in the same PTB second
+  EWrongMarket:        1012, // scallop_finish_* received a Market with id != ticket.market_id
+  EWrongVault:         1013, // kai_finish_* received a Vault with id != ticket.vault_id
 };
 
 async function handleAgentError(error: any): Promise<string> {
@@ -35,6 +39,14 @@ async function handleAgentError(error: any): Promise<string> {
     return 'Hot-potato ticket (ScallopSupplyTicket / ScallopRedeemTicket / KaiSupplyTicket / KaiRedeemTicket) consumed against a different PositionManager.';
   } else if (errorStr.includes('EAmountShortfall')) {
     return 'finish_* received Coin with value < ticket.expected. Scallop: run accrue_interest_for_market as the first PTB command. Kai: re-snapshot total_available_balance immediately before signing.';
+  } else if (errorStr.includes('ENoSuchBalance')) {
+    return 'withdraw_from_balance / withdraw_from_fee called for an absent type key. Check pm.balance / pm.fee for the type before signing.';
+  } else if (errorStr.includes('EStaleScallopState')) {
+    return 'scallop_start_* called without accrue_interest::accrue_interest_for_market in the same PTB. Make it command 0 of the batch — cdpm enforces this.';
+  } else if (errorStr.includes('EWrongMarket')) {
+    return 'scallop_finish_* received a Market whose id != ticket.market_id. Reuse the same tx.object(SCALLOP_MARKET_ID) handle across start_* and finish_*.';
+  } else if (errorStr.includes('EWrongVault')) {
+    return 'kai_finish_* received a Vault whose id != ticket.vault_id. Reuse the same tx.object(vaultObjectId) handle across start_* and finish_*.';
   }
 
   return `Unknown error: ${errorStr}`;

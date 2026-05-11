@@ -62,8 +62,8 @@ const isAuthorized = agents.includes(agentAddress);
 
 ### Core Operations
 - **[Agent Operations](reference/agent-operations.md)** - Add/remove liquidity, collect fees, transfer fees, plus the Scallop hot-potato `scallop_start_*` / `scallop_finish_*` recipe (Kai SAV recipes live in the dedicated page below)
-- **[Scallop Lending](reference/scallop-lending.md)** - Agent-driven `scallop_start_supply` / `scallop_start_redeem` with required `accrue_interest_for_market` prefix; yield fee shares `fee_house.fee_rate` with Kai; no wrapper-extract escape — exit only via the full redeem flow
-- **[Kai SAV Lending](reference/kai-lending.md)** - Agent-driven `kai_start_supply` / `kai_start_redeem` with strategy walk; yield fee shares `fee_house.fee_rate` with Scallop; no wrapper-extract escape — exit only via the full redeem flow
+- **[Scallop Lending](reference/scallop-lending.md)** - **REQUIRED PTB[0]: `protocol::accrue_interest::accrue_interest_for_market(version, market, clock)` — cdpm-enforced via `EStaleScallopState (1011)`, NOT injected by `scallopTx.deposit` / `depositQuick`.** Agent-driven `scallop_start_supply` / `scallop_start_redeem`; canonical `Market` rebinding on `finish_*` (`EWrongMarket = 1012`); yield fee shares `fee_house.fee_rate` with Kai; no wrapper-extract escape — exit only via the full redeem flow.
+- **[Kai SAV Lending](reference/kai-lending.md)** - Agent-driven `kai_start_supply` / `kai_start_redeem` with strategy walk and canonical `Vault` rebinding on `finish_*` (`EWrongVault = 1013`); yield fee shares `fee_house.fee_rate` with Scallop; no wrapper-extract escape — exit only via the full redeem flow
 - **[Automation Strategies](reference/automation-strategies.md)** - Auto-compounding, rebalancing, fee collection scheduler
 
 ### Monitoring & Best Practices

@@ -25,7 +25,7 @@ denom_underlying = cash + debt − revenue
 
 cdpm asserts `cash + debt >= revenue` and `denom_underlying > 0`, otherwise it aborts with `EReserveEmpty (1006)`.
 
-> **Pre-flight requirement.** Before reading these values for prediction, the live PTB **must** run `protocol::accrue_interest::accrue_interest_for_market(version, market, clock)` as its first command. Off-chain dry runs and gRPC reads that do not include this command will see a stale `balance_sheet` whose `denom_underlying` is smaller than reality, so they will *over-predict* the sCoin mint and *over-predict* the underlying redeem — exactly the conditions that trip `EAmountShortfall (1009)` on chain.
+> **Pre-flight requirement (enforced).** The live PTB **must** run `protocol::accrue_interest::accrue_interest_for_market(version, market, clock)` as its first command. cdpm now enforces this: `scallop_start_supply` / `scallop_start_redeem` take `&Clock` and assert `borrow_dynamics::last_updated_by_type(market.borrow_dynamics(), type<T>) == clock::timestamp_ms(clock) / 1000`. Omitting the pre-step aborts at the cdpm boundary with `EStaleScallopState (1011)` before any balance is touched. Off-chain dry runs and gRPC reads that do not simulate this command will also see a stale `balance_sheet` whose `denom_underlying` is smaller than reality and *over-predict* the sCoin mint / underlying redeem.
 
 ---
 
@@ -626,7 +626,8 @@ const builder = await scallop.createScallopBuilder();
 const txBlock = builder.createTxBlock();
 txBlock.setSender(senderAddress);
 
-// 1. Optional accrual prefix (still wanted for sizing freshness; harmless if omitted).
+// 1. REQUIRED PTB[0] — cdpm asserts EStaleScallopState (1011) without this.
+//    NOT injected by scallopTx.deposit / depositQuick.
 txBlock.moveCall({
   target: `${SCALLOP_PROTOCOL}::accrue_interest::accrue_interest_for_market`,
   arguments: [
@@ -636,7 +637,7 @@ txBlock.moveCall({
   ],
 });
 
-// 2. cdpm hot-potato start — same as before.
+// 2. cdpm hot-potato start — takes &Clock for the freshness floor (EStaleScallopState=1011).
 const [coinT, ticket] = txBlock.moveCall({
   target: `${CDPM_PACKAGE}::cdpm::scallop_start_supply`,
   typeArguments: [underlyingCoinType],
@@ -644,6 +645,7 @@ const [coinT, ticket] = txBlock.moveCall({
     txBlock.object(CDPM_MAINNET.ACCESS_LIST_ID),
     txBlock.object(pmId),
     txBlock.object(SCALLOP_MARKET_ID),
+    txBlock.object('0x6'),
     txBlock.pure.u64(amount),
   ],
 });
@@ -651,11 +653,16 @@ const [coinT, ticket] = txBlock.moveCall({
 // 3. Replace the manual `protocol::mint::mint` move-call with the SDK helper.
 const coinMarket = txBlock.deposit(coinT, 'usdc');     // → tx-result Coin<MarketCoin<T>>
 
-// 4. cdpm hot-potato finish — same as before.
+// 4. cdpm hot-potato finish — re-takes &Market (EWrongMarket=1012).
 txBlock.moveCall({
   target: `${CDPM_PACKAGE}::cdpm::scallop_finish_supply`,
   typeArguments: [underlyingCoinType],
-  arguments: [txBlock.object(pmId), ticket, coinMarket],
+  arguments: [
+    txBlock.object(pmId),
+    txBlock.object(SCALLOP_MARKET_ID),
+    ticket,
+    coinMarket,
+  ],
 });
 
 await suiClient.signAndExecuteTransaction({ signer, transaction: txBlock });

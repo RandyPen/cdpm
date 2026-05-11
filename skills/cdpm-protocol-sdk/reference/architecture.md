@@ -86,9 +86,10 @@ cdpm imports only the read-only / hot-potato surface of Scallop:
 
 - `protocol::market::{Self, Market}` (object handle)
 - `protocol::reserve` (view-only access to `balance_sheet`)
+- `protocol::borrow_dynamics` (view-only `last_updated_by_type` — used by the freshness floor in `assert_scallop_state_fresh`)
 - `x::wit_table` (view-only)
 
-It does **NOT** import `protocol::mint`, `protocol::redeem`, `protocol::version::Version`, or `protocol::accrue_interest`. As a consequence, Scallop `Version` bumps no longer break cdpm — callers compose `accrue_interest`, `mint::mint` and `redeem::redeem` themselves inside the same PTB.
+It does **NOT** import `protocol::mint`, `protocol::redeem`, `protocol::version::Version`, or `protocol::accrue_interest`. As a consequence, Scallop `Version` bumps no longer break cdpm — callers compose `accrue_interest`, `mint::mint` and `redeem::redeem` themselves inside the same PTB. The caller's `accrue_interest::accrue_interest_for_market(version, market, clock)` pre-step is mandatory (cdpm asserts `borrow_dynamics::last_updated_by_type == clock::timestamp_ms / 1000` and aborts with `EStaleScallopState (1011)` otherwise); the `borrow_dynamics` accessors used for this check are version-free `public` views, so the decoupling from Scallop `Version` is preserved.
 
 ## Kai SAV Decoupling
 

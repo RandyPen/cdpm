@@ -111,20 +111,22 @@ cdpm exposes **two** lending integrations with different pre-flight needs.
 
 ### Scallop (`scallop_start_*` / `scallop_finish_*`)
 
-When chaining a supply or redeem, the **first** PTB command must be `protocol::accrue_interest::accrue_interest_for_market(version, market, clock)`. cdpm only reads Scallop's `balance_sheet` view-only (`compute_expected_scoin` / `compute_expected_underlying_scallop`), so a stale accrual will make the predicted scoin/underlying exceed what Scallop actually mints/redeems and `scallop_finish_supply` / `scallop_finish_redeem` will abort with `EAmountShortfall (1009)`.
+The **first** PTB command MUST be `protocol::accrue_interest::accrue_interest_for_market(version, market, clock)`. cdpm enforces this: `scallop_start_supply` / `scallop_start_redeem` take `&Clock` and assert Scallop's per-asset `last_updated == clock::timestamp_ms / 1000`. Omitting the pre-step aborts at the cdpm boundary with `EStaleScallopState (1011)`. `scallop_finish_*` additionally re-take `&Market` and assert `object::id(market) == ticket.market_id` (`EWrongMarket = 1012`).
 
-Recommended PTB shape:
+Recommended PTB shape (4 steps):
 
 ```
-1. accrue_interest_for_market
-2. cdpm::scallop_start_supply  | cdpm::scallop_start_redeem
+1. accrue_interest::accrue_interest_for_market(version, market, clock)
+2. cdpm::scallop_start_supply(access, pm, market, clock, amount)
+   | cdpm::scallop_start_redeem(access, pm, market, clock, scoin_amount)
 3. protocol::mint::mint | protocol::redeem::redeem
-4. cdpm::scallop_finish_supply | cdpm::scallop_finish_redeem
+4. cdpm::scallop_finish_supply(pm, market, ticket, scoin)
+   | cdpm::scallop_finish_redeem(pm, market, fee_house, ticket, coin_t)
 ```
 
 ### Kai SAV (`kai_start_*` / `kai_finish_*`)
 
-**No pre-flight accrual command.** Kai's `total_available_balance(vault, clock)` already folds in time-locked profit via `tlb::max_withdrawable`, and cdpm's `compute_expected_yt` / `compute_expected_underlying_kai` read the same auto-accruing pair. Re-snapshot the vault immediately before signing — `total_available_balance` ticks every block as time-locked profit unlocks, and stale snapshots can leave the bot 1-2 underlying short. See [`kai-lending.md`](./kai-lending.md) for the Kai-specific PTB recipe (which includes a multi-step strategy walk on the redeem path).
+**No pre-flight accrual command.** Kai's `total_available_balance(vault, clock)` already folds in time-locked profit via `tlb::max_withdrawable`, and cdpm's `compute_expected_yt` / `compute_expected_underlying_kai` read the same auto-accruing pair. Re-snapshot the vault immediately before signing — `total_available_balance` ticks every block as time-locked profit unlocks, and stale snapshots can leave the bot 1-2 underlying short. `kai_start_*` records `vault_id` on the ticket and `kai_finish_*` re-takes `&Vault<T,YT>` and asserts the id matches (`EWrongVault = 1013`); reuse the same `tx.object(vaultObjectId)` handle across `start_*` and `finish_*`. See [`kai-lending.md`](./kai-lending.md) for the full Kai PTB recipe (which includes a multi-step strategy walk on the redeem path).
 
 ### Shared agent-side notes
 

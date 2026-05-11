@@ -343,15 +343,19 @@ User/Agent/Protocol collects fees:
 
 ### Error Codes
 ```move
-const ENotOwner: u64        = 1001;  // caller is not pm.owner
-const ENotAllow: u64        = 1002;  // caller not in agents / access list
-const EInvalidFeeRate: u64  = 1003;  // admin_set_fee given rate > MAX_FEE_RATE (30%)
-const ELendingNotEmpty: u64 = 1004;  // user_close_pm called with non-empty lending Bag
-const ENoSuchVault: u64     = 1005;  // pull_from_scallop_lending called for an absent (T, S) vault
-const EReserveEmpty: u64    = 1006;  // Scallop reserve has zero supply or zero (cash+debt-revenue)
-const EZeroExpected: u64    = 1007;  // start_* would yield 0 scoin/underlying (amount too small)
-const EWrongPm: u64         = 1008;  // hot-potato ticket consumed against a different PM
-const EAmountShortfall: u64 = 1009;  // finish_* received Coin with value < ticket.expected
+const ENotOwner: u64          = 1001;  // caller is not pm.owner
+const ENotAllow: u64          = 1002;  // caller not in agents / access list
+const EInvalidFeeRate: u64    = 1003;  // admin_set_fee given rate > MAX_FEE_RATE (30%)
+const ELendingNotEmpty: u64   = 1004;  // user_close_pm called with non-empty lending Bag
+const ENoSuchVault: u64       = 1005;  // pull_from_scallop_lending called for an absent (T, S) vault
+const EReserveEmpty: u64      = 1006;  // Scallop reserve has zero supply or zero (cash+debt-revenue)
+const EZeroExpected: u64      = 1007;  // start_* would yield 0 scoin/underlying (amount too small)
+const EWrongPm: u64           = 1008;  // hot-potato ticket consumed against a different PM
+const EAmountShortfall: u64   = 1009;  // finish_* received Coin with value < ticket.expected
+const ENoSuchBalance: u64     = 1010;  // withdraw_from_balance/_fee called for an absent type
+const EStaleScallopState: u64 = 1011;  // scallop_start_* called before accrue_interest_for_market in same PTB second
+const EWrongMarket: u64       = 1012;  // scallop_finish_* received a Market with id ≠ ticket.market_id
+const EWrongVault: u64        = 1013;  // kai_finish_* received a Vault with id ≠ ticket.vault_id
 ```
 
 ### Error Code Recommendations (Future Improvement)
@@ -416,34 +420,39 @@ Scallop's `Version` is bumped frequently. If cdpm imported `protocol::mint` /
 forcing a full cdpm redeploy (cdpm is non-upgradeable). With hot-potato:
 
 - cdpm imports only **view types and view functions** (`protocol::market::vault`,
+  `protocol::market::borrow_dynamics`,
   `protocol::reserve::balance_sheets` / `balance_sheet`,
   `protocol::reserve::MarketCoin` as a phantom-type pin on the lending
-  vault, and `x::wit_table::borrow`). None of these enforce `Version`;
+  vault, `protocol::borrow_dynamics::last_updated_by_type`, and
+  `x::wit_table::borrow`). None of these enforce `Version`;
   `MarketCoin<T>` is a pure marker struct (`has drop`) defined in
   `protocol::reserve` and never touches the runtime version checks that live
   in `protocol::mint` / `redeem` / `accrue_interest`.
-- Caller PTB calls Scallop's `accrue_interest`, `mint`, `redeem` directly
-  with the live Version object. When Scallop bumps Version, only the caller
-  PTB aborts; cdpm itself stays untouched. `pm.lending` is still recoverable
-  by retrying once Scallop publishes a SDK update against the new Version —
-  the only exit path is the normal `scallop_start_redeem` /
-  `scallop_finish_redeem` flow, which deposits the underlying into
-  `pm.balance`. cdpm intentionally provides **no escape hatch** that hands
-  raw `Coin<MarketCoin<T>>` back to the user, because the wrapper has no
-  utility outside of redemption against Scallop's reserve.
+- Caller PTB calls Scallop's `accrue_interest_for_market`, `mint`,
+  `redeem` directly with the live Version object. When Scallop bumps
+  Version, only the caller PTB aborts; cdpm itself stays untouched.
+  `pm.lending` is still recoverable by retrying once Scallop publishes
+  an SDK update against the new Version — the only exit path is the
+  normal `scallop_start_redeem` / `scallop_finish_redeem` flow, which
+  deposits the underlying into `pm.balance`. cdpm intentionally provides
+  **no escape hatch** that hands raw `Coin<MarketCoin<T>>` back to the
+  user, because the wrapper has no utility outside of redemption against
+  Scallop's reserve.
 
 ### Public surface
 ```move
 public fun scallop_start_supply<T>(
     access: &AccessList,
     pm: &mut PositionManager,
-    market: &Market,            // read-only view
+    market: &Market,            // read-only view (id pinned to ticket)
+    clock: &Clock,              // for freshness assertion
     amount: u64,
     ctx: &mut TxContext,
 ): (Coin<T>, ScallopSupplyTicket<T>);
 
 public fun scallop_finish_supply<T>(
     pm: &mut PositionManager,
+    market: &Market,            // asserted against ticket.market_id
     ticket: ScallopSupplyTicket<T>,
     scoin: Coin<MarketCoin<T>>,
 );
@@ -452,12 +461,14 @@ public fun scallop_start_redeem<T>(
     access: &AccessList,
     pm: &mut PositionManager,
     market: &Market,
+    clock: &Clock,
     market_coin_amount: u64,    // u64::MAX redeems all
     ctx: &mut TxContext,
 ): (Coin<MarketCoin<T>>, ScallopRedeemTicket<T>);
 
 public fun scallop_finish_redeem<T>(
     pm: &mut PositionManager,
+    market: &Market,            // asserted against ticket.market_id
     fee_house: &mut FeeHouse,
     ticket: ScallopRedeemTicket<T>,
     underlying: Coin<T>,
@@ -491,7 +502,7 @@ expected_underlying  = floor(scoin × (cash + debt − revenue) / supply)
 - For redeem: Scallop must return at least the underlying amount cdpm
   computed.
 
-This blocks the agent-extraction attack on TWO axes:
+This blocks the agent-extraction attack on THREE axes:
 
 1. **Type pin** — `scallop_finish_supply`'s `scoin` parameter is typed
    `Coin<MarketCoin<T>>`, not a free generic `Coin<S>`. `MarketCoin<T>` has
@@ -500,40 +511,70 @@ This blocks the agent-extraction attack on TWO axes:
    their own coin type and pass it as fake sCoin.
 2. **Quantity floor** — `actual >= expected` ensures Scallop's `mint` was
    actually invoked with the diverted underlying, not bypassed.
+3. **Freshness floor (F-01 / F-02 hardening)** — `scallop_start_*` reads
+   `borrow_dynamics::last_updated_by_type(market.borrow_dynamics(),
+   type<T>)` and asserts it equals `clock.timestamp_ms() / 1000`. The
+   second-resolution match mirrors Scallop's own conversion at
+   `market.move:307` (`now = clock::timestamp_ms(clock) / 1000`). Without
+   this, an agent could read a stale balance-sheet (locking a low
+   `expected_underlying`), let Scallop's real `redeem` accrue interest
+   internally (raising the live rate), and pocket the excess by passing
+   only `expected_underlying` to `scallop_finish_redeem`. The freshness
+   assertion forces the caller PTB to invoke
+   `accrue_interest_for_market(version, market, clock)` as the first
+   command; cdpm's expected then matches Scallop's real return modulo at
+   most one unit of floor-rounding noise.
 
 Together these make agent extraction economically null: stealing `Coin<T>`
 forces the agent to deliver an authentic `Coin<MarketCoin<T>>` of equivalent
-value, which itself costs equivalent `Coin<T>` to mint at Scallop. There is
-no upper bound on `actual` — `actual > expected` is permitted because any
-"extra" came from the caller's own pocket (donation) or from accrued interest
-the caller helpfully realized; in either case the protocol/user benefit and
-there is no exploitation path. The intentional asymmetry means PTBs that skip
-`accrue_interest_for_market` succeed only when Scallop returns *more* than
-cdpm's stale view (redeem direction) and abort cleanly when Scallop returns
-*less* (supply direction); no fund loss in either case.
+value, which itself costs equivalent `Coin<T>` to mint at Scallop. The
+freshness assertion closes the side-channel that previously let an agent
+keep the interest delta between cdpm's stale-view and Scallop's
+post-accrual reality. `actual > expected` is still permitted because any
+"extra" came from the caller's own pocket (donation) or from a same-second
+rounding crumb — neither is exploitable.
 
-There is no admin-tunable drift; the contract surface is a tight `>=`.
+There is no admin-tunable drift; the contract surface is a tight `>=` plus
+an exact-equality freshness check.
+
+#### F-04: rounding-floor fee evasion (documented residual risk)
+`fee_amount = floor(interest × fee_rate / 10_000)` rounds down. A redeem
+where `interest × fee_rate < 10_000` produces `fee_amount = 0`. At
+`fee_rate = 2000` (default 20%) this means slices with `interest < 5`
+underlying units. For 6-decimal stables this is 5 micro-units; for
+9-decimal SUI, 5 nano-SUI. Sui's reference gas per move-call exceeds
+the evaded value by 4–5 orders of magnitude, so the break-even
+`gas_cost / evaded_fee` is unfavorable to the attacker by the same
+factor. No structural defense (per-vault carry-over accumulator,
+ceil-rounded fee, minimum-interest threshold) is justified; each would
+add new state or impose ergonomic surprises on micro-redeems for zero
+closure of an economically viable attack. Recorded as accepted residual
+risk.
 
 ### PTB contract (caller side)
 Callers MUST call Scallop's `accrue_interest_for_market(version, market,
-clock)` as the first PTB command. Without it, `balance_sheet` returns stale
-data and `expected ≠ actual`, causing `finish_*` to abort cleanly (no
-fund loss). Templates:
+clock)` as the first PTB command. The freshness floor in
+`scallop_start_*` enforces this — omission trips `EStaleScallopState
+(1011)` at the cdpm boundary, before any balance is touched. The
+finishers additionally take `market` and assert
+`object::id(market) == ticket.market_id` (`EWrongMarket (1012)`), so the
+same canonical `Market` shared object must be referenced across the
+PTB. Templates:
 
 **Supply**
 ```
 PTB[0] accrue_interest::accrue_interest_for_market(version, market, clock)
-PTB[1] (coin_t, ticket) = cdpm::scallop_start_supply<T>(access, pm, market, amount)
+PTB[1] (coin_t, ticket) = cdpm::scallop_start_supply<T>(access, pm, market, clock, amount)
 PTB[2] scoin = mint::mint<T>(version, market, coin_t, clock)
-PTB[3] cdpm::scallop_finish_supply<T>(pm, ticket, scoin)
+PTB[3] cdpm::scallop_finish_supply<T>(pm, market, ticket, scoin)
 ```
 
 **Redeem**
 ```
 PTB[0] accrue_interest::accrue_interest_for_market(version, market, clock)
-PTB[1] (scoin, ticket) = cdpm::scallop_start_redeem<T>(access, pm, market, market_coin_amount)
+PTB[1] (scoin, ticket) = cdpm::scallop_start_redeem<T>(access, pm, market, clock, market_coin_amount)
 PTB[2] underlying = redeem::redeem<T>(version, market, scoin, clock)
-PTB[3] cdpm::scallop_finish_redeem<T>(pm, fee_house, ticket, underlying)
+PTB[3] cdpm::scallop_finish_redeem<T>(pm, market, fee_house, ticket, underlying)
 ```
 
 ### Yield fee model
@@ -698,11 +739,20 @@ fun compute_expected_underlying_kai<T, YT>(vault, clock, yt_amount): u64 {
 (time-locked profit unlock), so cdpm doesn't reimplement that math.
 
 ### Caller PTB contract
+Both tickets bind `vault_id = object::id(vault)` at `start_*`; the
+finishers re-take `vault: &Vault<T,YT>` and assert id-match
+(`EWrongVault (1013)`). Unlike Scallop, **no freshness pre-step is
+required** — `vault::deposit` (vault.move:600) and `vault::withdraw`
+(vault.move:677) both read the same `total_available_balance(vault,
+clock)` view that cdpm's compute helpers consume. Within one PTB at
+one `Clock` reading the two reads return identical values, so there is
+no Scallop-style stale-state gap to close.
+
 **Supply** (3 steps, same shape as Scallop):
 ```
 PTB[0] (coin_t, ticket) = cdpm::kai_start_supply<T, YT>(access, pm, vault, amount, clock)
 PTB[1] yt_balance = vault::deposit<T, YT>(vault, coin_t.into_balance(), clock)
-PTB[2] cdpm::kai_finish_supply<T, YT>(pm, ticket, yt_balance.into_coin())
+PTB[2] cdpm::kai_finish_supply<T, YT>(pm, vault, ticket, yt_balance.into_coin())
 ```
 
 **Redeem** (variable length — vault::withdraw is async via strategies):
@@ -713,7 +763,7 @@ PTB[2..N+1] for each strategy with `to_withdraw > 0`:
             <strategy_module>::strategy_withdraw_for_vault(strategy, vault, withdraw_ticket, ...)
             // strategy module discharges its own access-management ActionRequest internally
 PTB[N+2] balance_t = vault::redeem_withdraw_ticket<T, YT>(vault, withdraw_ticket)
-PTB[N+3] cdpm::kai_finish_redeem<T, YT>(pm, fee_house, ticket, balance_t.into_coin())
+PTB[N+3] cdpm::kai_finish_redeem<T, YT>(pm, vault, fee_house, ticket, balance_t.into_coin())
 ```
 
 The strategy walk is mandatory when the vault has active strategies with
