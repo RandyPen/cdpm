@@ -9,9 +9,9 @@
 | Collect Fees/Rewards | yes | yes (to fee bag) | yes* | no |
 | Withdraw Funds | yes | no | no | no |
 | Manage Agents | yes | no | no | no |
-| Scallop `start_supply` / `start_redeem` | yes | yes | yes* | no |
-| Scallop `finish_supply` / `finish_redeem` | yes | yes | yes* | no |
-| `user_extract_market_coin<T>` | yes | no | no | no |
+| Scallop `scallop_start_supply` / `scallop_start_redeem` | yes | yes | yes* | no |
+| Scallop `scallop_finish_supply` / `scallop_finish_redeem` | yes | yes | yes* | no |
+| `user_extract_scallop_market_coin<T>` | yes | no | no | no |
 | `user_close_pm` (requires `pm.lending` empty) | yes | no | no | no |
 | Set Fee Rate (cap 30%) | no | no | no | yes |
 | Collect Protocol Fees | no | no | no | yes |
@@ -28,7 +28,7 @@ Protocol-tier operations require:
 This is enforced two different ways depending on the function:
 
 - `protocol_*` Cetus operations (`protocol_add_liquidity`, `protocol_remove_liquidity`, `protocol_collect_fee`, `protocol_collect_reward`, `protocol_transfer_fee_to_balance`) check both conditions explicitly with `assert!(vec_set::contains(...) && vec_set::is_empty(&pm.agents))`.
-- The Scallop hot-potato entry points (`start_supply`, `start_redeem`) call `assert_caller_authorized(access, pm, ctx)`, which folds the protocol path into the same union: `is_owner || is_agent || (is_in_access_list && pm.agents.is_empty())`.
+- The Scallop hot-potato entry points (`scallop_start_supply`, `scallop_start_redeem`) call `assert_caller_authorized(access, pm, ctx)`, which folds the protocol path into the same union: `is_owner || is_agent || (is_in_access_list && pm.agents.is_empty())`.
 
 ```typescript
 function canProtocolOperate(
@@ -92,7 +92,7 @@ Agent collects 100 USDC
 
 #### Scallop Yield Fee (any caller)
 
-`finish_redeem` deducts the protocol cut from the **interest portion only** — never from principal:
+`scallop_finish_redeem` deducts the protocol cut from the **interest portion only** — never from principal:
 
 ```
 interest         = max(0, redeemed_amount − principal_portion)
@@ -100,4 +100,4 @@ fee_amount       = floor(interest × fee_house.fee_rate / 10_000)
 to_pm_balance    = redeemed_amount − fee_amount
 ```
 
-This applies regardless of who initiated the redeem (owner / agent / protocol). `principal_portion` is computed in `pull_from_lending` as `floor(P_total × scoin_burned / S_total)`.
+This applies regardless of who initiated the redeem (owner / agent / protocol). `principal_portion` is computed in `pull_from_scallop_lending` as `floor(P_total × scoin_burned / S_total)`.

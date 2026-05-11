@@ -90,7 +90,7 @@ interface ProtocolRewardCollected {
 These three events fire from the shared hot-potato API regardless of which caller initiated the PTB (owner / agent / protocol). They intentionally omit a `by` field — use the Sui event envelope's `event.sender` to attribute the action.
 
 ```typescript
-// Emitted by finish_supply
+// Emitted by scallop_finish_supply
 interface ScallopSupplied {
   pm_id: string;
   coin_type: string;            // type_name<T> — sCoin type is always MarketCoin<T>
@@ -98,7 +98,7 @@ interface ScallopSupplied {
   market_coin_minted: string;   // sCoin received and added to pm.lending
 }
 
-// Emitted by finish_redeem
+// Emitted by scallop_finish_redeem
 interface ScallopRedeemed {
   pm_id: string;
   coin_type: string;
@@ -109,8 +109,8 @@ interface ScallopRedeemed {
   fee_amount: string;           // protocol yield fee deducted from interest
 }
 
-// Emitted by user_extract_market_coin (owner-only escape hatch)
-interface MarketCoinExtracted {
+// Emitted by user_extract_scallop_market_coin (owner-only escape hatch)
+interface ScallopMarketCoinExtracted {
   pm_id: string;
   coin_type: string;
   market_coin_amount: string;   // raw sCoin transferred to owner

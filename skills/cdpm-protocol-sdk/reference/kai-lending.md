@@ -13,7 +13,7 @@ Two dimensions of diversification:
 1. **Underlying yield source.** Scallop is a money market (variable supply APY tied to utilization). Kai SAV aggregates strategies — leveraged supply on `kai_leverage::supply_pool`, vault-of-vaults on Scallop SAV strategies, etc. A protocol bot that periodically rebalances idle balance between the two diversifies the yield curve.
 2. **Coexistence on a single PM.** The `pm.lending: Bag` keys Scallop entries by `type_name<T>` and Kai entries by `type_name<YT>`. A protocol bot can hold both `ScallopVault<USDC>` and `KaiVault<USDC, YUSDC>` simultaneously without bag collision.
 
-The yield-fee math inside `kai_finish_redeem` is **identical** to `finish_redeem`:
+The yield-fee math inside `kai_finish_redeem` is **identical** to `scallop_finish_redeem`:
 
 ```
 interest      = max(0, redeemed_amount − principal_portion)

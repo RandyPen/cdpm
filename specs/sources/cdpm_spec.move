@@ -18,8 +18,8 @@ use cdpm::cdpm::{
     AdminCap,
     FeeHouse,
     PositionManager,
-    SupplyTicket,
-    RedeemTicket,
+    ScallopSupplyTicket,
+    ScallopRedeemTicket,
     KaiSupplyTicket,
     KaiRedeemTicket,
 };
@@ -56,7 +56,7 @@ public fun admin_set_fee_spec(
 // ---------------------------------------------------------------------------
 // P-WrongPm-supply + P-AmountShortfall-supply
 //
-//   finish_supply<T>(pm, ticket, scoin) aborts when
+//   scallop_finish_supply<T>(pm, ticket, scoin) aborts when
 //     ticket.pm_id   != object::id(pm)             // EWrongPm
 //     scoin.value()  <  ticket.expected_scoin      // EAmountShortfall
 //
@@ -65,49 +65,49 @@ public fun admin_set_fee_spec(
 // type system. The fake-S extraction vector that motivated separate ticket
 // audits no longer exists; both asserts below are now type-safe.
 //
-// `ignore_abort` is still required because finish_supply calls add_to_lending
+// `ignore_abort` is still required because scallop_finish_supply calls add_to_scallop_lending
 // which uses `bag::contains` + `bag::borrow_mut` — the prover cannot connect
 // those (only `bag::contains_with_type` does — see SPEC.md Limitations).
 // ---------------------------------------------------------------------------
-#[spec(prove, ignore_abort, target = cdpm::finish_supply)]
-public fun finish_supply_spec<T>(
+#[spec(prove, ignore_abort, target = cdpm::scallop_finish_supply)]
+public fun scallop_finish_supply_spec<T>(
     pm: &mut PositionManager,
-    ticket: SupplyTicket<T>,
+    ticket: ScallopSupplyTicket<T>,
     scoin: Coin<MarketCoin<T>>,
 ) {
     // P-WrongPm (structural assertion, see comment above).
-    asserts(cdpm::spec_supply_ticket_pm_id(&ticket) == object::id(pm));
+    asserts(cdpm::spec_scallop_supply_ticket_pm_id(&ticket) == object::id(pm));
     // P-AmountShortfall (structural assertion, see comment above).
-    asserts(scoin.value() >= cdpm::spec_supply_ticket_expected_scoin(&ticket));
+    asserts(scoin.value() >= cdpm::spec_scallop_supply_ticket_expected_scoin(&ticket));
 
-    cdpm::finish_supply<T>(pm, ticket, scoin);
+    cdpm::scallop_finish_supply<T>(pm, ticket, scoin);
 }
 
 // ---------------------------------------------------------------------------
 // P-WrongPm-redeem + P-AmountShortfall-redeem
 //
-//   finish_redeem<T>(pm, fee_house, ticket, underlying, ctx) aborts when
+//   scallop_finish_redeem<T>(pm, fee_house, ticket, underlying, ctx) aborts when
 //     ticket.pm_id          != object::id(pm)                  // EWrongPm
 //     underlying.value()    <  ticket.expected_underlying      // EAmountShortfall
 //
-// `ignore_abort` because finish_redeem performs `balance::split` (ENotEnough),
+// `ignore_abort` because scallop_finish_redeem performs `balance::split` (ENotEnough),
 // fee arithmetic (overflow on adversarial fee_rate), and `bag::add` that the
 // prover sees as potentially aborting. See SPEC.md Limitations.
 // ---------------------------------------------------------------------------
-#[spec(prove, ignore_abort, target = cdpm::finish_redeem)]
-public fun finish_redeem_spec<T>(
+#[spec(prove, ignore_abort, target = cdpm::scallop_finish_redeem)]
+public fun scallop_finish_redeem_spec<T>(
     pm: &mut PositionManager,
     fee_house: &mut FeeHouse,
-    ticket: RedeemTicket<T>,
+    ticket: ScallopRedeemTicket<T>,
     underlying: Coin<T>,
     ctx: &mut TxContext,
 ) {
     // P-WrongPm (structural assertion).
-    asserts(cdpm::spec_redeem_ticket_pm_id(&ticket) == object::id(pm));
+    asserts(cdpm::spec_scallop_redeem_ticket_pm_id(&ticket) == object::id(pm));
     // P-AmountShortfall (structural assertion).
-    asserts(underlying.value() >= cdpm::spec_redeem_ticket_expected_underlying(&ticket));
+    asserts(underlying.value() >= cdpm::spec_scallop_redeem_ticket_expected_underlying(&ticket));
 
-    cdpm::finish_redeem<T>(pm, fee_house, ticket, underlying, ctx);
+    cdpm::scallop_finish_redeem<T>(pm, fee_house, ticket, underlying, ctx);
 }
 
 // ---------------------------------------------------------------------------

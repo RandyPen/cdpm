@@ -58,7 +58,7 @@ public struct ScallopVault<phantom T> has store {
 - **Position**: Optional, exists when user has active liquidity
 - **Balance**: Generic token balances for deposit/withdrawal
 - **Fee**: Accumulated fees from agent/protocol operations
-- **Lending**: Scallop sCoin `MarketCoin<T>` wrapped per underlying type along with cumulative principal; populated by `start_supply` / `finish_supply`, drained by `start_redeem` / `finish_redeem` / `user_extract_market_coin`. The sCoin type is pinned by Move's type system, blocking fake-sCoin extraction attacks.
+- **Lending**: Scallop sCoin `MarketCoin<T>` wrapped per underlying type along with cumulative principal; populated by `scallop_start_supply` / `scallop_finish_supply`, drained by `scallop_start_redeem` / `scallop_finish_redeem` / `user_extract_scallop_market_coin`. The sCoin type is pinned by Move's type system, blocking fake-sCoin extraction attacks.
 
 ### 2. FeeHouse
 Global protocol fee management structure.
@@ -287,7 +287,7 @@ Agent collects 100 USDC fees
    - Collect fees/rewards
    - Manage agents
    - Deposit/withdraw funds
-   - Supply / redeem idle balance to Scallop (start_supply / finish_supply / start_redeem / finish_redeem)
+   - Supply / redeem idle balance to Scallop (scallop_start_supply / scallop_finish_supply / scallop_start_redeem / scallop_finish_redeem)
 
 3. Closure
    user_close_pm() → PositionManagerClosed
@@ -336,7 +336,7 @@ const ENotOwner: u64        = 1001;  // caller is not pm.owner
 const ENotAllow: u64        = 1002;  // caller not in agents / access list
 const EInvalidFeeRate: u64  = 1003;  // admin_set_fee given rate > MAX_FEE_RATE (30%)
 const ELendingNotEmpty: u64 = 1004;  // user_close_pm called with non-empty lending Bag
-const ENoSuchVault: u64     = 1005;  // pull_from_lending called for an absent (T, S) vault
+const ENoSuchVault: u64     = 1005;  // pull_from_scallop_lending called for an absent (T, S) vault
 const EReserveEmpty: u64    = 1006;  // Scallop reserve has zero supply or zero (cash+debt-revenue)
 const EZeroExpected: u64    = 1007;  // start_* would yield 0 scoin/underlying (amount too small)
 const EWrongPm: u64         = 1008;  // hot-potato ticket consumed against a different PM
@@ -418,51 +418,51 @@ forcing a full cdpm redeploy (cdpm is non-upgradeable). With hot-potato:
 
 ### Public surface
 ```move
-public fun start_supply<T>(
+public fun scallop_start_supply<T>(
     access: &AccessList,
     pm: &mut PositionManager,
     market: &Market,            // read-only view
     amount: u64,
     ctx: &mut TxContext,
-): (Coin<T>, SupplyTicket<T>);
+): (Coin<T>, ScallopSupplyTicket<T>);
 
-public fun finish_supply<T>(
+public fun scallop_finish_supply<T>(
     pm: &mut PositionManager,
-    ticket: SupplyTicket<T>,
+    ticket: ScallopSupplyTicket<T>,
     scoin: Coin<MarketCoin<T>>,
 );
 
-public fun start_redeem<T>(
+public fun scallop_start_redeem<T>(
     access: &AccessList,
     pm: &mut PositionManager,
     market: &Market,
     market_coin_amount: u64,    // u64::MAX redeems all
     ctx: &mut TxContext,
-): (Coin<MarketCoin<T>>, RedeemTicket<T>);
+): (Coin<MarketCoin<T>>, ScallopRedeemTicket<T>);
 
-public fun finish_redeem<T>(
+public fun scallop_finish_redeem<T>(
     pm: &mut PositionManager,
     fee_house: &mut FeeHouse,
-    ticket: RedeemTicket<T>,
+    ticket: ScallopRedeemTicket<T>,
     underlying: Coin<T>,
     ctx: &mut TxContext,
 );
 
-public fun user_extract_market_coin<T>(
+public fun user_extract_scallop_market_coin<T>(
     pm: &mut PositionManager,
     market_coin_amount: u64,    // u64::MAX extracts all
     ctx: &mut TxContext,
 ): Coin<MarketCoin<T>>;
 ```
 
-`SupplyTicket<T>` and `RedeemTicket<T>` are hot potatoes (no `key` /
+`ScallopSupplyTicket<T>` and `ScallopRedeemTicket<T>` are hot potatoes (no `key` /
 `store` / `copy` / `drop`) — they must be consumed by their paired finisher
 in the same PTB. Move's type system enforces this.
 
 ### Caller authorization
 `start_*` / `finish_*` accept all three managed-tier callers (owner / agent /
 (protocol & no agents)) via `assert_caller_authorized`.
-`user_extract_market_coin` is **owner-only** and takes no Scallop objects, so
+`user_extract_scallop_market_coin` is **owner-only** and takes no Scallop objects, so
 it remains usable even when Scallop is unreachable.
 
 ### Computed-amount integrity
@@ -482,7 +482,7 @@ expected_underlying  = floor(scoin × (cash + debt − revenue) / supply)
 
 This blocks the agent-extraction attack on TWO axes:
 
-1. **Type pin** — `finish_supply`'s `scoin` parameter is typed
+1. **Type pin** — `scallop_finish_supply`'s `scoin` parameter is typed
    `Coin<MarketCoin<T>>`, not a free generic `Coin<S>`. `MarketCoin<T>` has
    only `drop` and no public constructor; the only way to obtain a non-zero
    `Coin<MarketCoin<T>>` is through Scallop's `mint`. An agent cannot mint
@@ -512,21 +512,21 @@ fund loss). Templates:
 **Supply**
 ```
 PTB[0] accrue_interest::accrue_interest_for_market(version, market, clock)
-PTB[1] (coin_t, ticket) = cdpm::start_supply<T>(access, pm, market, amount)
+PTB[1] (coin_t, ticket) = cdpm::scallop_start_supply<T>(access, pm, market, amount)
 PTB[2] scoin = mint::mint<T>(version, market, coin_t, clock)
-PTB[3] cdpm::finish_supply<T>(pm, ticket, scoin)
+PTB[3] cdpm::scallop_finish_supply<T>(pm, ticket, scoin)
 ```
 
 **Redeem**
 ```
 PTB[0] accrue_interest::accrue_interest_for_market(version, market, clock)
-PTB[1] (scoin, ticket) = cdpm::start_redeem<T>(access, pm, market, market_coin_amount)
+PTB[1] (scoin, ticket) = cdpm::scallop_start_redeem<T>(access, pm, market, market_coin_amount)
 PTB[2] underlying = redeem::redeem<T>(version, market, scoin, clock)
-PTB[3] cdpm::finish_redeem<T>(pm, fee_house, ticket, underlying)
+PTB[3] cdpm::scallop_finish_redeem<T>(pm, fee_house, ticket, underlying)
 ```
 
 ### Yield fee model
-Unlike swap fee / reward collection (D-01), every `finish_redeem` call
+Unlike swap fee / reward collection (D-01), every `scallop_finish_redeem` call
 deducts `fee_rate` on the **interest portion** regardless of caller, because
 lending interest is a recurring protocol-managed yield rather than a
 self-managed activity. Principal is amortized linearly when partial-redeeming
@@ -556,6 +556,44 @@ When `redeemed_underlying ≤ principal_portion` (e.g. socialized loss),
   requires a fresh cdpm deploy that imports the new type — a rare event
   treated like any other Sui struct-identity change.
 
+### Trust boundary
+
+The security ceiling of cdpm's Scallop integration is **the integrity of
+the Scallop team and their custody of the `ScallopProtocol` package
+upgrade-cap + `app::AdminCap`** (`protocol/sources/app/app.move:35`).
+A backdoored `protocol::reserve` upgrade can drain the underlying
+`Balance<T>` out of every existing `Reserve` shared object — every cdpm
+`ScallopVault<T>` would be left holding `Balance<MarketCoin<T>>` that no
+longer redeems for anything. The current `AdminCap` already exposes
+`add_whitelist_address` / `remove_whitelist_address` /
+`reject_all_address` (`app.move:120-160`) plus interest/risk model
+mutators with the change-delay enforced at 0; the upgrade-cap can extend
+this set arbitrarily.
+
+cdpm intentionally does **not** maintain an admin-curated MarketCoin
+whitelist on top of this. External fake-`MarketCoin` is already
+structurally impossible (`MarketCoin<T>` has only `drop` and no public
+constructor outside `protocol::reserve`), and no whitelist on cdpm's
+side can defend against a Scallop-team-issued malicious upgrade — the
+attack would just backdoor the whitelisted MarketCoin's underlying
+reserve, which is exactly the same `Reserve` shared object cdpm already
+trusts. cdpm therefore inherits exactly the same Scallop-trust
+assumption every other Scallop consumer takes — no more, no less. We do
+not attempt to remove or hide that assumption. The mitigation surface
+for users is **agent selection**, not runtime escape:
+
+- **Don't trust Scallop? Don't supply.** Choose an agent / protocol bot
+  whose off-chain scheduler does NOT call `scallop_start_supply` for Scallop;
+  Scallop integration is opt-in per-strategy.
+- **Bound per-PM Scallop exposure** via the off-chain scheduler.
+- **`user_extract_scallop_market_coin` is an incident-response button**, not
+  routine hygiene. Use it when off-chain signals (Scallop governance
+  vote, upgrade announcement, audit alert) indicate the trust assumption
+  is about to break, to pull `Coin<MarketCoin<T>>` out of cdpm before
+  Scallop finalizes a hostile upgrade. Sui upgrade timing is not
+  enforced on-chain by cdpm — the user must monitor Scallop's
+  upgrade-cap custody and respond off-chain.
+
 ### Events (no `by` field; tx metadata records the sender; no `scoin_type` — sCoin is always `MarketCoin<T>`)
 ```move
 public struct ScallopSupplied   { pm_id, coin_type, deposit_amount,
@@ -563,7 +601,7 @@ public struct ScallopSupplied   { pm_id, coin_type, deposit_amount,
 public struct ScallopRedeemed   { pm_id, coin_type, market_coin_redeemed,
                                   redeemed_amount, principal_portion, interest,
                                   fee_amount };
-public struct MarketCoinExtracted { pm_id, coin_type, market_coin_amount,
+public struct ScallopMarketCoinExtracted { pm_id, coin_type, market_coin_amount,
                                     principal_removed };
 ```
 
@@ -673,6 +711,45 @@ the vault uses.
    intact.
 4. **Kai package re-deploy with new YT type identity**: extracting via
    `user_extract_kai_yt` retrieves `Coin<YT_old>` for off-chain handling.
+
+### Trust boundary
+
+The security ceiling of cdpm's Kai integration is **the integrity of the
+Kunalabs team and their custody of the `kai_sav` package upgrade-cap**.
+A backdoored upgrade to `kai_sav::vault` can drain every existing
+`Vault<T, YT>` shared object — and therefore every `KaiVault<T, YT>` in
+every cdpm `pm.lending` — irrespective of which YT types cdpm accepts.
+
+cdpm intentionally does **not** maintain an admin-curated YT whitelist.
+Such a whitelist would only block external fake-Vault attacks, which are
+already structurally impossible (`kai_sav::vault::new` is
+`public(package)` — only the kai_sav module itself can publish a
+`Vault<T, YT>` shared object). Against the dominant threat (a malicious
+or compromised Kunalabs upgrade), a whitelist provides no defense at all
+— Kunalabs would just backdoor the existing whitelisted `Vault` rather
+than mint a new one. The whitelist would only add ongoing admin
+overhead with zero security gain.
+
+cdpm therefore inherits exactly the same Kunalabs-trust assumption every
+other Kai SAV consumer (including Kunalabs's own SAV strategies) already
+takes — no more, no less. We do not attempt to remove or hide that
+assumption. The mitigation surface for users is **agent selection**, not
+runtime escape:
+
+- **Don't trust Kai? Don't supply.** Choose an agent / protocol bot whose
+  off-chain scheduler does NOT call `kai_start_supply`. The Kai
+  integration is opt-in per-strategy; an agent that never invokes
+  `kai_start_supply` leaves `pm.lending` Kai-free and the trust
+  assumption never accrues.
+- **Bound per-PM Kai exposure** via the off-chain scheduler (e.g., cap
+  `kai_start_supply` amount as a fraction of `pm.balance`).
+- **`user_extract_kai_yt` is an incident-response button, not a routine
+  hygiene step.** Use it when off-chain signals (Kai governance vote,
+  upgrade announcement, audit alert) indicate the trust assumption is
+  about to break, to pull `Coin<YT>` out of cdpm before Kunalabs
+  finalizes a hostile upgrade. Sui upgrade timing is not enforced
+  on-chain by cdpm — the user must monitor Kunalabs's upgrade-cap
+  custody and respond off-chain.
 
 ### Events (no `by`; sender in tx metadata)
 ```move

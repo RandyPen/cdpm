@@ -1,6 +1,6 @@
 ---
 name: cdpm-calculation-skill
-description: CDPM calculation utilities using Cetus DLMM SDK plus the Scallop and Kai SAV lending math used by start_supply / start_redeem / finish_redeem and their Kai counterparts. Provides liquidity calculation, bin price math, position management, fee calculations, and yield-fee accounting for both lending integrations. Use when performing mathematical operations for CDPM positions.
+description: CDPM calculation utilities using Cetus DLMM SDK plus the Scallop and Kai SAV lending math used by scallop_start_supply / scallop_start_redeem / scallop_finish_redeem and their Kai counterparts. Provides liquidity calculation, bin price math, position management, fee calculations, and yield-fee accounting for both lending integrations. Use when performing mathematical operations for CDPM positions.
 ---
 
 # CDPM Calculation Guide

@@ -129,7 +129,7 @@ async function userSupplyToKai(
 
 Important properties:
 
-- `kai_start_supply` decreases `pm.balance[T]` by `amount` and stores `principal` for later yield accounting (same path as `start_supply`, just under a different bag key).
+- `kai_start_supply` decreases `pm.balance[T]` by `amount` and stores `principal` for later yield accounting (same path as `scallop_start_supply`, just under a different bag key).
 - `kai_finish_supply` requires `coin_yt.value() >= ticket.expected_yt`; otherwise it aborts with `EAmountShortfall (1009)`. Because `Coin<YT>` cannot be forged outside Kai's `Vault<T, YT>`, an agent cannot short-change the vault.
 - The first supply for a given `(T, YT)` creates a fresh `KaiVault<T, YT>`; subsequent supplies of the same `(T, YT)` pair add to it.
 - **Bootstrap caveat.** If `total_available_balance == 0` Kai treats deposits as 1:1 (cdpm's `compute_expected_yt` matches). The degenerate state `total > 0 && yt_supply == 0` cannot occur on a healthy Kai vault — when it appears, cdpm conservatively predicts `0` and `kai_start_supply` aborts with `EZeroExpected (1007)`.
@@ -237,7 +237,7 @@ async function userRedeemFromKai(
 }
 ```
 
-The yield-fee math inside `kai_finish_redeem` is identical to Scallop's `finish_redeem`:
+The yield-fee math inside `kai_finish_redeem` is identical to Scallop's `scallop_finish_redeem`:
 
 ```
 interest      = max(0, redeemed_amount − principal_portion)

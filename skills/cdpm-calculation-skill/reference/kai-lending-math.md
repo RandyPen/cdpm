@@ -141,7 +141,7 @@ Properties:
 - `principal_portion <= principal_in_pm` always.
 - Monotonically non-decreasing in `wantAmount`.
 
-This formula is structurally identical to Scallop's `pull_from_lending`; the only difference is the bag key and the type of the inner balance (`Balance<YT>` vs `Balance<MarketCoin<T>>`).
+This formula is structurally identical to Scallop's `pull_from_scallop_lending`; the only difference is the bag key and the type of the inner balance (`Balance<YT>` vs `Balance<MarketCoin<T>>`).
 
 ---
 

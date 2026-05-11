@@ -46,7 +46,7 @@ interface AgentRewardCollected {
   by: string;
 }
 
-// Scallop supply (emitted by finish_supply, regardless of caller).
+// Scallop supply (emitted by scallop_finish_supply, regardless of caller).
 // Note: there is NO `by` field — use `event.sender` from the event envelope
 // to distinguish owner / agent / protocol callers.
 interface ScallopSupplied {
@@ -56,7 +56,7 @@ interface ScallopSupplied {
   market_coin_minted: string;   // sCoin received and added to pm.lending
 }
 
-// Scallop redeem (emitted by finish_redeem, regardless of caller).
+// Scallop redeem (emitted by scallop_finish_redeem, regardless of caller).
 interface ScallopRedeemed {
   pm_id: string;
   coin_type: string;

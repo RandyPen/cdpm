@@ -27,8 +27,8 @@ import { SuiGrpcClient } from '@mysten/sui/grpc';
 | Collect Fees | Collect fees from position (goes to fee bag) |
 | Collect Rewards | Collect rewards (goes to fee bag) |
 | Transfer Fee to Balance | Move fees from fee bag to balance |
-| Scallop `start_supply` / `finish_supply` | Park idle balance into Scallop |
-| Scallop `start_redeem` / `finish_redeem` | Pull underlying back; yield fee deducted from interest portion |
+| Scallop `scallop_start_supply` / `scallop_finish_supply` | Park idle balance into Scallop |
+| Scallop `scallop_start_redeem` / `scallop_finish_redeem` | Pull underlying back; yield fee deducted from interest portion |
 | Kai SAV `kai_start_supply` / `kai_finish_supply` | Park idle balance into a Kai `Vault<T, YT>` |
 | Kai SAV `kai_start_redeem` / `kai_finish_redeem` | Pull underlying back via the multi-step strategy walk; same yield fee on interest |
 
@@ -40,7 +40,7 @@ import { SuiGrpcClient } from '@mysten/sui/grpc';
 | Close Position | Only owner can close |
 | Authorize/Revoke Agents | Only owner can manage agents |
 | Modify PositionManager | Cannot change configuration |
-| `user_extract_market_coin<T>` | Owner-only escape hatch — agents cannot pull raw sCoin |
+| `user_extract_scallop_market_coin<T>` | Owner-only escape hatch — agents cannot pull raw sCoin |
 | `user_extract_kai_yt<T, YT>` | Owner-only escape hatch — agents cannot pull raw `Coin<YT>` from a Kai vault entry |
 
 ### Permission Check

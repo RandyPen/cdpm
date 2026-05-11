@@ -116,7 +116,7 @@ try {
   } else if (e.message.includes('EReserveEmpty')) {   // 1006
     console.error('Scallop reserve has zero supply or zero (cash+debt-revenue) — accrue_interest first?');
   } else if (e.message.includes('EZeroExpected')) {   // 1007
-    console.error('start_supply/start_redeem amount too small — would yield 0 scoin/underlying');
+    console.error('scallop_start_supply/scallop_start_redeem amount too small — would yield 0 scoin/underlying');
   } else if (e.message.includes('EWrongPm')) {        // 1008
     console.error('Hot-potato ticket consumed against a different PositionManager');
   } else if (e.message.includes('EAmountShortfall')) {// 1009

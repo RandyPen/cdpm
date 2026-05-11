@@ -158,9 +158,9 @@ const ERROR_CODES = {
   ENotAllow:        1002, // Caller not in agents / access list (or invariant broken)
   EInvalidFeeRate:  1003, // admin_set_fee given rate > MAX_FEE_RATE (3000 / 30%)
   ELendingNotEmpty: 1004, // user_close_pm called with non-empty lending Bag
-  ENoSuchVault:     1005, // pull_from_lending called for an absent (T) vault
+  ENoSuchVault:     1005, // pull_from_scallop_lending called for an absent (T) vault
   EReserveEmpty:    1006, // Scallop reserve has zero supply or zero (cash+debt-revenue)
-  EZeroExpected:    1007, // start_supply / start_redeem would yield 0
+  EZeroExpected:    1007, // scallop_start_supply / scallop_start_redeem would yield 0
   EWrongPm:         1008, // Hot-potato ticket consumed against a different PM
   EAmountShortfall: 1009, // finish_* received Coin with value < ticket.expected
 };
@@ -177,7 +177,7 @@ function parseError(error: string): string {
   } else if (error.includes('EReserveEmpty')) {
     return 'Scallop reserve has zero supply or zero (cash+debt-revenue) — accrue_interest_for_market first';
   } else if (error.includes('EAmountShortfall')) {
-    return 'finish_supply / finish_redeem Coin value < ticket.expected (likely stale Scallop accrual)';
+    return 'scallop_finish_supply / scallop_finish_redeem Coin value < ticket.expected (likely stale Scallop accrual)';
   }
   return 'Unknown error';
 }

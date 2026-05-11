@@ -59,7 +59,7 @@ cdpm uses a single `FeeHouse.fee_rate` (basis points, capped at 3000 = 30%) for 
    const userPortion = grossAmount - protocolCut;
    ```
 
-2. **Scallop yield fee** — `finish_redeem` deducts only from the interest portion:
+2. **Scallop yield fee** — `scallop_finish_redeem` deducts only from the interest portion:
 
    ```typescript
    const interest   = redeemedAmount > principalPortion ? redeemedAmount - principalPortion : 0n;
@@ -67,4 +67,4 @@ cdpm uses a single `FeeHouse.fee_rate` (basis points, capped at 3000 = 30%) for 
    const toBalance  = redeemedAmount - yieldFee;
    ```
 
-Both formulas floor and share the same `feeRateBp`. See `reference/scallop-lending-math.md` for the full Scallop redeem prediction (principal amortization, `compute_expected_underlying`, end-to-end helper).
+Both formulas floor and share the same `feeRateBp`. See `reference/scallop-lending-math.md` for the full Scallop redeem prediction (principal amortization, `compute_expected_underlying_scallop`, end-to-end helper).
