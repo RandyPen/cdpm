@@ -4,12 +4,6 @@
 [move]
 version = 4
 
-[pinned.mainnet.CetusDlmm]
-source = { local = "/tmp/cetus-dlmm-patched/packages/dlmm" }
-use_environment = "mainnet"
-manifest_digest = "1E932E9C4C15B3E671C5AACEE3107A26421CD5F431977EB48BE64EF5BE1AD9CA"
-deps = { IntegerMate = "IntegerMate", MoveSTL = "MoveSTL", std = "MoveStdlib", sui = "Sui" }
-
 [pinned.mainnet.CoinDecimalsRegistry]
 source = { local = "../sui-lending-protocol/contracts/libs/coin_decimals_registry" }
 use_environment = "mainnet"
@@ -109,14 +103,20 @@ deps = { integer_library = "integer_library", integer_mate = "integer_mate", std
 [pinned.mainnet.cdpm]
 source = { root = true }
 use_environment = "mainnet"
-manifest_digest = "01258F479C7C2155AA555D8B920D40BE971DCF878E05988C74D4AD4F13879C0D"
-deps = { cetusdlmm = "CetusDlmm", integer_mate = "IntegerMate", kai_sav = "kai_sav", move_stl = "MoveSTL", protocol = "ScallopProtocol", std = "MoveStdlib", sui = "Sui", x = "X" }
+manifest_digest = "E88B6BD8B2C1859D58E0BD43F9E1A761F943F9E623F83D5112FD2FDE87D18E28"
+deps = { IntegerMate = "IntegerMate", MoveSTL = "MoveSTL", ScallopProtocol = "ScallopProtocol", X = "X", cetusdlmm = "cetusdlmm", kai_sav = "kai_sav", std = "MoveStdlib", sui = "Sui" }
 
 [pinned.mainnet.cetus_clmm]
 source = { local = "../kai-contracts/_vendor/Cetus/clmm-v13" }
 use_environment = "mainnet"
 manifest_digest = "F7C63F1ECF575145EBED2E2DBEEDFDFA65654D819BFD3482A0E92BF63E87668A"
 deps = { integer_mate = "integer_mate_1", move_stl = "move_stl", std = "MoveStdlib", sui = "Sui" }
+
+[pinned.mainnet.cetusdlmm]
+source = { local = "/tmp/cetus-dlmm-patched/packages/dlmm" }
+use_environment = "mainnet"
+manifest_digest = "1E932E9C4C15B3E671C5AACEE3107A26421CD5F431977EB48BE64EF5BE1AD9CA"
+deps = { IntegerMate = "IntegerMate", MoveSTL = "MoveSTL", std = "MoveStdlib", sui = "Sui" }
 
 [pinned.mainnet.coin_decimals_registry]
 source = { local = "../kai-contracts/_vendor/Scallop/coin-decimals-registry-v1" }
@@ -155,10 +155,10 @@ manifest_digest = "BFEC831406228189DAB6CD8C2AF79373789E74562A926A2EBF5BBAA9AD21A
 deps = { access_management = "access_management", bluefin_spot = "bluefin_spot", cetus_clmm = "cetus_clmm", deep = "deep", integer_mate = "integer_mate_1", lbtc = "lbtc", pyth = "pyth", rate_limiter = "rate_limiter", std = "MoveStdlib", sui = "Sui", suiusdt = "suiusdt", usdc = "usdc", usdy = "usdy", wal = "wal", wbtc = "wbtc", whusdce = "whusdce", whusdte = "whusdte", xbtc = "xbtc" }
 
 [pinned.mainnet.kai_sav]
-source = { local = "../kai-contracts/kai/sav/core" }
+source = { local = "../kai-contracts/kai/sav/core-prover-patched" }
 use_environment = "mainnet"
-manifest_digest = "CBF792884FA19DE2715F5320CB8BA3AA83224ABEFFD0E7F75C606126BFD0BC22"
-deps = { access_management = "access_management", kai_leverage = "kai_leverage", kai_ywhusdte_ysui = "kai_ywhusdte_ysui", rate_limiter = "rate_limiter", scallop_pool = "spool", scallop_protocol = "protocol", std = "MoveStdlib", sui = "Sui", whusdce = "whusdce", whusdte = "whusdte" }
+manifest_digest = "1A562E73D50D6D9BD6AD3B896ADD95149A831C73E72DA8E71D6BA2B41A91A7AC"
+deps = { access_management = "access_management", kai_leverage = "kai_leverage", kai_ywhusdte_ysui = "kai_ywhusdte_ysui", protocol = "protocol", rate_limiter = "rate_limiter", spool = "spool", std = "MoveStdlib", sui = "Sui", whusdce = "whusdce", whusdte = "whusdte" }
 
 [pinned.mainnet.kai_ywhusdte_ysui]
 source = { local = "../kai-contracts/kai/sav/vault-token-init/kai-ywhusdte-ysui" }

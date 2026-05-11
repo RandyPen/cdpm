@@ -25,6 +25,10 @@ IntegerMate = { git = "https://github.com/CetusProtocol/integer-mate.git", rev =
 MoveSTL = { git = "https://github.com/CetusProtocol/move-stl.git", rev = "mainnet-v1.3.0", override = true, rename-from = "move_stl" }
 ScallopProtocol = { local = "../../sui-lending-protocol/contracts/protocol", override = true, rename-from = "protocol" }
 X = { local = "../../sui-lending-protocol/contracts/libs/x", override = true, rename-from = "x" }
+# kai_sav inherits from cdpm's transitive resolution (which already points
+# at the patched copy at `../kai-contracts/kai/sav/core-prover-patched`).
+# No override needed here — both this spec build and the regular
+# `sui move build` resolve to the same patched package.
 
 [addresses]
 cdpm_specs = "0x0"

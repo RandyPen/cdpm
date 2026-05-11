@@ -2,7 +2,7 @@
 
 [move]
 version = 3
-manifest_digest = "4568BDAD84F875ED176FBCFCA8030740A882899771BE798CBB99010E511EFD3C"
+manifest_digest = "3650B4A2EB8B9593114C04DAD0514CF0CEF38F3EAA43F6B1EF9E304907AA0F80"
 deps_digest = "8D8E72BAA06E63572166CA7E7F6E159CA2D11E27ADE3961B15E29922A04B0D32"
 dependencies = [
   { id = "DeepBook", name = "DeepBook" },
@@ -14,25 +14,11 @@ dependencies = [
   { id = "cdpm", name = "cdpm" },
 ]
 dev-dependencies = [
-  { id = "CetusDlmm", name = "CetusDlmm" },
   { id = "IntegerMate", name = "IntegerMate" },
   { id = "MoveSTL", name = "MoveSTL" },
   { id = "ScallopProtocol", name = "ScallopProtocol" },
   { id = "X", name = "X" },
-]
-
-[[move.package]]
-id = "CetusDlmm"
-source = { local = "/tmp/cetus-dlmm-patched/packages/dlmm" }
-
-dependencies = [
-  { id = "DeepBook", name = "DeepBook" },
-  { id = "IntegerMate", name = "IntegerMate" },
-  { id = "MoveSTL", name = "MoveSTL" },
-  { id = "MoveStdlib", name = "MoveStdlib" },
-  { id = "Sui", name = "Sui" },
-  { id = "SuiProver", name = "SuiProver" },
-  { id = "SuiSystem", name = "SuiSystem" },
+  { id = "cetusdlmm", name = "CetusDlmm" },
 ]
 
 [[move.package]]
@@ -220,16 +206,16 @@ id = "cdpm"
 source = { local = ".." }
 
 dependencies = [
-  { id = "CetusDlmm", name = "cetusdlmm" },
   { id = "DeepBook", name = "DeepBook" },
-  { id = "IntegerMate", name = "integer_mate" },
-  { id = "MoveSTL", name = "move_stl" },
+  { id = "IntegerMate", name = "IntegerMate" },
+  { id = "MoveSTL", name = "MoveSTL" },
   { id = "MoveStdlib", name = "MoveStdlib" },
-  { id = "ScallopProtocol", name = "protocol" },
+  { id = "ScallopProtocol", name = "ScallopProtocol" },
   { id = "Sui", name = "Sui" },
   { id = "SuiProver", name = "SuiProver" },
   { id = "SuiSystem", name = "SuiSystem" },
-  { id = "X", name = "x" },
+  { id = "X", name = "X" },
+  { id = "cetusdlmm", name = "cetusdlmm" },
   { id = "kai_sav", name = "kai_sav" },
 ]
 
@@ -245,6 +231,20 @@ dependencies = [
   { id = "SuiSystem", name = "SuiSystem" },
   { id = "integer_mate", name = "integer_mate" },
   { id = "move_stl", name = "move_stl" },
+]
+
+[[move.package]]
+id = "cetusdlmm"
+source = { local = "/tmp/cetus-dlmm-patched/packages/dlmm" }
+
+dependencies = [
+  { id = "DeepBook", name = "DeepBook" },
+  { id = "IntegerMate", name = "IntegerMate" },
+  { id = "MoveSTL", name = "MoveSTL" },
+  { id = "MoveStdlib", name = "MoveStdlib" },
+  { id = "Sui", name = "Sui" },
+  { id = "SuiProver", name = "SuiProver" },
+  { id = "SuiSystem", name = "SuiSystem" },
 ]
 
 [[move.package]]
@@ -325,7 +325,7 @@ dependencies = [
 
 [[move.package]]
 id = "kai_sav"
-source = { local = "../../kai-contracts/kai/sav/core" }
+source = { local = "../../kai-contracts/kai/sav/core-prover-patched" }
 
 dependencies = [
   { id = "DeepBook", name = "DeepBook" },
@@ -336,9 +336,9 @@ dependencies = [
   { id = "access_management", name = "access_management" },
   { id = "kai_leverage", name = "kai_leverage" },
   { id = "kai_ywhusdte_ysui", name = "kai_ywhusdte_ysui" },
-  { id = "protocol", name = "scallop_protocol" },
+  { id = "protocol", name = "protocol" },
   { id = "rate_limiter", name = "rate_limiter" },
-  { id = "spool", name = "scallop_pool" },
+  { id = "spool", name = "spool" },
   { id = "whusdce", name = "whusdce" },
   { id = "whusdte", name = "whusdte" },
 ]

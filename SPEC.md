@@ -145,22 +145,36 @@ The prover does **not** cover:
 - **Lending arithmetic** (P-PrincipalMonotonic, P-VaultPositiveAfterAdd) — see
   "Skipped" above.
 - **Kai SAV specs (`kai_finish_supply_spec`, `kai_finish_redeem_spec`) are
-  written but currently unverifiable by sui-prover.** The specs mirror the
-  Scallop ones structurally and would prove the same `EWrongPm` /
-  `EAmountShortfall` properties for the Kai branch. However,
-  `kai_sav` (kai/sav/core/Move.toml) declares two transitive deps with
-  `rename-from`: `scallop_protocol` → `protocol`, `scallop_pool` → `spool`.
-  asymptotic's sui-prover requires every dep key to literally match the
-  upstream `[package].name` and does not honor `rename-from` in transitive
-  resolution. `sui move build` resolves these correctly because Sui CLI
-  does honor `rename-from`. Verification of the Kai specs would require
-  either (a) the asymptotic team adding `rename-from` support, or (b) a
-  vendored copy of the kai_sav dep tree with canonical-name keys.
-  Out of scope for this branch — the production `sui move build` and
-  runtime correctness are unaffected. The type-pin defense for Kai
-  (`Coin<YT>` mintable only by the live `Vault.lp_treasury`,
-  `kai_sav::vault::new` is `public(package)`) is enforced by Move's
-  type system regardless of spec verification status.
+  written but currently unverifiable by sui-prover.** The specs mirror
+  the Scallop ones structurally and would prove the same `EWrongPm` /
+  `EAmountShortfall` properties for the Kai branch.
+
+  *History.* The original blocker was that upstream `kai/sav/core/Move.toml`
+  declared two transitive deps with `rename-from` (`scallop_protocol` →
+  `protocol`, `scallop_pool` → `spool`), which sui-prover refuses. Cdpm's
+  `Move.toml` and the patched dep at
+  `../kai-contracts/kai/sav/core-prover-patched` resolve that — both
+  `sui move build` and the prover's dependency resolver now succeed.
+
+  *Remaining blocker.* sui-prover compiles every `tests/` directory in
+  the transitive dep tree (regular `sui move build` does not). Two test
+  files in `kai/leverage/core/tests/position_core/macros/` use the
+  `u128.div_ceil(...)` method call:
+    - `standard_flow.move:53`
+    - `liquidate_standard_flow.move:448`
+  The Sui framework version sui-prover overrides at verify time does not
+  expose `div_ceil` on u128, so model building fails before any spec is
+  checked. Production `sui move build` is unaffected (it skips `tests/`).
+  Resolving this requires either (a) the asymptotic team upgrading the
+  prover's framework override to a Sui version that exposes
+  `u128::div_ceil`, or (b) a vendored copy of `kai_leverage` with a
+  patched test directory.
+
+  Out of scope for this branch — runtime correctness of the Kai branch
+  is unaffected. The type-pin defense for Kai (`Coin<YT>` mintable only
+  by the live `Vault.lp_treasury`, `kai_sav::vault::new` is
+  `public(package)`) is enforced by Move's type system regardless of
+  spec verification status.
 
 ## Files
 
