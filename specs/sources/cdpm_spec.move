@@ -20,6 +20,8 @@ use cdpm::cdpm::{
     PositionManager,
     SupplyTicket,
     RedeemTicket,
+    KaiSupplyTicket,
+    KaiRedeemTicket,
 };
 use sui::coin::Coin;
 use sui::tx_context::TxContext;
@@ -106,4 +108,54 @@ public fun finish_redeem_spec<T>(
     asserts(underlying.value() >= cdpm::spec_redeem_ticket_expected_underlying(&ticket));
 
     cdpm::finish_redeem<T>(pm, fee_house, ticket, underlying, ctx);
+}
+
+// ---------------------------------------------------------------------------
+// P-Kai-WrongPm-supply + P-Kai-AmountShortfall-supply
+//
+//   kai_finish_supply<T, YT>(pm, ticket, yt) aborts when
+//     ticket.pm_id  != object::id(pm)            // EWrongPm
+//     yt.value()    <  ticket.expected_yt        // EAmountShortfall
+//
+// `YT` is structurally pinned by Kai SAV's `lp_treasury: TreasuryCap<YT>`
+// (vault.move): only the Kai vault module can mint `Coin<YT>`. cdpm need not
+// (and does not) verify pool identity beyond Move's type system, since
+// `kai_sav::vault::new` is `public(package)` (vault.move:235), so external
+// code cannot publish a `Vault<T, YT>` shared object with attacker-controlled
+// YT.
+//
+// `ignore_abort` for the same `bag::contains` + `bag::borrow_mut` reason as
+// the Scallop `finish_supply_spec`. See SPEC.md Limitations.
+// ---------------------------------------------------------------------------
+#[spec(prove, ignore_abort, target = cdpm::kai_finish_supply)]
+public fun kai_finish_supply_spec<T, YT>(
+    pm: &mut PositionManager,
+    ticket: KaiSupplyTicket<T, YT>,
+    yt: Coin<YT>,
+) {
+    asserts(cdpm::spec_kai_supply_ticket_pm_id(&ticket) == object::id(pm));
+    asserts(yt.value() >= cdpm::spec_kai_supply_ticket_expected_yt(&ticket));
+
+    cdpm::kai_finish_supply<T, YT>(pm, ticket, yt);
+}
+
+// ---------------------------------------------------------------------------
+// P-Kai-WrongPm-redeem + P-Kai-AmountShortfall-redeem
+//
+//   kai_finish_redeem<T, YT>(pm, fee_house, ticket, underlying, ctx) aborts:
+//     ticket.pm_id          != object::id(pm)              // EWrongPm
+//     underlying.value()    <  ticket.expected_underlying  // EAmountShortfall
+// ---------------------------------------------------------------------------
+#[spec(prove, ignore_abort, target = cdpm::kai_finish_redeem)]
+public fun kai_finish_redeem_spec<T, YT>(
+    pm: &mut PositionManager,
+    fee_house: &mut FeeHouse,
+    ticket: KaiRedeemTicket<T, YT>,
+    underlying: Coin<T>,
+    ctx: &mut TxContext,
+) {
+    asserts(cdpm::spec_kai_redeem_ticket_pm_id(&ticket) == object::id(pm));
+    asserts(underlying.value() >= cdpm::spec_kai_redeem_ticket_expected_underlying(&ticket));
+
+    cdpm::kai_finish_redeem<T, YT>(pm, fee_house, ticket, underlying, ctx);
 }

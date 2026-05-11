@@ -27,6 +27,11 @@ the gap below.
 | **P-WrongPm-redeem** | `finish_redeem<T>` requires `ticket.pm_id == object::id(pm)` (else `EWrongPm`). | [`specs/sources/cdpm_spec.move:102`](./specs/sources/cdpm_spec.move) | **structural** |
 | **P-AmountShortfall-redeem** | `finish_redeem` requires `underlying.value() >= ticket.expected_underlying` (else `EAmountShortfall`). | [`specs/sources/cdpm_spec.move:104`](./specs/sources/cdpm_spec.move) | **structural** |
 | **P-FakeSCoinExtraction-blocked** | `finish_supply<T>` is type-locked to `Coin<MarketCoin<T>>`; agents cannot fabricate fake sCoin types. Enforced by Move type system, not prover. | type-system, no spec needed | **type-checked** |
+| **P-Kai-WrongPm-supply** | `kai_finish_supply<T, YT>(pm, ticket, yt)` aborts when `ticket.pm_id != object::id(pm)` (`EWrongPm`). | [`specs/sources/cdpm_spec.move`](./specs/sources/cdpm_spec.move) (`kai_finish_supply_spec`) | **written, sui-prover blocked** (see Limitations) |
+| **P-Kai-AmountShortfall-supply** | `kai_finish_supply` requires `yt.value() >= ticket.expected_yt` (`EAmountShortfall`). | same | **written, sui-prover blocked** |
+| **P-Kai-WrongPm-redeem** | `kai_finish_redeem<T, YT>` requires `ticket.pm_id == object::id(pm)`. | `kai_finish_redeem_spec` | **written, sui-prover blocked** |
+| **P-Kai-AmountShortfall-redeem** | `kai_finish_redeem` requires `underlying.value() >= ticket.expected_underlying`. | same | **written, sui-prover blocked** |
+| **P-FakeYTExtraction-blocked** | `kai_finish_supply<T, YT>` is type-locked to `Coin<YT>`; YT's `TreasuryCap<YT>` is held inside Kai's `Vault.lp_treasury` (private). `kai_sav::vault::new` is `public(package)` so external code cannot publish a `Vault<T, EvilYT>` with attacker-controlled YT. | type-system, no spec needed | **type-checked** |
 
 All three spec functions are checked across the prover's three phases (`Check`,
 `Assume`, `SpecNoAbortCheck`) and pass; the prover's last line is
@@ -136,6 +141,23 @@ The prover does **not** cover:
   See README D-08 / DESIGN "Type-pinned sCoin".
 - **Lending arithmetic** (P-PrincipalMonotonic, P-VaultPositiveAfterAdd) — see
   "Skipped" above.
+- **Kai SAV specs (`kai_finish_supply_spec`, `kai_finish_redeem_spec`) are
+  written but currently unverifiable by sui-prover.** The specs mirror the
+  Scallop ones structurally and would prove the same `EWrongPm` /
+  `EAmountShortfall` properties for the Kai branch. However,
+  `kai_sav` (kai/sav/core/Move.toml) declares two transitive deps with
+  `rename-from`: `scallop_protocol` → `protocol`, `scallop_pool` → `spool`.
+  asymptotic's sui-prover requires every dep key to literally match the
+  upstream `[package].name` and does not honor `rename-from` in transitive
+  resolution. `sui move build` resolves these correctly because Sui CLI
+  does honor `rename-from`. Verification of the Kai specs would require
+  either (a) the asymptotic team adding `rename-from` support, or (b) a
+  vendored copy of the kai_sav dep tree with canonical-name keys.
+  Out of scope for this branch — the production `sui move build` and
+  runtime correctness are unaffected. The type-pin defense for Kai
+  (`Coin<YT>` mintable only by the live `Vault.lp_treasury`,
+  `kai_sav::vault::new` is `public(package)`) is enforced by Move's
+  type system regardless of spec verification status.
 
 ## Files
 

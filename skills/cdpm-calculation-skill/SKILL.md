@@ -1,6 +1,6 @@
 ---
 name: cdpm-calculation-skill
-description: CDPM calculation utilities using Cetus DLMM SDK plus the Scallop lending math used by start_supply / start_redeem / finish_redeem. Provides liquidity calculation, bin price math, position management, fee calculations, and yield-fee accounting. Use when performing mathematical operations for CDPM positions.
+description: CDPM calculation utilities using Cetus DLMM SDK plus the Scallop and Kai SAV lending math used by start_supply / start_redeem / finish_redeem and their Kai counterparts. Provides liquidity calculation, bin price math, position management, fee calculations, and yield-fee accounting for both lending integrations. Use when performing mathematical operations for CDPM positions.
 ---
 
 # CDPM Calculation Guide
@@ -32,6 +32,7 @@ import { BinUtils, FeeUtils } from '@cetusprotocol/dlmm-sdk/utils'
 - **[Fee Calculations](reference/fee-calculations.md)** - Variable fee, protocol fee, composition fee
 - **[Position Query](reference/position-query.md)** - Query PositionManager assets, fees, and rewards
 - **[Scallop Lending Math](reference/scallop-lending-math.md)** - Expected sCoin / underlying, principal amortization, yield-fee deduction, **redemption sizing** (inverse formulas: sCoin to burn for target underlying / target net-after-fee, with worked example)
+- **[Kai SAV Lending Math](reference/kai-lending-math.md)** - Expected YT / underlying for Kai's `<T, YT>` vault, principal amortization, yield-fee deduction, **redemption sizing** (inverse formulas: YT to burn for target underlying / target net-after-fee, with worked example)
 
 ### Advanced Topics
 - **[Price Conversion](reference/price-conversion.md)** - Compare CDPM prices with external exchanges

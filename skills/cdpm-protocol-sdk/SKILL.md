@@ -1,6 +1,6 @@
 ---
 name: cdpm-protocol-sdk
-description: TypeScript SDK guide for CDPM protocol integration and management. Covers architecture, permission system, fee mechanics, admin operations, and the Scallop hot-potato supply/redeem API for agents-empty PMs. Use when building protocol integrations, managing AccessList, or configuring protocol parameters.
+description: TypeScript SDK guide for CDPM protocol integration and management. Covers architecture, permission system, fee mechanics, admin operations, and the Scallop and Kai SAV hot-potato supply/redeem APIs for agents-empty PMs. Use when building protocol integrations, managing AccessList, or configuring protocol parameters.
 ---
 
 # CDPM Protocol SDK Guide
@@ -26,6 +26,7 @@ import { SuiGrpcClient } from '@mysten/sui/grpc';
 ### Operations
 - **[Admin Operations](reference/admin-operations.md)** - Set fee rate (cap 30%), manage AccessList, collect fees
 - **[Protocol Operations](reference/protocol-operations.md)** - Protocol-managed liquidity operations and Scallop supply/redeem
+- **[Kai SAV Lending](reference/kai-lending.md)** - Protocol-tier `kai_start_supply` / `kai_start_redeem` with strategy walk, agents-empty gating, shared yield-fee math
 
 ### Reference
 - **[Events](reference/events.md)** - Admin and protocol operation events

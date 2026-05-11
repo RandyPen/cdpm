@@ -427,6 +427,123 @@ A determined owner can theoretically use this path to bypass the yield fee
 sCoin) makes this uneconomic for typical positions; we accept the edge case
 in exchange for guaranteed asset recoverability.
 
+### D-10: Kai SAV Lending — Same Hot-Potato Pattern, Different Yield Token
+A second yield destination alongside Scallop. Targets Kai's
+**Single-Asset Vault (SAV)** layer — `kai_sav::vault` — which is the
+permissionless wrapper Kunalabs publishes for third-party integrators. SAV
+internally uses `kai_leverage::supply_pool` (which requires Kai's
+`access-management` Entity allowlist) but exposes that flow only through
+its own `vault::deposit` / `vault::withdraw` functions, so external callers
+never touch `ActionRequest`. cdpm benefits: no allowlist negotiation
+required.
+
+```move
+public struct KaiVault<phantom T, phantom YT> has store {
+    yt_balance: Balance<YT>,
+    principal: u64,
+}
+```
+
+Stored in the same `lending: Bag` as `ScallopVault`. Bag key is **YT's**
+`type_name` (not T's), so a single underlying `T` can simultaneously have a
+Scallop vault (key = `T`) and a Kai vault (key = `YT`) without collision.
+
+**Type-pin defense**: `kai_finish_supply<T, YT>(yt: Coin<YT>)` is typed to
+the specific `YT`. The `lp_treasury: TreasuryCap<YT>` lives inside Kai's
+`Vault<T, YT>` and only `kai_sav::vault` itself can mint `YT` balances.
+Combined with `kai_sav::vault::new` being `public(package)`
+(`vault.move:235`), no external code can publish a fake
+`Vault<USDC, EvilYT>` and forge `Coin<EvilYT>` of attacker-chosen value —
+cdpm does not need an admin-curated vault registry.
+
+**Public surface**:
+```move
+public fun kai_start_supply<T, YT>(
+    access: &AccessList, pm: &mut PositionManager,
+    vault: &kai_sav::vault::Vault<T, YT>,    // read-only view
+    amount: u64, clock: &Clock, ctx: &mut TxContext,
+): (Coin<T>, KaiSupplyTicket<T, YT>);
+
+public fun kai_finish_supply<T, YT>(
+    pm: &mut PositionManager,
+    ticket: KaiSupplyTicket<T, YT>,
+    yt: Coin<YT>,
+);
+
+public fun kai_start_redeem<T, YT>(
+    access: &AccessList, pm: &mut PositionManager,
+    vault: &kai_sav::vault::Vault<T, YT>,
+    yt_amount: u64, clock: &Clock, ctx: &mut TxContext,
+): (Coin<YT>, KaiRedeemTicket<T, YT>);
+
+public fun kai_finish_redeem<T, YT>(
+    pm: &mut PositionManager,
+    fee_house: &mut FeeHouse,
+    ticket: KaiRedeemTicket<T, YT>,
+    underlying: Coin<T>,
+    ctx: &mut TxContext,
+);
+```
+
+**Caller PTB**:
+```
+Supply (3 steps, Scallop-shaped):
+  PTB[0] (coin, ticket) = cdpm::kai_start_supply<T, YT>(access, pm, vault, amount, clock)
+  PTB[1] yt_balance = vault::deposit<T, YT>(vault, coin.into_balance(), clock)
+  PTB[2] cdpm::kai_finish_supply<T, YT>(pm, ticket, yt_balance.into_coin())
+
+Redeem (variable-length: vault::withdraw is two-stage with strategy walk):
+  PTB[0] (yt_coin, ticket) = cdpm::kai_start_redeem<T, YT>(access, pm, vault, lp_amount, clock)
+  PTB[1] withdraw_ticket = vault::withdraw<T, YT>(vault, yt_coin.into_balance(), clock)
+  PTB[2..]  for each strategy with `to_withdraw > 0`:
+            <strategy>::strategy_withdraw_for_vault(strategy, vault, withdraw_ticket, ...)
+            (strategy module discharges its own ActionRequest internally —
+             transparent to cdpm callers)
+  PTB[N+1]  balance_t = vault::redeem_withdraw_ticket<T, YT>(vault, withdraw_ticket)
+  PTB[N+2]  cdpm::kai_finish_redeem<T, YT>(pm, fee_house, ticket, balance_t.into_coin())
+```
+
+Yield fee semantics match Scallop (`MAX_FEE_RATE = 30%`, charged on
+`max(0, redeemed - principal_portion)`). Decoupling profile matches
+Scallop too: cdpm imports only `kai_sav::vault` (view + types), never
+`kai_leverage::*` or `access_management::*`.
+
+Operational caveats (see plan §"安全审计结论" for derivation):
+- **Bootstrap edge case**: when a Kai vault has `total_yt_supply == 0`, our
+  `compute_expected_yt` returns 0 and `start_supply` aborts via
+  `EZeroExpected`. In practice this only happens before Kunalabs seeds the
+  vault — normal users never see it.
+- **Strategy losses**: vault.move:817-823 emits `StrategyLossEvent` and
+  *does not abort* when a strategy returns less than requested. cdpm's
+  `kai_finish_redeem` will then abort via `EAmountShortfall` (the entire
+  PTB reverts atomically — no fund loss, only gas).
+- **Admin pause / TVL cap / rate limiter** (vault.move:484-548): Kunalabs
+  can pause withdrawals or cap TVL. `kai_start_*` succeed; `vault::*` calls
+  in the caller's PTB will then abort. Off-chain scheduler should pre-check.
+
+### D-11: `user_extract_kai_yt` Is a Kai-Incompatibility Escape
+Symmetric to D-09. If Kai becomes unreachable (vault paused, package
+issues) and `kai_finish_*` paths cannot complete, `pm.lending`'s KaiVault
+would be stranded.
+
+```move
+public fun user_extract_kai_yt<T, YT>(
+    pm: &mut PositionManager,
+    yt_amount: u64,
+    ctx: &mut TxContext,
+): Coin<YT>
+```
+
+- **Owner-only**, no fee.
+- Takes **no Kai objects** — works even if the Kai vault is paused or the
+  package upgrade-cap is in flux.
+- Principal amortization identical to `kai_start_redeem`.
+- After extraction the owner holds raw `Coin<YT>` and can in PTB redeem
+  against the live Kai vault directly, swap on a DEX (since `YT`s like
+  `YUSDC` typically have CoinMetadata and DEX listings), or wait.
+
+No inverse inject function for the same forge-protection reason as D-09.
+
 ## Security Features
 
 ### 1. Permission Separation

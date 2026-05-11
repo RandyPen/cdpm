@@ -567,6 +567,124 @@ public struct MarketCoinExtracted { pm_id, coin_type, market_coin_amount,
                                     principal_removed };
 ```
 
+## Kai SAV Lending Integration (D-10 / D-11)
+
+The PM proxies idle balances into Kai's **Single-Asset Vault (SAV)**, a
+multi-strategy yield optimizer maintained by Kunalabs. SAV is intentionally
+the user-facing layer of Kai's stack — it wraps `kai_leverage::supply_pool`
+(which requires Kai's access-management `Entity` allowlist) and exposes
+permissionless `vault::deposit` / `vault::withdraw` / `redeem_withdraw_ticket`
+to third-party integrators.
+
+### Architecture mirror
+- Storage: `lending: Bag` (shared with Scallop) keyed by **YT's** `type_name`
+  (Bag entry value is `KaiVault<phantom T, phantom YT>`). Same T can hold a
+  Scallop vault (key=T) and a Kai vault (key=YT) simultaneously.
+- API shape: `kai_start_supply` / `kai_finish_supply` /
+  `kai_start_redeem` / `kai_finish_redeem` + `user_extract_kai_yt`
+  (owner-only escape).
+- Fee model: identical to Scallop. `kai_finish_redeem` deducts
+  `fee_rate × max(0, redeemed - principal_portion)` from the interest
+  portion. `MAX_FEE_RATE = 3000` cap shared.
+
+### Decoupling profile (vs Scallop)
+cdpm imports only `kai_sav::vault` (the module, for the `Vault<T, YT>` type
+and `total_available_balance` / `total_yt_supply` view functions). cdpm
+does **not** import:
+- `kai_sav::vault::deposit` / `withdraw` / `redeem_withdraw_ticket` (called
+  by caller's PTB only — version-coupled within Kai but isolated from cdpm)
+- `kai_leverage::*` (Kai's lower-level lending primitives)
+- `access_management::*` (the allowlist framework for `kai_leverage::supply`)
+- All strategy modules (`kai_leverage_supply_pool`, `scallop_*` SAV
+  strategies, etc.)
+
+When Kai bumps its vault `MODULE_VERSION` (kai-sav-core/vault.move:27),
+caller PTB aborts at `vault::deposit/withdraw`; cdpm itself stays
+operational. `pm.lending` recoverable via `user_extract_kai_yt`.
+
+### Type-pin defense
+`Coin<YT>` cannot be forged externally:
+1. `lp_treasury: TreasuryCap<YT>` is held inside Kai's `Vault<T, YT>` — only
+   `kai_sav::vault` module mints/burns YT balances.
+2. `kai_sav::vault::new<T, YT>` is `public(package)` (vault.move:235) — no
+   external code can publish a `Vault<T, EvilYT>` shared object with
+   attacker-controlled YT.
+
+Therefore cdpm does not need an admin-curated registry of approved Kai
+vault IDs. Move's type system suffices.
+
+### Compute helpers
+```move
+fun compute_expected_yt<T, YT>(vault: &kai_vault::Vault<T, YT>, clock: &Clock, t_amount: u64): u64 {
+    let total = kai_vault::total_available_balance<T, YT>(vault, clock);
+    let yt_supply = kai_vault::total_yt_supply<T, YT>(vault);
+    if (total == 0) { t_amount }
+    else { ((yt_supply as u128) * (t_amount as u128) / (total as u128)) as u64 }
+}
+
+fun compute_expected_underlying_kai<T, YT>(vault, clock, yt_amount): u64 {
+    let total = kai_vault::total_available_balance<T, YT>(vault, clock);
+    let yt_supply = kai_vault::total_yt_supply<T, YT>(vault);
+    assert!(yt_supply > 0, EReserveEmpty);
+    ((yt_amount as u128) * (total as u128) / (yt_supply as u128)) as u64
+}
+```
+
+`total_available_balance` already accounts for `tlb::max_withdrawable`
+(time-locked profit unlock), so cdpm doesn't reimplement that math.
+
+### Caller PTB contract
+**Supply** (3 steps, same shape as Scallop):
+```
+PTB[0] (coin_t, ticket) = cdpm::kai_start_supply<T, YT>(access, pm, vault, amount, clock)
+PTB[1] yt_balance = vault::deposit<T, YT>(vault, coin_t.into_balance(), clock)
+PTB[2] cdpm::kai_finish_supply<T, YT>(pm, ticket, yt_balance.into_coin())
+```
+
+**Redeem** (variable length — vault::withdraw is async via strategies):
+```
+PTB[0] (yt_coin, ticket) = cdpm::kai_start_redeem<T, YT>(access, pm, vault, yt_amount, clock)
+PTB[1] withdraw_ticket = vault::withdraw<T, YT>(vault, yt_coin.into_balance(), clock)
+PTB[2..N+1] for each strategy with `to_withdraw > 0`:
+            <strategy_module>::strategy_withdraw_for_vault(strategy, vault, withdraw_ticket, ...)
+            // strategy module discharges its own access-management ActionRequest internally
+PTB[N+2] balance_t = vault::redeem_withdraw_ticket<T, YT>(vault, withdraw_ticket)
+PTB[N+3] cdpm::kai_finish_redeem<T, YT>(pm, fee_house, ticket, balance_t.into_coin())
+```
+
+The strategy walk is mandatory when the vault has active strategies with
+non-zero `to_withdraw`. Caller's SDK enumerates active strategies from
+on-chain vault state. cdpm does not track or care about which strategies
+the vault uses.
+
+### Operational risks (caller-side, documented for SDK)
+
+1. **Bootstrap (`yt_supply == 0`)**: Kai's deposit auto-mints performance
+   fees on first deposit (vault.move:580-598), changing `yt_supply` mid-
+   call. cdpm's `compute_expected_yt` returns 0 in this state, triggering
+   `EZeroExpected`. Practical: vaults are seeded by Kunalabs before
+   public use; cdpm callers won't hit this.
+2. **Strategy losses**: vault.move:817-823 — strategy returning less than
+   requested doesn't abort the vault, but cdpm's `kai_finish_redeem`
+   asserts `actual >= expected_underlying`. PTB aborts atomically; no fund
+   loss, only gas waste.
+3. **Admin pause / TVL cap / rate limiter** (vault.move:484-548): caller
+   PTB aborts at the live `vault::*` call. cdpm unaffected; `pm.lending`
+   intact.
+4. **Kai package re-deploy with new YT type identity**: extracting via
+   `user_extract_kai_yt` retrieves `Coin<YT_old>` for off-chain handling.
+
+### Events (no `by`; sender in tx metadata)
+```move
+public struct KaiSupplied      { pm_id, coin_type, yt_type, deposit_amount,
+                                 yt_minted };
+public struct KaiRedeemed      { pm_id, coin_type, yt_type, yt_burned,
+                                 redeemed_amount, principal_portion, interest,
+                                 fee_amount };
+public struct KaiYTExtracted   { pm_id, coin_type, yt_type, yt_amount,
+                                 principal_removed };
+```
+
 ## Future Enhancements
 
 ### Planned Improvements

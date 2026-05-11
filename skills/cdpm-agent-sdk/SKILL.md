@@ -1,6 +1,6 @@
 ---
 name: cdpm-agent-sdk
-description: TypeScript SDK guide for AI agents managing CDPM positions. Defines permission boundaries, operation workflows, automation strategies, and the Scallop hot-potato supply/redeem API agents share with owners and protocol bots. Use when building automated liquidity management agents.
+description: TypeScript SDK guide for AI agents managing CDPM positions. Defines permission boundaries, operation workflows, automation strategies, and the Scallop and Kai SAV hot-potato supply/redeem APIs agents share with owners and protocol bots. Use when building automated liquidity management agents.
 ---
 
 # CDPM Agent SDK Guide
@@ -29,6 +29,8 @@ import { SuiGrpcClient } from '@mysten/sui/grpc';
 | Transfer Fee to Balance | Move fees from fee bag to balance |
 | Scallop `start_supply` / `finish_supply` | Park idle balance into Scallop |
 | Scallop `start_redeem` / `finish_redeem` | Pull underlying back; yield fee deducted from interest portion |
+| Kai SAV `kai_start_supply` / `kai_finish_supply` | Park idle balance into a Kai `Vault<T, YT>` |
+| Kai SAV `kai_start_redeem` / `kai_finish_redeem` | Pull underlying back via the multi-step strategy walk; same yield fee on interest |
 
 ### What Agents CANNOT Do
 
@@ -39,6 +41,7 @@ import { SuiGrpcClient } from '@mysten/sui/grpc';
 | Authorize/Revoke Agents | Only owner can manage agents |
 | Modify PositionManager | Cannot change configuration |
 | `user_extract_market_coin<T>` | Owner-only escape hatch — agents cannot pull raw sCoin |
+| `user_extract_kai_yt<T, YT>` | Owner-only escape hatch — agents cannot pull raw `Coin<YT>` from a Kai vault entry |
 
 ### Permission Check
 
@@ -60,6 +63,7 @@ const isAuthorized = agents.includes(agentAddress);
 
 ### Core Operations
 - **[Agent Operations](reference/agent-operations.md)** - Add/remove liquidity, collect fees, transfer fees, supply/redeem Scallop lending
+- **[Kai SAV Lending](reference/kai-lending.md)** - Agent-driven `kai_start_supply` / `kai_start_redeem` with strategy walk; yield fee identical to Scallop; owner-only `user_extract_kai_yt` escape
 - **[Automation Strategies](reference/automation-strategies.md)** - Auto-compounding, rebalancing, fee collection scheduler
 
 ### Monitoring & Best Practices

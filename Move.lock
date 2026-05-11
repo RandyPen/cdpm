@@ -47,12 +47,6 @@ manifest_digest = "C4FE4C91DE74CBF223B2E380AE40F592177D21870DC2D7EB6227D2D694E05
 deps = {}
 
 [pinned.mainnet.MoveStdlib_1]
-source = { git = "https://github.com/MystenLabs/sui.git", subdir = "crates/sui-framework/packages/move-stdlib", rev = "b38bca86f0323b3fe8b6b7f4ca0cd7ae7faebe4b" }
-use_environment = "mainnet"
-manifest_digest = "C4FE4C91DE74CBF223B2E380AE40F592177D21870DC2D7EB6227D2D694E05363"
-deps = {}
-
-[pinned.mainnet.MoveStdlib_2]
 source = { git = "https://github.com/MystenLabs/sui.git", subdir = "crates/sui-framework/packages/move-stdlib", rev = "2f5992f189cd24445cd010ccf0aa7ff418ff93b1" }
 use_environment = "mainnet"
 manifest_digest = "C4FE4C91DE74CBF223B2E380AE40F592177D21870DC2D7EB6227D2D694E05363"
@@ -72,12 +66,6 @@ deps = { MoveStdlib = "MoveStdlib" }
 
 [pinned.mainnet.Sui_1]
 source = { git = "https://github.com/MystenLabs/sui.git", subdir = "crates/sui-framework/packages/sui-framework", rev = "2f5992f189cd24445cd010ccf0aa7ff418ff93b1" }
-use_environment = "mainnet"
-manifest_digest = "CD547CB1ACCE0880C835DAED2D8FFCB91D56C833AE5240D3AA5B918398263195"
-deps = { MoveStdlib = "MoveStdlib_2" }
-
-[pinned.mainnet.Sui_2]
-source = { git = "https://github.com/MystenLabs/sui.git", subdir = "crates/sui-framework/packages/sui-framework", rev = "b38bca86f0323b3fe8b6b7f4ca0cd7ae7faebe4b" }
 use_environment = "mainnet"
 manifest_digest = "CD547CB1ACCE0880C835DAED2D8FFCB91D56C833AE5240D3AA5B918398263195"
 deps = { MoveStdlib = "MoveStdlib_1" }
@@ -106,8 +94,206 @@ use_environment = "mainnet"
 manifest_digest = "3876920E3F5449B657525E749B996C31141507452514AF2E259F5441554DCDDF"
 deps = { Sui = "Sui_1" }
 
+[pinned.mainnet.access_management]
+source = { local = "../kai-contracts/access-management" }
+use_environment = "mainnet"
+manifest_digest = "E41BBD67BE8940D26C79D78B028477EF5B33BA217A1282C78ACB344CF8A5ECF6"
+deps = { std = "MoveStdlib", sui = "Sui" }
+
+[pinned.mainnet.bluefin_spot]
+source = { local = "../kai-contracts/_vendor/Bluefin/spot-v17" }
+use_environment = "mainnet"
+manifest_digest = "08E79D5F63D1821ACFEA53A572C5EB29D38828B06276E6DBC6EF1C7CFC3C92C7"
+deps = { integer_library = "integer_library", integer_mate = "integer_mate", std = "MoveStdlib", sui = "Sui" }
+
 [pinned.mainnet.cdpm]
 source = { root = true }
 use_environment = "mainnet"
-manifest_digest = "90A6A325ED770FD6149AA5879A48B76DADC2076A3F1A0272D575644EE364167F"
-deps = { CetusDlmm = "CetusDlmm", IntegerMate = "IntegerMate", MoveSTL = "MoveSTL", MoveStdlib = "MoveStdlib_1", ScallopProtocol = "ScallopProtocol", Sui = "Sui_2", X = "X" }
+manifest_digest = "01258F479C7C2155AA555D8B920D40BE971DCF878E05988C74D4AD4F13879C0D"
+deps = { cetusdlmm = "CetusDlmm", integer_mate = "IntegerMate", kai_sav = "kai_sav", move_stl = "MoveSTL", protocol = "ScallopProtocol", std = "MoveStdlib", sui = "Sui", x = "X" }
+
+[pinned.mainnet.cetus_clmm]
+source = { local = "../kai-contracts/_vendor/Cetus/clmm-v13" }
+use_environment = "mainnet"
+manifest_digest = "F7C63F1ECF575145EBED2E2DBEEDFDFA65654D819BFD3482A0E92BF63E87668A"
+deps = { integer_mate = "integer_mate_1", move_stl = "move_stl", std = "MoveStdlib", sui = "Sui" }
+
+[pinned.mainnet.coin_decimals_registry]
+source = { local = "../kai-contracts/_vendor/Scallop/coin-decimals-registry-v1" }
+use_environment = "mainnet"
+manifest_digest = "E41BBD67BE8940D26C79D78B028477EF5B33BA217A1282C78ACB344CF8A5ECF6"
+deps = { std = "MoveStdlib", sui = "Sui" }
+
+[pinned.mainnet.deep]
+source = { local = "../kai-contracts/_vendor/coins/DEEP" }
+use_environment = "mainnet"
+manifest_digest = "E41BBD67BE8940D26C79D78B028477EF5B33BA217A1282C78ACB344CF8A5ECF6"
+deps = { std = "MoveStdlib", sui = "Sui" }
+
+[pinned.mainnet.integer_library]
+source = { local = "../kai-contracts/_vendor/Bluefin/integer-library-v3" }
+use_environment = "mainnet"
+manifest_digest = "E41BBD67BE8940D26C79D78B028477EF5B33BA217A1282C78ACB344CF8A5ECF6"
+deps = { std = "MoveStdlib", sui = "Sui" }
+
+[pinned.mainnet.integer_mate]
+source = { local = "../kai-contracts/_vendor/Cetus/integer-mate-v5" }
+use_environment = "mainnet"
+manifest_digest = "E41BBD67BE8940D26C79D78B028477EF5B33BA217A1282C78ACB344CF8A5ECF6"
+deps = { std = "MoveStdlib", sui = "Sui" }
+
+[pinned.mainnet.integer_mate_1]
+source = { local = "../kai-contracts/_vendor/Cetus/integer-mate-v7" }
+use_environment = "mainnet"
+manifest_digest = "E41BBD67BE8940D26C79D78B028477EF5B33BA217A1282C78ACB344CF8A5ECF6"
+deps = { std = "MoveStdlib", sui = "Sui" }
+
+[pinned.mainnet.kai_leverage]
+source = { local = "../kai-contracts/kai/leverage/core" }
+use_environment = "mainnet"
+manifest_digest = "BFEC831406228189DAB6CD8C2AF79373789E74562A926A2EBF5BBAA9AD21A6BA"
+deps = { access_management = "access_management", bluefin_spot = "bluefin_spot", cetus_clmm = "cetus_clmm", deep = "deep", integer_mate = "integer_mate_1", lbtc = "lbtc", pyth = "pyth", rate_limiter = "rate_limiter", std = "MoveStdlib", sui = "Sui", suiusdt = "suiusdt", usdc = "usdc", usdy = "usdy", wal = "wal", wbtc = "wbtc", whusdce = "whusdce", whusdte = "whusdte", xbtc = "xbtc" }
+
+[pinned.mainnet.kai_sav]
+source = { local = "../kai-contracts/kai/sav/core" }
+use_environment = "mainnet"
+manifest_digest = "CBF792884FA19DE2715F5320CB8BA3AA83224ABEFFD0E7F75C606126BFD0BC22"
+deps = { access_management = "access_management", kai_leverage = "kai_leverage", kai_ywhusdte_ysui = "kai_ywhusdte_ysui", rate_limiter = "rate_limiter", scallop_pool = "spool", scallop_protocol = "protocol", std = "MoveStdlib", sui = "Sui", whusdce = "whusdce", whusdte = "whusdte" }
+
+[pinned.mainnet.kai_ywhusdte_ysui]
+source = { local = "../kai-contracts/kai/sav/vault-token-init/kai-ywhusdte-ysui" }
+use_environment = "mainnet"
+manifest_digest = "E41BBD67BE8940D26C79D78B028477EF5B33BA217A1282C78ACB344CF8A5ECF6"
+deps = { std = "MoveStdlib", sui = "Sui" }
+
+[pinned.mainnet.lbtc]
+source = { local = "../kai-contracts/_vendor/coins/LBTC" }
+use_environment = "mainnet"
+manifest_digest = "E41BBD67BE8940D26C79D78B028477EF5B33BA217A1282C78ACB344CF8A5ECF6"
+deps = { std = "MoveStdlib", sui = "Sui" }
+
+[pinned.mainnet.math]
+source = { local = "../kai-contracts/_vendor/Scallop/math-v1" }
+use_environment = "mainnet"
+manifest_digest = "E41BBD67BE8940D26C79D78B028477EF5B33BA217A1282C78ACB344CF8A5ECF6"
+deps = { std = "MoveStdlib", sui = "Sui" }
+
+[pinned.mainnet.move_stl]
+source = { local = "../kai-contracts/_vendor/Cetus/move-stl-v5" }
+use_environment = "mainnet"
+manifest_digest = "E41BBD67BE8940D26C79D78B028477EF5B33BA217A1282C78ACB344CF8A5ECF6"
+deps = { std = "MoveStdlib", sui = "Sui" }
+
+[pinned.mainnet.protocol]
+source = { local = "../kai-contracts/_vendor/Scallop/protocol-v10" }
+use_environment = "mainnet"
+manifest_digest = "4EE5BC4823892B73595CD0FFC5F8171067FA3AAB0EB2FCF131E51B38457B525E"
+deps = { coin_decimals_registry = "coin_decimals_registry", math = "math", std = "MoveStdlib", sui = "Sui", whitelist = "whitelist", x = "x", x_oracle = "x_oracle" }
+
+[pinned.mainnet.pyth]
+source = { local = "../kai-contracts/_vendor/Pyth/core-v2" }
+use_environment = "mainnet"
+manifest_digest = "D18B34940467015EBF096EC1C7CBBBD67BF5B04CC3C057DB2B0AD351272DACFE"
+deps = { std = "MoveStdlib", sui = "Sui", wormhole = "wormhole" }
+
+[pinned.mainnet.rate_limiter]
+source = { local = "../kai-contracts/rate-limiter" }
+use_environment = "mainnet"
+manifest_digest = "E41BBD67BE8940D26C79D78B028477EF5B33BA217A1282C78ACB344CF8A5ECF6"
+deps = { std = "MoveStdlib", sui = "Sui" }
+
+[pinned.mainnet.spool]
+source = { local = "../kai-contracts/_vendor/Scallop/spool-v2" }
+use_environment = "mainnet"
+manifest_digest = "E41BBD67BE8940D26C79D78B028477EF5B33BA217A1282C78ACB344CF8A5ECF6"
+deps = { std = "MoveStdlib", sui = "Sui" }
+
+[pinned.mainnet.stablecoin]
+source = { local = "../kai-contracts/_vendor/Circle/stablecoin-v1" }
+use_environment = "mainnet"
+manifest_digest = "E35B0D76E836BA66C16A6E01AD029EA37B6F85AAAF845312E53D08280E5F3E32"
+deps = { std = "MoveStdlib", sui = "Sui", sui_extensions = "sui_extensions" }
+
+[pinned.mainnet.sui_extensions]
+source = { local = "../kai-contracts/_vendor/Circle/sui-extensions-v1" }
+use_environment = "mainnet"
+manifest_digest = "E41BBD67BE8940D26C79D78B028477EF5B33BA217A1282C78ACB344CF8A5ECF6"
+deps = { std = "MoveStdlib", sui = "Sui" }
+
+[pinned.mainnet.suiusdt]
+source = { local = "../kai-contracts/_vendor/coins/suiUSDT" }
+use_environment = "mainnet"
+manifest_digest = "E41BBD67BE8940D26C79D78B028477EF5B33BA217A1282C78ACB344CF8A5ECF6"
+deps = { std = "MoveStdlib", sui = "Sui" }
+
+[pinned.mainnet.token_bridge]
+source = { local = "../kai-contracts/_vendor/Wormhole/token-bridge-v1" }
+use_environment = "mainnet"
+manifest_digest = "838AA4998481011ED4777B7386260F8A05B647B4B7DF6621D35AAA6B4D420DF8"
+deps = { std = "MoveStdlib", sui = "Sui", wormhole = "wormhole" }
+
+[pinned.mainnet.usdc]
+source = { local = "../kai-contracts/_vendor/coins/USDC" }
+use_environment = "mainnet"
+manifest_digest = "AEB379AEE1A925ED5C021ADE30219DD4456B0B776416B0F3BB7630346DCE7E1E"
+deps = { stablecoin = "stablecoin", std = "MoveStdlib", sui = "Sui", sui_extensions = "sui_extensions" }
+
+[pinned.mainnet.usdy]
+source = { local = "../kai-contracts/_vendor/coins/USDY" }
+use_environment = "mainnet"
+manifest_digest = "E41BBD67BE8940D26C79D78B028477EF5B33BA217A1282C78ACB344CF8A5ECF6"
+deps = { std = "MoveStdlib", sui = "Sui" }
+
+[pinned.mainnet.wal]
+source = { local = "../kai-contracts/_vendor/coins/WAL" }
+use_environment = "mainnet"
+manifest_digest = "E41BBD67BE8940D26C79D78B028477EF5B33BA217A1282C78ACB344CF8A5ECF6"
+deps = { std = "MoveStdlib", sui = "Sui" }
+
+[pinned.mainnet.wbtc]
+source = { local = "../kai-contracts/_vendor/coins/wBTC" }
+use_environment = "mainnet"
+manifest_digest = "E41BBD67BE8940D26C79D78B028477EF5B33BA217A1282C78ACB344CF8A5ECF6"
+deps = { std = "MoveStdlib", sui = "Sui" }
+
+[pinned.mainnet.whitelist]
+source = { local = "../kai-contracts/_vendor/Scallop/whitelist-v1" }
+use_environment = "mainnet"
+manifest_digest = "E41BBD67BE8940D26C79D78B028477EF5B33BA217A1282C78ACB344CF8A5ECF6"
+deps = { std = "MoveStdlib", sui = "Sui" }
+
+[pinned.mainnet.whusdce]
+source = { local = "../kai-contracts/_vendor/coins/whUSDCe" }
+use_environment = "mainnet"
+manifest_digest = "675C45667D104AA87AEDFAB577FD88DF599C04BAF34D5C91B7B53B4EC1ABD656"
+deps = { std = "MoveStdlib", sui = "Sui", token_bridge = "token_bridge" }
+
+[pinned.mainnet.whusdte]
+source = { local = "../kai-contracts/_vendor/coins/whUSDTe" }
+use_environment = "mainnet"
+manifest_digest = "675C45667D104AA87AEDFAB577FD88DF599C04BAF34D5C91B7B53B4EC1ABD656"
+deps = { std = "MoveStdlib", sui = "Sui", token_bridge = "token_bridge" }
+
+[pinned.mainnet.wormhole]
+source = { local = "../kai-contracts/_vendor/Wormhole/core-v1" }
+use_environment = "mainnet"
+manifest_digest = "E41BBD67BE8940D26C79D78B028477EF5B33BA217A1282C78ACB344CF8A5ECF6"
+deps = { std = "MoveStdlib", sui = "Sui" }
+
+[pinned.mainnet.x]
+source = { local = "../kai-contracts/_vendor/Scallop/x-v1" }
+use_environment = "mainnet"
+manifest_digest = "E41BBD67BE8940D26C79D78B028477EF5B33BA217A1282C78ACB344CF8A5ECF6"
+deps = { std = "MoveStdlib", sui = "Sui" }
+
+[pinned.mainnet.x_oracle]
+source = { local = "../kai-contracts/_vendor/Scallop/x-oracle-v1" }
+use_environment = "mainnet"
+manifest_digest = "E41BBD67BE8940D26C79D78B028477EF5B33BA217A1282C78ACB344CF8A5ECF6"
+deps = { std = "MoveStdlib", sui = "Sui" }
+
+[pinned.mainnet.xbtc]
+source = { local = "../kai-contracts/_vendor/coins/xBTC" }
+use_environment = "mainnet"
+manifest_digest = "E41BBD67BE8940D26C79D78B028477EF5B33BA217A1282C78ACB344CF8A5ECF6"
+deps = { std = "MoveStdlib", sui = "Sui" }

@@ -5,10 +5,6 @@ edition = "2024"         # edition = "legacy" to use legacy (pre-2024) Move
 # authors = ["..."]      # e.g., ["Joe Smith (joesmith@noemail.com)", "John Snow (johnsnow@noemail.com)"]
 
 [dependencies]
-# DEV-ONLY: Sui/MoveStdlib pinned to a commit to avoid LibreSSL HTTP/2 issues on local git.
-# Remove these two before mainnet deploy and let sui CLI resolve via mainnet branch.
-Sui = { git = "https://github.com/MystenLabs/sui.git", subdir = "crates/sui-framework/packages/sui-framework", rev = "b38bca86f0323b3fe8b6b7f4ca0cd7ae7faebe4b", override = true }
-MoveStdlib = { git = "https://github.com/MystenLabs/sui.git", subdir = "crates/sui-framework/packages/move-stdlib", rev = "b38bca86f0323b3fe8b6b7f4ca0cd7ae7faebe4b", override = true }
 # Patched cetusdlmm: identical to upstream `mainnet-v0.8.0` except for one
 # missing `use sui::vec_map;` import inside a `#[test_only]` helper
 # (`partner.move:193`) that prevents `sui move test` from ever building this
@@ -16,12 +12,9 @@ MoveStdlib = { git = "https://github.com/MystenLabs/sui.git", subdir = "crates/s
 # to `[dependencies]` so that `sui-prover` (asymptotic.tech) — which always
 # activates dev-deps — does not trigger a "Conflicting regular and dev
 # overrides" resolver error. Drop once upstream releases the patch.
-CetusDlmm = { local = "/tmp/cetus-dlmm-patched/packages/dlmm", override = true, rename-from = "cetusdlmm" }
-IntegerMate = { git = "https://github.com/CetusProtocol/integer-mate.git", rev = "mainnet-v1.3.0", override = true, rename-from = "integer_mate" }
-MoveSTL = { git = "https://github.com/CetusProtocol/move-stl.git", rev = "mainnet-v1.3.0", override = true, rename-from = "move_stl" }
-ScallopProtocol = { local = "../sui-lending-protocol/contracts/protocol", rename-from = "protocol" }
-X = { local = "../sui-lending-protocol/contracts/libs/x" }
-
-[addresses]
-protocol = "0xefe8b36d5b2e43728cc323298626b83177803521d195cfb11e15b910e892fddf"
-x = "0x779b5c547976899f5474f3a5bc0db36ddf4697ad7e5a901db0415c2281d28162"
+cetusdlmm = { local = "/tmp/cetus-dlmm-patched/packages/dlmm", override = true }
+integer_mate = { git = "https://github.com/CetusProtocol/integer-mate.git", rev = "mainnet-v1.3.0", override = true }
+move_stl = { git = "https://github.com/CetusProtocol/move-stl.git", rev = "mainnet-v1.3.0", override = true }
+protocol = { local = "../sui-lending-protocol/contracts/protocol", override = true }
+x = { local = "../sui-lending-protocol/contracts/libs/x", override = true }
+kai_sav = { local = "../kai-contracts/kai/sav/core" }

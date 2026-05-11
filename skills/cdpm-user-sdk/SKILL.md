@@ -1,6 +1,6 @@
 ---
 name: cdpm-user-sdk
-description: TypeScript SDK guide for CDPM (Cetus DLMM Position Manager) end-users. Provides PTB construction patterns for creating positions, managing liquidity, authorizing agents, collecting fees, and supplying/redeeming idle funds via Scallop lending. Use when users need to interact with CDPM contract through TypeScript SDK.
+description: TypeScript SDK guide for CDPM (Cetus DLMM Position Manager) end-users. Provides PTB construction patterns for creating positions, managing liquidity, authorizing agents, collecting fees, and supplying/redeeming idle funds via Scallop lending or Kai SAV lending. Use when users need to interact with CDPM contract through TypeScript SDK.
 ---
 
 # CDPM User SDK Guide
@@ -11,7 +11,7 @@ CDPM (Cetus DLMM Position Manager) is a proxy contract for managing Cetus DLMM p
 
 **Package Address**: `0x0000000000000000000000000000000000000000000000000000000000000000`
 
-> The `PositionManager` struct now contains a fourth bag, `lending: Bag`, keyed by underlying coin type and storing per-(T, S) `ScallopVault` records. See [Scallop Lending](reference/scallop-lending.md) for end-user PTB recipes.
+> The `PositionManager` struct now contains a fourth bag, `lending: Bag`, holding both Scallop `ScallopVault<T>` entries (keyed by `type_name<T>`) and Kai SAV `KaiVault<T, YT>` entries (keyed by `type_name<YT>`) — both can coexist on a single PM. See [Scallop Lending](reference/scallop-lending.md) and [Kai SAV Lending](reference/kai-lending.md) for end-user PTB recipes.
 
 ## Quick Start
 
@@ -47,6 +47,9 @@ const CDPM_PACKAGE = '0x00000000000000000000000000000000000000000000000000000000
 
 ### Scallop Lending (Idle Funds)
 - **[Scallop Lending](reference/scallop-lending.md)** - Hot-potato supply/redeem PTBs, owner-only escape hatch, yield-fee math
+
+### Kai SAV Lending (Idle Funds)
+- **[Kai SAV Lending](reference/kai-lending.md)** - Two-generic `<T, YT>` hot-potato supply/redeem with strategy walk, owner-only `user_extract_kai_yt` escape, shared yield-fee math
 
 ### Web Development & Queries
 - **[Web Query Guide](reference/web-query.md)** - GraphQL queries for PositionManagers
