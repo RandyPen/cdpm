@@ -27,6 +27,7 @@ import { BinUtils, FeeUtils } from '@cetusprotocol/dlmm-sdk/utils'
 
 ### Core Calculations
 - **[Liquidity Calculation](reference/liquidity-calculation.md)** - Constant sum formula, calculate liquidity, get amounts
+- **[Strategy Distributions](reference/strategy-distributions.md)** - `Spot` / `Curve` / `BidAsk` weight formulas (`MAX=2000`, `MIN=200`), per-bin shape (flat / bell / U), bid-vs-ask side coin assignment, single-sided fallback when `active_id` is outside the range, raw-weight inspection via `WeightUtils.toWeight*`, full `BinLiquidityInfo` via `StrategyUtils.toAmountsBothSideByStrategy` / `autoFillCoinByStrategy`, and the `use_bin_infos` flag trade-off
 - **[Bin Price Calculations](reference/bin-price-calculations.md)** - Bin ID from price, price from bin ID, Q64x64 price
 - **[Position Management](reference/position-management.md)** - Position count, split bins into positions
 - **[Fee Calculations](reference/fee-calculations.md)** - Variable fee, protocol fee, composition fee
