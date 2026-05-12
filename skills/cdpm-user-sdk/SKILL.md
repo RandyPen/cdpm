@@ -9,7 +9,7 @@ description: TypeScript SDK guide for CDPM (Cetus DLMM Position Manager) end-use
 
 CDPM (Cetus DLMM Position Manager) is a proxy contract for managing Cetus DLMM positions with support for user self-management, agent delegation, protocol-managed operations, and two optional lending integrations for idle funds: **Scallop** (single-generic `<T>` market coin) and **Kai SAV** (two-generic `<T, YT>` strategy-aggregating vault). Both integrations share `pm.lending: Bag`, the hot-potato ticket pattern, and a single `fee_house.fee_rate` knob.
 
-**Package Address**: `0x0000000000000000000000000000000000000000000000000000000000000000`
+**Package Address**: `0x3e926116ec95d753b83b80d768e310ef492d84892dee5cc86b51c1d3a876d5b7` (immutable digest: `HWJKADRhTY2XKoB49UCe3c9pYcRRdVKZfHaJZ8URmS16`). Other shared object IDs live in [`reference/constants.md`](reference/constants.md).
 
 > The `PositionManager` struct now contains a fourth bag, `lending: Bag`, holding both Scallop `ScallopVault<T>` entries (keyed by `type_name<T>`) and Kai SAV `KaiVault<T, YT>` entries (keyed by `type_name<YT>`) — both can coexist on a single PM. See [Scallop Lending](reference/scallop-lending.md) and [Kai SAV Lending](reference/kai-lending.md) for end-user PTB recipes.
 
@@ -31,7 +31,7 @@ const client = new SuiGrpcClient({
   baseUrl: 'https://fullnode.mainnet.sui.io:443',
   network: 'mainnet',
 });
-const CDPM_PACKAGE = '0x0000000000000000000000000000000000000000000000000000000000000000';
+const CDPM_PACKAGE = '0x3e926116ec95d753b83b80d768e310ef492d84892dee5cc86b51c1d3a876d5b7';
 ```
 
 ## Topics
