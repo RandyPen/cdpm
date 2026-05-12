@@ -250,6 +250,123 @@ tx.moveCall({
 - **`use_bin_infos` is a Cetus-only flag** → it only affects `sdk.Position.addLiquidityPayload(...)` (the Cetus-direct path). cdpm's own entries always behave as if `use_bin_infos: true`, since they take per-bin vectors and never the strategy enum.
 - **Removal is symmetric** → `sdk.Position.calculateRemoveLiquidityInfo({ bins, ... })` → flatten → `cdpm::user_remove_liquidity` / `agent_remove_liquidity` (`cdpm.move:151+, 275+`). The same `bin_id → u32` two's-complement cast applies.
 
+## Per-bin shares for rebalance scheduling
+
+A rebalance scheduler that holds capital across (idle PM balance + Scallop sCoin + Kai YT + active position) needs more than the absolute per-bin amounts that `StrategyUtils` produces. Before each tick it has to ask: *"of the coin A I'm about to deposit, how much lands in each bin? what's the bid-side / ask-side total? how does it map to value at the active price?"* The strategy gives you the **shape**; the share table below turns that shape into the **fractions** you scale up or down by when redeeming from lending.
+
+### Helper — `binShareTable(bin_infos, bin_step)`
+
+Pure post-processing of a `BinLiquidityInfo`. No new SDK call, no on-chain reads. Pair it with `StrategyUtils.toAmountsBothSideByStrategy(...)` (or `sdk.Position.calculateAddLiquidityInfo(...)`):
+
+```ts
+import { d } from '@cetusprotocol/common-sdk'
+import { BinUtils, type BinLiquidityInfo } from '@cetusprotocol/dlmm-sdk'
+import Decimal from 'decimal.js'
+
+type BinShareRow = {
+  bin_id: number
+  amount_a: string
+  amount_b: string
+  share_a: string        // amount_a / total_a, "0" if total_a == 0
+  share_b: string        // amount_b / total_b, "0" if total_b == 0
+  share_value: string    // bin_value_b / total_value_b, denominated in coin B
+}
+
+type BinShareTable = {
+  total_a: string
+  total_b: string
+  total_value_b: string  // Σ (price_i · amount_a_i + amount_b_i)
+  rows: BinShareRow[]
+}
+
+// price_i is the per-lamport price of bin i in coin B per coin A.
+// Using `getPricePerLamportFromBinId` keeps decimals consistent with the
+// amounts Cetus stores (raw lamports), so total_value_b stays integer-clean.
+function binShareTable(
+  info: BinLiquidityInfo,
+  bin_step: number,
+): BinShareTable {
+  const total_a = d(info.amount_a)
+  const total_b = d(info.amount_b)
+
+  // L = price · a + b, summed and denominated in coin B.
+  let total_value = d(0)
+  const value_per_bin: Decimal[] = info.bins.map((b) => {
+    const price = d(BinUtils.getPricePerLamportFromBinId(b.bin_id, bin_step))
+    const v = price.mul(d(b.amount_a)).add(d(b.amount_b))
+    total_value = total_value.add(v)
+    return v
+  })
+
+  const safeRatio = (num: Decimal, den: Decimal) =>
+    den.isZero() ? '0' : num.div(den).toString()
+
+  const rows: BinShareRow[] = info.bins.map((b, i) => ({
+    bin_id: b.bin_id,
+    amount_a: b.amount_a,
+    amount_b: b.amount_b,
+    share_a: safeRatio(d(b.amount_a), total_a),
+    share_b: safeRatio(d(b.amount_b), total_b),
+    share_value: safeRatio(value_per_bin[i], total_value),
+  }))
+
+  return {
+    total_a: total_a.toString(),
+    total_b: total_b.toString(),
+    total_value_b: total_value.toString(),
+    rows,
+  }
+}
+```
+
+`Decimal` (via `d()` from `@cetusprotocol/common-sdk`) avoids the float drift that `Number(amount_a) / Number(total_a)` would produce on `u64`-scale lamport values. The same `d()` is used throughout `weightUtils.ts` and `strategyUtils.ts`, so the share output composes cleanly with anything else you build on top.
+
+### Worked example — `Curve` over `[active_id − 3, active_id + 3]`
+
+Inputs: stable pair (price ≈ 1, both decimals = 6), `bin_step = 2`, `amount_a = 1_000_000`, `amount_b = 1_000_000`. With `MAX_WEIGHT = 2000`, `MIN_WEIGHT = 200`, `Curve` produces a symmetric bell:
+
+Coin-B weights are `[200, 800, 1400, 1000]` for bins `[−3, −2, −1, 0]` — `MAX − diff·delta` for the bid side (`diff = (2000−200)/3 = 600`), then the active bin gets half-`MAX` from `calculateActiveWeights`'s empty-active branch (`weightUtils.ts:594`, fires when the caller passes `active_bin_of_pool = { amount_a: '0', amount_b: '0' }`; if `active_bin_of_pool` is `undefined` the active bin is skipped entirely). This is also the bridge to the **Weight formulas** table near the top of this doc — there `Curve`'s active-bin weight is listed as `MAX = 2000`, which is the *base* before the half-split assigns `MAX/2` to coin B and `MAX/(2·p₀)` to coin A. Coin A here is the mirror image of coin B. The resulting share table:
+
+| bin offset | amount_a   | amount_b   | share_a | share_b | share_value |
+|-----------:|-----------:|-----------:|--------:|--------:|------------:|
+|  −3 (bid)  |          0 |     58_800 |   0.0%  |   5.88% |      2.94%  |
+|  −2 (bid)  |          0 |    235_300 |   0.0%  |  23.53% |     11.77%  |
+|  −1 (bid)  |          0 |    411_800 |   0.0%  |  41.18% |     20.59%  |
+|   0 (act)  |    294_100 |    294_100 |  29.41% |  29.41% |     29.41%  |
+|  +1 (ask)  |    411_800 |          0 |  41.18% |   0.0%  |     20.59%  |
+|  +2 (ask)  |    235_300 |          0 |  23.53% |   0.0%  |     11.77%  |
+|  +3 (ask)  |     58_800 |          0 |   5.88% |   0.0%  |      2.94%  |
+| **total**  |  1_000_000 |  1_000_000 | 100.0%  | 100.0%  |    100.0%   |
+
+Two non-obvious things to take away from the per-coin columns:
+
+- The **immediate neighbour** of the active bin holds the largest *single-coin* share (`41.18%` at bin ±1), not the active bin itself. That's the active-bin half-split at work — coin A and coin B each get only half of `MAX_WEIGHT` at the active bin, so the very next bin out beats it on a per-coin basis.
+- In **value terms**, the active bin is still the heaviest at `29.41%` of `share_value`. That's the real concentration `Curve` delivers, and it's only visible once you collapse coin A and coin B into a single value column.
+
+Switching to `Spot` would make every cell ≈ `14.3%`; switching to `BidAsk` would invert the bell so the edge bins dominate (`share_value` peaks at ±3) and the active bin shows the smallest share.
+
+### Reading the table
+
+- **Side rule shows up structurally.** Bid-side bins (`bin_id < active_id`) have `share_a == 0`, ask-side bins (`bin_id > active_id`) have `share_b == 0`. The active bin is the only one that can be non-zero in both columns.
+- **Column sums.** `Σ share_a == 1`, `Σ share_b == 1`, `Σ share_value == 1`. **Per-row sums are not meaningful** — `share_a + share_b` for a single bin is just two unrelated fractions of two different totals.
+- **`share_value` is the single number to compare across strategies.** It tells you what fraction of the *total deposited LP value* lives at each bin, which is what you actually care about when projecting fee accrual or IL.
+
+### Coupling to lending — sizing the redeem
+
+Once you have `total_a` / `total_b` from the share table, the gap vs. idle PM balance is what you redeem from lending:
+
+```ts
+const shortfall_a = max(0n, BigInt(table.total_a) - idleA)
+const shortfall_b = max(0n, BigInt(table.total_b) - idleB)
+```
+
+Feed each non-zero shortfall to the existing inverse-sizing helpers — they tell you exactly how much sCoin / YT to burn so the post-fee underlying lands in `pm.balance[T]`:
+
+- `scoinToBurnForTargetUnderlying(...)` → see [Scallop Lending Math §7](scallop-lending-math.md) — when coin A or B sits in `pm.lending` as Scallop sCoin.
+- `ytToBurnForTargetUnderlying(...)` → see [Kai SAV Lending Math §7](kai-lending-math.md) — same idea for Kai YT.
+
+If a redeem comes back short (e.g. Scallop `cash` is thin and you only got back 80% of `shortfall_a`), don't recompute the strategy — just **scale every row by 0.8** and re-flatten. The share columns make this trivial and the result is still a valid `Curve` / `BidAsk` / `Spot` distribution at smaller capital. cdpm has no on-chain `strategy_type` validation (see *Practical implications → No on-chain strategy enum* above), so this scaled-down vector goes straight into `user_add_liquidity_to_position` / `agent_add_liquidity` unchanged.
+
 ## Cross-references
 
 - [Liquidity Calculation](liquidity-calculation.md) — the constant-sum `L = price·a + b` formula each per-bin amount feeds into.
