@@ -116,6 +116,8 @@ async function agentSupplyToScallop(
 
 `scallop_start_supply` decreases `pm.balance[T]` by `amount` and stores `principal` for later yield accounting under the bag key `type_name<T>`. The first supply for a given `T` creates a fresh `ScallopVault<T>` entry; subsequent supplies of the same `T` add to it.
 
+**`MAX_U64` is a "drain whatever's there" sentinel.** `scallop_start_supply` pulls the underlying via the internal `withdraw_from_balance<T>` helper (`cdpm.move:1271-1286`), which clamps `amount >= balance_amount` and removes the bag entry; the post-clamp `coin.value()` is what feeds `compute_expected_scoin`. So passing `tx.pure.u64(MAX_U64)` consumes the entire `pm.balance[T]` entry, and the only remaining abort path is `EZeroExpected (1007)` if the entry is empty / dust. This mirrors `protocol_transfer_fee_to_balance`, which uses the same sentinel today (the helper has identical clamp logic in `withdraw_from_fee`, `cdpm.move:1301-1316`). Prefer the sentinel for atomic-rebalance flows where you'd otherwise have to dev-inspect the redeem residual and refeed it as `amount`. Use an explicit sized `amount` only when you intentionally want to leave a residual in `pm.balance[T]`.
+
 **Don't accidentally re-supply your own redeem proceeds.** A common agent bug: redeem from Scallop, then immediately re-supply the post-fee underlying back into the same market. Each round trip pays a yield fee on the interest portion, so churn is expensive. Track time-since-last-redeem and amortize.
 
 ---

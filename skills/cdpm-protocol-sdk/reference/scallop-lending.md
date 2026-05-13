@@ -136,6 +136,8 @@ async function protocolSupplyToScallop(
 }
 ```
 
+**`MAX_U64` is a "drain whatever's there" sentinel.** `scallop_start_supply` pulls the underlying via the internal `withdraw_from_balance<T>` helper (`cdpm.move:1271-1286`), which clamps `amount >= balance_amount` and removes the bag entry; the post-clamp `coin.value()` is what feeds `compute_expected_scoin`. So passing `tx.pure.u64(MAX_U64)` consumes the entire `pm.balance[T]` entry, and the only remaining abort path is `EZeroExpected (1007)` if the entry is empty / dust. This mirrors `protocol_transfer_fee_to_balance`, which uses the same sentinel today (the helper has identical clamp logic in `withdraw_from_fee`, `cdpm.move:1301-1316`). Prefer the sentinel for atomic-rebalance flows where the supply leg should atomically absorb the prior redeem residual without an off-chain dev-inspect round trip. Use an explicit sized `amount` only when you intentionally want to leave a residual in `pm.balance[T]`.
+
 ---
 
 ## Protocol PTB Recipe: Redeem (with yield-fee deduction)
