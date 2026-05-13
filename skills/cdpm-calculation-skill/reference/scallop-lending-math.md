@@ -459,6 +459,24 @@ When sizing inputs:
 - For both, build in headroom against `EAmountShortfall` by either calling `accrue_interest_for_market` immediately before, or shaving a small slippage off `expected_*` and verifying live values match before signing.
 - When using `scoinToBurnForTargetNet` for a rebalancing bot: re-snapshot `reserve` and `vault` *after* the accrual command and before signing — sizing on stale snapshots can leave you 1-2 underlying short on the very next block.
 
+### 9.1 Full-drain dust and the `LENDING_SAFE_MARGIN_WRAPPER_RAW` floor
+
+Same overall caller pattern as the Kai counterpart — see [`kai-lending-math.md` §9.1](./kai-lending-math.md#91-full-drain-dust-and-the-lending_safe_margin_wrapper_raw-floor). The **math is different**, though: Scallop's `protocol::redeem::redeem` computes the underlying with the *same* single u128 floor-div formula cdpm uses in `compute_expected_underlying_scallop` (`scoin × (cash + debt − revenue) / supply`). Both reads see the *same* balance sheet within a single PTB (the `accrue_interest_for_market` command 0 makes `last_updated == now`, so neither cdpm nor the upstream re-accrues). Result: `redeemed_amount == expected_underlying` **exactly** in the common case — no observed dust.
+
+The cap pattern is still applied as **defense-in-depth** against future Scallop rounding changes and for parity with Kai's recipe (so the same orchestrator helper handles both protocols). Recommended client-side approach:
+
+- **Protocol / agent** callers cap `scoinAmount` at `min(neededWrapper, entry.wrapperRaw − LENDING_SAFE_MARGIN_WRAPPER_RAW)` (recommended default `100n` sCoin raw). Never pass `u64::MAX`. Use a pure helper — see the `capRedeemBurnRaw` example in [`kai-lending-math.md` §9.1](./kai-lending-math.md#91-full-drain-dust-and-the-lending_safe_margin_wrapper_raw-floor); the helper is protocol-agnostic.
+- **User close-PM** inserts `0x2::coin::join(coinT, topup)` between `scallop_start_redeem` and `scallop_finish_redeem`, where `topup` is ~30 raw underlying spliced from `tx.gas` (SUI) or a user-wallet coin (USDC / others). For Scallop the top-up is structurally unnecessary in the common case, but the close-PM PTB shares its shape with the Kai branch (where the top-up *is* required) — keeping the same code path is simpler than special-casing. The top-up is folded into `redeemed_amount`; the service fee on `interest = redeemed − principal` is taken on the inflated interest, so the fee is **not bypassed**.
+
+Cross-references:
+
+- `cdpm-protocol-sdk/reference/scallop-lending.md` — protocol PTB template (no full drain)
+- `cdpm-agent-sdk/reference/scallop-lending.md` — agent PTB template
+- `cdpm-user-sdk/reference/scallop-lending.md` — close-PM top-up PTB template
+- `cdpm-calculation-skill/reference/cross-protocol-ptb.md` §3 — side-by-side comparison
+
+Note: this is **separate** from the Scallop-specific `EStaleScallopState (1011)` accrue requirement above. The two preconditions are independent and both must hold.
+
 ---
 
 ## 10. Reading Live Supply APY Off-Chain (Scallop vs Kai Picker)
@@ -466,6 +484,13 @@ When sizing inputs:
 The dominant cdpm use case for live rates is **"where do I park `pm.balance[T]` — Scallop or Kai?"**. cdpm holds the same underlying `T` in both vaults under different bag keys, so the decision is purely yield-driven: query both protocols' live supply APY, subtract the cdpm yield-fee, pick the higher. Scallop publishes its supply APY via [`@scallop-io/sui-scallop-sdk`](https://github.com/scallop-io/sui-scallop-sdk); the Kai twin lives in [`kai-lending-math.md` §10](./kai-lending-math.md). Borrow-side rates (`borrowApy`, kink fields, `maxBorrowApy`, etc.) are **not** part of the cdpm supply path — they are exposed by the same SDK but have no bearing on the parking decision.
 
 ### 10.1 SDK Setup
+
+Install (alongside `@mysten/sui` — pin the same major across the dep tree, see `cross-protocol-ptb.md` §10 for the `instanceof Transaction` pitfall):
+
+```bash
+bun add @scallop-io/sui-scallop-sdk @mysten/sui
+# or: npm install / pnpm add / yarn add
+```
 
 ```typescript
 import { Scallop } from '@scallop-io/sui-scallop-sdk';

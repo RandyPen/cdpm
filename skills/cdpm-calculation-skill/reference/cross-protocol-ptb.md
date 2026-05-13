@@ -41,6 +41,26 @@ Because all three accept the same `Transaction` instance, you can interleave the
 
 ## 3. Canonical Pattern
 
+### 3.0 Install the SDKs
+
+Both SDKs are published to npm. Install alongside Mysten's `@mysten/sui` (required by both; pin to a single major across the dep tree — see §10 for the `instanceof Transaction` pitfall):
+
+```bash
+# bun
+bun add @scallop-io/sui-scallop-sdk @kunalabs-io/kai @mysten/sui
+
+# npm
+npm install @scallop-io/sui-scallop-sdk @kunalabs-io/kai @mysten/sui
+
+# pnpm
+pnpm add @scallop-io/sui-scallop-sdk @kunalabs-io/kai @mysten/sui
+
+# yarn
+yarn add @scallop-io/sui-scallop-sdk @kunalabs-io/kai @mysten/sui
+```
+
+The Kai package may also appear as `@kunalabs-io/kai-sdk` in older snippets — they refer to the same library. cdpm itself ships no TS bindings; the cdpm `moveCall` targets are issued directly against the Mysten `Transaction` so no additional install is needed for the cdpm side.
+
 ```typescript
 import { Transaction } from '@mysten/sui/transactions';
 import { Scallop } from '@scallop-io/sui-scallop-sdk';
@@ -366,6 +386,59 @@ await client.signAndExecuteTransaction({ signer, transaction: tx });
 7. **Scallop pre-accrual is mandatory, not advisory.** `scallop_start_*` reads `borrow_dynamics::last_updated_by_type(market.borrow_dynamics(), type<T>)` and asserts equality with `clock::timestamp_ms(clock) / 1000`. Omitting `accrue_interest::accrue_interest_for_market(version, market, clock)` as command 0 aborts at the cdpm boundary with `EStaleScallopState (1011)` before any balance is touched. `scallopTx.deposit` / `scallopTx.withdraw` wrap the inner Scallop accrue; if you compose using raw move-calls only, add the accrue command explicitly. Kai has no analogous freshness check — `total_available_balance(vault, clock)` is race-free.
 
 5. **Re-snapshot inputs before signing.** Both protocols' state (`balance_sheet` for Scallop, `total_available_balance` for Kai) move every block. The picker (`scallop-lending-math.md` §10.4) and the sizing helpers (§7 in either file) rely on snapshots; for a rebalance PTB that does both a redeem and a supply, take a *single* snapshot just before signing and reuse it across both legs to keep the predictions internally consistent.
+
+---
+
+## 5.1 Caller-Specific Full-Drain Patterns
+
+`*_finish_redeem` asserts `redeemed_amount >= expected_underlying` (cdpm `EAmountShortfall = 1009`). For **Kai**, the upstream `kai_leverage_supply_pool::withdraw → vault::redeem_withdraw_ticket` chain applies floor-div per strategy step, accumulating O(strategies × 1 raw) dust that hides behind §7's ceiling math on partial redeems but trips the assert on a full drain (`ytAmount = u64::MAX`). For **Scallop**, the upstream `protocol::redeem::redeem` uses the same single floor-div formula as cdpm's `compute_expected_underlying_scallop`, so the redeemed amount equals `expected_underlying` exactly in the common case — but the same cap pattern is applied for defense-in-depth and parity with Kai. See `kai-lending-math.md` §9.1 and `scallop-lending-math.md` §9.1 for the math.
+
+The right way to handle full drain depends on **who signs the PTB**:
+
+| | User close-PM | Protocol (worker) | Agent |
+|---|---|---|---|
+| Signer | PM owner wallet | `AccessList.allow` keypair | Address in `pm.agents` |
+| Goal | Truly empty `pm.lending` (so `user_close_pm` passes `ELendingNotEmpty 1004`) | Free up underlying for an `add_liquidity` on the next bin tick | Same as protocol |
+| Burn amount | `u64::MAX` (drain) | `min(neededWrapper, wrapperRaw − SAFE_MARGIN)` | Same as protocol |
+| Dust handling | `coin::join(coinT, topup)` between `*_start_redeem` and `*_finish_redeem` to satisfy the assert. Topup ≈ 30 raw underlying; spliced from `tx.gas` (SUI) or `getCoins → mergeCoins → splitCoins` (others). | Leave SAFE_MARGIN raw of wrapper behind. Residual is reclaimed at close-PM time. | Same. |
+| Where the topup ends up | Folded into `redeemed_amount` → `interest = redeemed − principal` includes it → service fee is taken on inflated interest → fee NOT bypassed. | n/a (no topup). | n/a. |
+
+Recommended client-side default constants (illustrative — clients should define these at the top of their lending-helper module; both apply uniformly to Kai and Scallop):
+
+```ts
+// raw units of the wrapper token (YT for Kai, sCoin for Scallop)
+const LENDING_SAFE_MARGIN_WRAPPER_RAW = 100n;
+// raw units of underlying T for the close-PM top-up
+const FINISH_REDEEM_TOPUP_DEFAULT_RAW = 30n;
+// sentinel for "drain everything" — pulls min(arg, available) inside cdpm
+const REDEEM_ALL_U64 = 0xffffffffffffffffn;
+```
+
+See the math derivation in [`kai-lending-math.md` §9.1](./kai-lending-math.md#91-full-drain-dust-and-the-lending_safe_margin_wrapper_raw-floor) / [`scallop-lending-math.md` §9.1](./scallop-lending-math.md#91-full-drain-dust-and-the-lending_safe_margin_wrapper_raw-floor).
+
+PTB shape diff (Kai, user vs protocol):
+
+```ts
+// USER close-PM (full drain via topup)
+const startRet = tx.moveCall({ target: `${cdpm}::cdpm::kai_start_redeem`,
+  arguments: [..., tx.pure.u64(REDEEM_ALL_U64), ...] });
+// ... vault::withdraw / supply_pool::withdraw / redeem_withdraw_ticket / from_balance → coinT
+tx.moveCall({ target: '0x2::coin::join', typeArguments: [T],
+  arguments: [coinT, topupCoin] });       // <— NEW: closes the dust gap
+tx.moveCall({ target: `${cdpm}::cdpm::kai_finish_redeem`,
+  arguments: [..., coinT, ...] });        // assert now passes
+
+// PROTOCOL / AGENT partial (no topup, no full drain)
+const safe = wrapperRaw - LENDING_SAFE_MARGIN_WRAPPER_RAW;
+const burn = exact >= safe ? safe : exact;
+tx.moveCall({ target: `${cdpm}::cdpm::kai_start_redeem`,
+  arguments: [..., tx.pure.u64(burn), ...] });
+// ... same chain ...
+tx.moveCall({ target: `${cdpm}::cdpm::kai_finish_redeem`,
+  arguments: [..., coinT, ...] });
+```
+
+Scallop has the same shape; replace `kai_*` with `scallop_*` and the in-between chain with `protocol::redeem::redeem`. The Scallop branch additionally requires `accrue_interest_for_market` as PTB command 0 (`EStaleScallopState 1011`) — that is independent of full-drain handling and applies to both partial and full redeems.
 
 ---
 

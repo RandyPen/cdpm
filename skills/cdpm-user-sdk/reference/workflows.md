@@ -170,6 +170,25 @@ async function createPositionSmart(
 > kai_finish_redeem` followed by `user_remove_liquidity_from_balance<T>`.
 > See `reference/scallop-lending.md` and `reference/kai-lending.md` for
 > the full recipes.
+>
+> **IMPORTANT — full-drain top-up required (Kai; defensive for Scallop)**
+> Each `*_finish_redeem` asserts `redeemed_amount >= expected_underlying`.
+> For Kai, the upstream redeem chain applies per-strategy floor-div,
+> returning ~2-3 raw underlying less than predicted; on a full drain
+> (`amount = u64::MAX`) the assert reliably trips with `EAmountShortfall
+> (1009)`. Scallop's upstream uses the same single floor-div formula as
+> cdpm, so it has no observed dust — but the close-PM PTB shares its
+> shape with the Kai branch for uniformity. In both cases the close-PM
+> PTB MUST insert `0x2::coin::join(coinT, topup)` between the redeem
+> chain and `*_finish_redeem`, where `topup` is a small `Coin<T>`
+> (~30 raw underlying, recommended client-side default) spliced from the
+> user's wallet — `tx.gas` for SUI, `client.getCoins({ owner, coinType: T
+> })` for others. Throw a clear error in the close-PM builder when the
+> wallet has no `Coin<T>` so the UI can prompt the user to acquire a
+> dust amount before retry. See `reference/kai-lending.md` § Top-Up
+> Pattern (and the Scallop twin) for the full MoveCall sequence — that
+> recipe stands on its own; no external reference implementation is
+> required to copy.
 
 ```typescript
 async function closePosition(

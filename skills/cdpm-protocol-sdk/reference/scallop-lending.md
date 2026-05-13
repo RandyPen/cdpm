@@ -283,7 +283,11 @@ async function protocolRedeemForTargetNet(
 }
 ```
 
-`scoinToBurnForTargetNet` returns `MAX_U64` when the `ScallopVault<T>` entry cannot satisfy `desiredNet`; passing that value to `scallop_start_redeem` drains the entry and removes its bag entry from `pm.lending`. Always re-snapshot reserve and vault state *after* the `accrue_interest_for_market` command and before sizing — stale snapshots predict a higher `denom` than the live reserve and can leave the bot 1-2 underlying short.
+`scoinToBurnForTargetNet` may return `MAX_U64` when the `ScallopVault<T>` entry cannot satisfy `desiredNet`. **Protocol callers must NOT pass `MAX_U64` to `scallop_start_redeem`.** Scallop's upstream `protocol::redeem::redeem` shares its single floor-div formula with cdpm's `compute_expected_underlying_scallop`, so `redeemed_amount == expected_underlying` exactly in the common case — but full drain has no margin if Scallop changes its rounding, and the same defensive cap applies for parity with Kai (where dust is real). See [`cdpm-calculation-skill/reference/scallop-lending-math.md` §9.1](../../cdpm-calculation-skill/reference/scallop-lending-math.md#91-full-drain-dust-and-the-lending_safe_margin_wrapper_raw-floor) for the math.
+
+**Cap the burn at `wrapperRaw − LENDING_SAFE_MARGIN_WRAPPER_RAW`** (recommended client-side default `100n` sCoin raw) — same `capRedeemBurnRaw` helper as the Kai branch (see [`cdpm-protocol-sdk/reference/kai-lending.md`](./kai-lending.md)); the helper is protocol-agnostic. Residual stays in `pm.lending` and is reclaimed when the user closes the PM.
+
+Always re-snapshot reserve and vault state *after* the `accrue_interest_for_market` command and before sizing — stale snapshots predict a higher `denom` than the live reserve and can leave the bot 1-2 underlying short.
 
 ---
 
@@ -379,7 +383,7 @@ cdpm emits no extraction event for Scallop lending — there is no wrapper-extra
 | 1006 | `EReserveEmpty` | Scallop reserve has zero supply or zero `(cash+debt-revenue)`. Run the accrual prefix and re-check; if still degenerate, skip this market. |
 | 1007 | `EZeroExpected` | Amount too small for the current reserve ratio. Increase amount; for low-utilization markets, batch multiple PMs into one supply. |
 | 1008 | `EWrongPm` | Hot-potato ticket consumed against a different PM. Bug in batch construction — assert `pmId` consistency across all four cdpm move-calls in the batch. |
-| 1009 | `EAmountShortfall` | Stale Scallop accrual or reserve state moved between snapshot and signing. Always run `accrue_interest_for_market` as command 0 of the batch; for large redeems, size with a small margin via `scoinToBurnForTargetNet`. |
+| 1009 | `EAmountShortfall` | Three distinct causes: (a) missing `accrue_interest_for_market` as command 0 — always include it. (b) Protocol passed `scoinAmount = MAX_U64` (full drain) — the redeem floor-div dust trips the assert; cap at `wrapperRaw − LENDING_SAFE_MARGIN_WRAPPER_RAW` instead. (c) Reserve state moved between snapshot and signing — re-snapshot after `accrue_interest_for_market`. |
 | 1011 | `EStaleScallopState` | `scallop_start_*` reached cdpm without `accrue_interest::accrue_interest_for_market(version, market, clock)` earlier in the same PTB second. cdpm enforces freshness — fix by making the accrue command 0 of every Scallop batch. |
 | 1012 | `EWrongMarket` | `scallop_finish_*` received a `&Market` whose id ≠ ticket.market_id. Reuse the same `tx.object(SCALLOP_MARKET_ID)` handle across `start_*` and `finish_*`. |
 

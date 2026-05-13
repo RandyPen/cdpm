@@ -38,7 +38,7 @@ async function handleAgentError(error: any): Promise<string> {
   } else if (errorStr.includes('EWrongPm')) {
     return 'Hot-potato ticket (ScallopSupplyTicket / ScallopRedeemTicket / KaiSupplyTicket / KaiRedeemTicket) consumed against a different PositionManager.';
   } else if (errorStr.includes('EAmountShortfall')) {
-    return 'finish_* received Coin with value < ticket.expected. Scallop: run accrue_interest_for_market as the first PTB command. Kai: re-snapshot total_available_balance immediately before signing.';
+    return 'finish_* received Coin with value < ticket.expected. Kai: agent passed ytAmount = MAX_U64 (full drain) — per-strategy floor-div dust trips the assert. Cap the burn at wrapperRaw − LENDING_SAFE_MARGIN_WRAPPER_RAW (recommended client-side default 100 wrapper raw) and leave the residual for the owner close-PM flow. Scallop: usually a missing accrue_interest_for_market as PTB command 0, or reserve state moved between snapshot and signing — re-snapshot after accrue. Apply the same cap to Scallop defensively for parity. See cdpm-calculation-skill/reference/{kai,scallop}-lending-math.md §9.1 and cdpm-agent-sdk/reference/{kai,scallop}-lending.md for the partial-burn recipe.';
   } else if (errorStr.includes('ENoSuchBalance')) {
     return 'withdraw_from_balance / withdraw_from_fee called for an absent type key. Check pm.balance / pm.fee for the type before signing.';
   } else if (errorStr.includes('EStaleScallopState')) {

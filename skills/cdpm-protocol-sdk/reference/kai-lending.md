@@ -293,7 +293,28 @@ async function protocolRedeemForTargetNet(
 }
 ```
 
-`ytToBurnForTargetNet` returns `MAX_U64` when the `KaiVault<T, YT>` entry cannot satisfy `desiredNet`; passing that value to `kai_start_redeem` drains the entry and removes its bag entry from `pm.lending`. Always re-snapshot vault state right before signing — Kai's `total_available_balance` ticks every block as time-locked profit unlocks.
+`ytToBurnForTargetNet` may return `MAX_U64` when the `KaiVault<T, YT>` entry cannot satisfy `desiredNet`. **Protocol callers must NOT pass `MAX_U64` to `kai_start_redeem`** — full drain reliably trips `EAmountShortfall (1009)` on the floor-div dust from the strategy walker (see [`cdpm-calculation-skill/reference/kai-lending-math.md` §9.1](../../cdpm-calculation-skill/reference/kai-lending-math.md#91-full-drain-dust-and-the-lending_safe_margin_wrapper_raw-floor) for the math).
+
+Instead, **cap the burn at `wrapperRaw − LENDING_SAFE_MARGIN_WRAPPER_RAW`** (default 100 YT). The residual stays in `pm.lending` and is reclaimed when the user closes the PM (the close-PM PTB carries a `coin::join` top-up to satisfy the assert).
+
+```typescript
+const LENDING_SAFE_MARGIN_WRAPPER_RAW = 100n;
+
+function capRedeemBurnRaw(exact: bigint, wrapperRaw: bigint): bigint | null {
+  if (wrapperRaw <= LENDING_SAFE_MARGIN_WRAPPER_RAW) return null;
+  const safeMax = wrapperRaw - LENDING_SAFE_MARGIN_WRAPPER_RAW;
+  return exact >= safeMax ? safeMax : exact;
+}
+
+// usage at the call site
+const exact = ytToBurnForTargetUnderlying(vaultSnapshot, desiredUnderlying);
+const burn  = capRedeemBurnRaw(exact, BigInt(entry.wrapperRaw));
+if (burn === null) return;  // entry too small to safely redeem
+tx.moveCall({ target: `${CDPM}::cdpm::kai_start_redeem`,
+  arguments: [..., tx.pure.u64(burn.toString()), ...] });
+```
+
+Always re-snapshot vault state right before signing — Kai's `total_available_balance` ticks every block as time-locked profit unlocks.
 
 ---
 
@@ -373,7 +394,7 @@ cdpm emits no extraction event for Kai lending — there is no wrapper-extract f
 | 1006 | `EReserveEmpty` | `total_yt_supply == 0` on the live vault — degenerate. Bootstrap by supplying first or skip this vault. |
 | 1007 | `EZeroExpected` | Amount too small for the current vault ratio. Increase amount; for tiny TVL vaults, batch multiple PMs into one supply. |
 | 1008 | `EWrongPm` | Hot-potato ticket consumed against a different PM. Bug in batch construction — assert `pmId` consistency across all four cdpm move-calls in the batch. |
-| 1009 | `EAmountShortfall` | Vault state moved between snapshot and signing. Re-snapshot and retry; for large redeems, size with a small margin via `ytToBurnForTargetNet`. |
+| 1009 | `EAmountShortfall` | Two distinct causes: (a) protocol passed `ytAmount = MAX_U64` (full drain) — strategy-walker floor-div dust always trips the assert; cap at `wrapperRaw − LENDING_SAFE_MARGIN_WRAPPER_RAW` instead. (b) Vault state moved between snapshot and signing — re-snapshot just before signing. |
 | 1013 | `EWrongVault` | `kai_finish_*` received a `&Vault<T,YT>` whose id ≠ ticket.vault_id. Reuse the same `tx.object(vaultObjectId)` handle across `start_*` and `finish_*`. |
 
 External aborts that bubble up from Kai itself (cdpm does not produce these):

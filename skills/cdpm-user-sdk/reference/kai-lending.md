@@ -378,6 +378,56 @@ The Cetus DLMM `Position` is the only object cdpm cannot recover from upstream b
 
 `user_close_pm` asserts `bag::is_empty(&pm.lending)` (`ELendingNotEmpty = 1004`). Before calling it you must drain every `(T, YT)` Kai vault entry through the full redeem flow above (`kai_start_redeem` → strategy walk → `kai_finish_redeem`); the post-fee underlying lands in `pm.balance[T]` and can then be withdrawn with `user_remove_liquidity_from_balance<T>`. The same `ELendingNotEmpty` covers both Scallop and Kai entries.
 
+### Top-Up Pattern (Required for Full Drain)
+
+Owner-driven close-PM is the **only** caller that legitimately needs to fully empty a Kai entry — protocol bots and agents intentionally leave a small wrapper residual (see [`cdpm-agent-sdk/reference/kai-lending.md`](../../cdpm-agent-sdk/reference/kai-lending.md#dont-full-drain-a-lending-entry) and [`cdpm-protocol-sdk/reference/kai-lending.md`](../../cdpm-protocol-sdk/reference/kai-lending.md)). On full drain (`ytAmount = u64::MAX`), the strategy-walker chain returns ~2-3 raw underlying less than `expected_underlying` due to per-step floor-div, reliably tripping `EAmountShortfall (1009)`. The fix: insert a `0x2::coin::join(coinT, topup)` between the redeem chain and `kai_finish_redeem`, where `topup` is a small `Coin<T>` (~30 raw) from the user's wallet.
+
+```ts
+import { Transaction } from "@mysten/sui/transactions";
+
+const FINISH_REDEEM_TOPUP_DEFAULT_RAW = 30n; // ~10× the dust upper bound
+
+// 1. start_redeem returns (coinYT, redeemTicket).
+const [coinYT, redeemTicket] = tx.moveCall({
+  target: `${CDPM}::cdpm::kai_start_redeem`,
+  typeArguments: [T, YT],
+  arguments: [tx.object(ACCESS), tx.object(pmId), vault,
+              tx.pure.u64(REDEEM_ALL_U64), tx.object(CLOCK)],
+});
+// 2-5. vault::withdraw / supply_pool::withdraw / redeem_withdraw_ticket / from_balance → coinT
+//      (omitted; same as the standard redeem recipe above)
+
+// 6. NEW: source the top-up. SUI → split from gas; non-SUI → query wallet.
+const topup =
+  T === '0x2::sui::SUI'
+    ? tx.splitCoins(tx.gas, [tx.pure.u64(FINISH_REDEEM_TOPUP_DEFAULT_RAW)])[0]!
+    : (async () => {
+        const { data } = await client.getCoins({ owner: userAddress, coinType: T, limit: 50 });
+        if (data.length === 0) throw new Error(`Wallet holds no ${T} for close-PM top-up — acquire ≥${FINISH_REDEEM_TOPUP_DEFAULT_RAW} raw and retry`);
+        const head = tx.object(data[0]!.coinObjectId);
+        if (data.length > 1) tx.mergeCoins(head, data.slice(1).map(c => tx.object(c.coinObjectId)));
+        return tx.splitCoins(head, [tx.pure.u64(FINISH_REDEEM_TOPUP_DEFAULT_RAW)])[0]!;
+      })();
+
+// 7. Merge top-up into coinT so `coin.value() >= expected_underlying`.
+tx.moveCall({
+  target: '0x2::coin::join',
+  typeArguments: [T],
+  arguments: [coinT, topup],
+});
+
+// 8. kai_finish_redeem now passes; topup is folded into `redeemed_amount`
+//    → `interest = redeemed - principal` includes it → service fee on
+//      inflated interest. Fee NOT bypassed.
+tx.moveCall({
+  target: `${CDPM}::cdpm::kai_finish_redeem`,
+  typeArguments: [T, YT],
+  arguments: [tx.object(pmId), vault, tx.object(FEE_HOUSE), redeemTicket, coinT],
+});
+```
+
+The user's net cost is `topup × fee_rate` — at 10% fee_rate, ~3 raw underlying per redeem (≪ $1e-4 for SUI / USDC at typical prices). See [`cdpm-calculation-skill/reference/kai-lending-math.md` §9.1](../../cdpm-calculation-skill/reference/kai-lending-math.md#91-full-drain-dust-and-the-lending_safe_margin_wrapper_raw-floor) for the dust math and [`cross-protocol-ptb.md` §5.1](../../cdpm-calculation-skill/reference/cross-protocol-ptb.md#51-caller-specific-full-drain-patterns) for the side-by-side comparison with protocol/agent patterns.
+
 ---
 
 ## Events
@@ -420,7 +470,7 @@ cdpm does not emit an extraction event for Kai lending — there is no wrapper-e
 | 1006 | `EReserveEmpty` | Kai vault has zero `total_yt_supply` (degenerate; cdpm asserts `yt_supply > 0` in `compute_expected_underlying_kai`) |
 | 1007 | `EZeroExpected` | `kai_start_supply` / `kai_start_redeem` would yield 0 — amount too small, or vault state degenerate |
 | 1008 | `EWrongPm` | `kai_finish_*` ticket consumed against a different PositionManager |
-| 1009 | `EAmountShortfall` | `kai_finish_*` Coin value `<` ticket.expected (vault lost value between snapshot and signing, or strategy loss occurred mid-PTB) |
+| 1009 | `EAmountShortfall` | `kai_finish_*` Coin value `<` ticket.expected. On full drain (`ytAmount = u64::MAX`) the strategy-walker floor-div dust trips this reliably — use the top-up pattern above. On partial redeems it indicates a stale vault snapshot or strategy loss mid-PTB — re-snapshot and retry. |
 | 1013 | `EWrongVault` | `kai_finish_*` received a `&Vault<T,YT>` whose id ≠ ticket.vault_id. Reuse the same `tx.object(vaultObjectId)` across `start_*` and `finish_*`. |
 
 External aborts you may hit (these come from Kai itself, not cdpm):

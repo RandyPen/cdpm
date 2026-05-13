@@ -338,6 +338,12 @@ The Cetus DLMM `Position` is the only object cdpm cannot recover from upstream b
 
 `user_close_pm` asserts `bag::is_empty(&pm.lending)` (`ELendingNotEmpty = 1004`). The same assertion covers both Scallop and Kai entries — drain every entry of either flavor before close. For every Scallop `T` vault, run the full redeem flow above; the post-fee underlying lands in `pm.balance[T]` and can then be withdrawn with `user_remove_liquidity_from_balance<T>`. For every Kai `(T, YT)` entry, run the matching `kai_finish_redeem` flow — see [`kai-lending.md`](./kai-lending.md). After every entry is drained `user_close_pm` succeeds.
 
+### Top-Up Pattern (Defensive — Same Shape as Kai)
+
+Same PTB shape as the Kai counterpart — see [`kai-lending.md` § Top-Up Pattern](./kai-lending.md#top-up-pattern-required-for-full-drain) for the full recipe. The only structural difference: the redeem chain's intermediate Move-call is `protocol::redeem::redeem` (yielding `coinT`), and `coin::join(coinT, topup)` sits immediately after it, before `scallop_finish_redeem`.
+
+Scallop's math is friendlier than Kai's: `protocol::redeem::redeem` and cdpm's `compute_expected_underlying_scallop` evaluate the same single floor-div on the same balance-sheet snapshot within the PTB, so `redeemed_amount == expected_underlying` exactly — no observed dust. The top-up is therefore **defensive, not strictly required** today; close-PM keeps it in place for uniform code paths with Kai (where it *is* required) and as a forward-compatibility hedge against Scallop changing its rounding. Same `FINISH_REDEEM_TOPUP_DEFAULT_RAW = 30n` recommended default applies. See [`cdpm-calculation-skill/reference/scallop-lending-math.md` §9.1](../../cdpm-calculation-skill/reference/scallop-lending-math.md#91-full-drain-dust-and-the-lending_safe_margin_wrapper_raw-floor) for the math.
+
 ---
 
 ## Events
@@ -378,6 +384,6 @@ cdpm does not emit an extraction event for Scallop lending — there is no wrapp
 | 1006 | `EReserveEmpty` | Scallop reserve has zero supply or zero `(cash+debt−revenue)` |
 | 1007 | `EZeroExpected` | `scallop_start_supply` / `scallop_start_redeem` would yield 0 — amount too small |
 | 1008 | `EWrongPm` | `finish_*` ticket consumed against a different PositionManager |
-| 1009 | `EAmountShortfall` | `finish_*` Coin value `<` ticket.expected (stale accrual or Scallop slippage) |
+| 1009 | `EAmountShortfall` | `finish_*` Coin value `<` ticket.expected. Scallop's upstream `protocol::redeem::redeem` uses the same single floor-div as cdpm in the same PTB snapshot, so dust is 0 in the common case — but if you see this on a close-PM, it almost always means stale accrual (missing `accrue_interest_for_market` as PTB command 0) or reserve state moving between snapshot and signing. Re-snapshot just after accrue. The defensive close-PM top-up pattern above (`coin::join` before `scallop_finish_redeem`) prevents this entirely. |
 | 1011 | `EStaleScallopState` | `scallop_start_*` reached cdpm without `accrue_interest::accrue_interest_for_market(version, market, clock)` earlier in the same PTB. Make it command 0 of every Scallop batch. |
 | 1012 | `EWrongMarket` | `scallop_finish_*` received a `&Market` whose id ≠ ticket.market_id. Reuse the same `tx.object(SCALLOP_MARKET_ID)` across `start_*` and `finish_*`. |

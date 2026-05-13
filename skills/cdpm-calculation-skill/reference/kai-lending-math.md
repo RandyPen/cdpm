@@ -456,6 +456,39 @@ When sizing inputs:
 - For batched protocol bots: snapshot once per batch, not once per PM. As long as the batch fits in one block, all redeems see the same `total_available_balance`. Across blocks, re-snapshot.
 - **Strategy walks add a soft latency budget.** Each strategy walker is a move-call that runs the strategy module's settlement logic. Large vaults with many strategies make the redeem PTB longer (and gas-hungrier) than the equivalent Scallop redeem. Build the PTB length into your gas budget.
 
+### 9.1 Full-drain dust and the `LENDING_SAFE_MARGIN_WRAPPER_RAW` floor
+
+`kai_finish_redeem` enforces `redeemed_amount >= expected_underlying`. `expected_underlying` is `floor(yt_burned × total_available / yt_supply)` (§3). The actual `redeemed_amount` returned by `kai_leverage_supply_pool::withdraw → vault::redeem_withdraw_ticket` applies **floor-div per strategy step**. Each step truncates at most 1 raw underlying, so cumulative dust is **O(strategies × 1 raw) ≈ 2-3 raw** for current single-strategy mainnet vaults. **Constant w.r.t. principal.**
+
+For partial redeems the dust hides behind §7's ceiling math (`yt_burned` is rounded up, so the live walker output exceeds `expected_underlying` by a margin). For full drains (`yt_amount = u64::MAX` / `REDEEM_ALL_U64`), there is **no margin** and 1009 trips reliably.
+
+Two mitigation patterns, picked by caller role. Both rely on client-side constants — these are not part of the cdpm Move contract; the recommended defaults below are illustrative and should be defined in the caller's lending-helper module.
+
+**Protocol / agent — recommended default `LENDING_SAFE_MARGIN_WRAPPER_RAW = 100n`**: never burn the full `entry.wrapperRaw`. Cap at `min(neededWrapper, wrapperRaw − SAFE_MARGIN)`. Example helper:
+
+```ts
+// Client-side constant (not from the cdpm contract). Pick once per project.
+const LENDING_SAFE_MARGIN_WRAPPER_RAW = 100n;
+
+// Returns null when the entry is too small to redeem safely — leave it for owner close-PM.
+function capRedeemBurnRaw(exact: bigint, wrapperRaw: bigint): bigint | null {
+  if (wrapperRaw <= LENDING_SAFE_MARGIN_WRAPPER_RAW) return null;
+  const safeMax = wrapperRaw - LENDING_SAFE_MARGIN_WRAPPER_RAW;
+  return exact >= safeMax ? safeMax : exact;
+}
+```
+
+100 wrapper raw ≈ 100 YT × ~1.25 underlying/YT ≈ 125 raw underlying ≈ $4e-7 in SUI / $1.25e-4 in USDC. Residual stays in `pm.lending` until close.
+
+**User close-PM — top-up via `coin::join`**: emit a `0x2::coin::join(coinT, topup)` between `kai_start_redeem` and `kai_finish_redeem`, where `topup` is a small `Coin<T>` (recommended default `FINISH_REDEEM_TOPUP_DEFAULT_RAW = 30n` — about 10× the empirical dust ceiling on current single-strategy mainnet vaults) spliced from `tx.gas` (SUI) or the user's wallet (`getCoins → mergeCoins → splitCoins`). The top-up is folded into `redeemed_amount`, making the assert pass; it then flows into `interest = redeemed − principal` and the protocol service fee is taken on the inflated interest, so the fee is **not bypassed**.
+
+Cross-references:
+
+- `cdpm-protocol-sdk/reference/kai-lending.md` — protocol PTB template (no full drain)
+- `cdpm-agent-sdk/reference/kai-lending.md` — agent PTB template
+- `cdpm-user-sdk/reference/kai-lending.md` — close-PM top-up PTB template
+- `cdpm-calculation-skill/reference/cross-protocol-ptb.md` §3 — side-by-side comparison
+
 ---
 
 ## 10. Reading Live Vault APY Off-Chain (Supply-Side Half of the Picker)
@@ -465,6 +498,13 @@ The pair `(total_available, yt_supply)` from §1 encodes the *current* per-YT pr
 This page covers the Kai-side rate-query API. The cross-protocol "Scallop or Kai?" picker that consumes both this and the Scallop-side query lives in [`scallop-lending-math.md` §10.4](./scallop-lending-math.md#104-decision-recipe--scallop-vs-kai-supply-picker) — Kai-only callers can use the snippet in §10.4 below.
 
 ### 10.1 SDK Setup
+
+Install (alongside `@mysten/sui` — pin the same major across the dep tree, see `cross-protocol-ptb.md` §10 for the `instanceof Transaction` pitfall):
+
+```bash
+bun add @kunalabs-io/kai @mysten/sui
+# or: npm install / pnpm add / yarn add
+```
 
 ```typescript
 import { SuiClient } from '@mysten/sui/client';

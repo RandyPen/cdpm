@@ -274,6 +274,27 @@ async function agentRedeemForTargetNet(
 
 The closed-form approximation is occasionally off-by-one due to per-step floors inside `kai_finish_redeem`; the iterative helper bumps `N` upward by 1 YT until forward simulation confirms `>= desiredNet`. Re-snapshot the vault state *just before* signing — Kai's `total_available_balance` ticks every block as time-locked profit unlocks, and stale snapshots can leave the bot 1-2 underlying short.
 
+### Don't Full-Drain a Lending Entry
+
+**Agents must NOT pass `ytAmount = MAX_U64` to `kai_start_redeem`.** Full drain reliably trips `EAmountShortfall (1009)` because the strategy-walker chain (`vault::withdraw → kai_leverage_supply_pool::withdraw → vault::redeem_withdraw_ticket`) applies per-step floor-div, returning slightly less underlying than `expected_underlying` computed at start time. The dust is bounded by O(strategies × 1 raw) — a few raw underlying, constant w.r.t. principal — but full drain has no margin.
+
+Cap the burn at `wrapperRaw − LENDING_SAFE_MARGIN_WRAPPER_RAW` (default 100 YT):
+
+```typescript
+const LENDING_SAFE_MARGIN_WRAPPER_RAW = 100n;
+
+function capRedeemBurnRaw(exact: bigint, wrapperRaw: bigint): bigint | null {
+  if (wrapperRaw <= LENDING_SAFE_MARGIN_WRAPPER_RAW) return null;
+  const safeMax = wrapperRaw - LENDING_SAFE_MARGIN_WRAPPER_RAW;
+  return exact >= safeMax ? safeMax : exact;
+}
+
+const burn = capRedeemBurnRaw(exact, BigInt(entry.wrapperRaw));
+if (burn === null) return; // entry too small — leave it for owner close
+```
+
+The residual stays in `pm.lending` and is cleaned up automatically when the **owner** closes the PM — the close-PM PTB carries a small `coin::join` top-up that absorbs any final dust. See [`cdpm-calculation-skill/reference/kai-lending-math.md` §9.1](../../cdpm-calculation-skill/reference/kai-lending-math.md#91-full-drain-dust-and-the-lending_safe_margin_wrapper_raw-floor) for the dust math derivation, and [`cdpm-calculation-skill/reference/cross-protocol-ptb.md` §5.1](../../cdpm-calculation-skill/reference/cross-protocol-ptb.md#51-caller-specific-full-drain-patterns) for a side-by-side comparison with the owner-side top-up pattern.
+
 ---
 
 ## What Agents CANNOT Do With Kai
@@ -326,5 +347,5 @@ cdpm emits no extraction event for Kai lending — there is no wrapper-extract f
 | 1006 | `EReserveEmpty` | Kai vault `total_yt_supply == 0`. Bootstrap state — supply first. |
 | 1007 | `EZeroExpected` | Amount too small — `coin_amount × yt_supply < total_available_balance` (supply) or `yt_amount × total_available_balance < yt_supply` (redeem). Increase amount or wait for higher TVL. |
 | 1008 | `EWrongPm` | Hot-potato ticket consumed against a different PM. Re-check the `pmId` you signed against. |
-| 1009 | `EAmountShortfall` | Vault state moved between snapshot and signing (profit unlocked, strategy loss, etc.) and `total_available_balance` shrank. Re-snapshot and retry, or accept the slippage by sizing with `ytToBurnForTargetNet` plus a small margin. |
+| 1009 | `EAmountShortfall` | Most common cause: agent passed `ytAmount = MAX_U64` (full drain) — strategy-walker floor-div dust trips the assert. Cap at `wrapperRaw − LENDING_SAFE_MARGIN_WRAPPER_RAW` instead and leave the residual for the owner's close-PM flow. Secondary cause: vault state shifted between snapshot and signing — re-snapshot just before signing. |
 | 1013 | `EWrongVault` | `kai_finish_*` received a `&Vault<T,YT>` whose id ≠ ticket.vault_id. Reuse the same `tx.object(vaultObjectId)` handle across `start_*` and `finish_*`. |
