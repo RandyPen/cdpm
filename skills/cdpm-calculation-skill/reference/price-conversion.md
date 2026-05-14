@@ -1,5 +1,13 @@
 # Price Conversion for External Comparison
 
+## Contents
+
+- [Understanding CDPM Price Format](#understanding-cdpm-price-format)
+- [Quote Token Priority](#quote-token-priority)
+- [Price Conversion Logic](#price-conversion-logic)
+- [Practical Example](#practical-example)
+- [Price Display Helper](#price-display-helper)
+
 ## Understanding CDPM Price Format
 
 CDPM/Cetus DLMM calculates prices as **coinA / coinB**:

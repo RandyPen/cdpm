@@ -1,5 +1,11 @@
 # Permission System
 
+## Contents
+
+- [Permission Matrix](#permission-matrix)
+- [Protocol Access Requirements](#protocol-access-requirements)
+- [Fee Mechanics](#fee-mechanics)
+
 ## Permission Matrix
 
 | Operation | Owner | Agent | Protocol | Admin |

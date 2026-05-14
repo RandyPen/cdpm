@@ -1,10 +1,14 @@
 # Kai SAV Lending — Protocol Operations
 
-cdpm exposes a second hot-potato lending integration alongside Scallop: **Kai SAV** (Strategy-Aggregating Vault). The same protocol-tier authorization rules that apply to Scallop apply to Kai: a whitelisted protocol bot may drive `kai_start_supply` / `kai_start_redeem` against a `Vault<T, YT>` only when `pm.agents` is empty. The gate inside `assert_caller_authorized` is the union `is_owner || is_agent || (is_in_access_list && pm.agents.is_empty())`.
+## Contents
 
-`kai_finish_*` only check `ticket.pm_id == object::id(pm)`. A correctly-shaped PTB therefore enforces protocol-tier access on the start side and binds the ticket to the same PM on the finish side.
-
----
+- [Why a Protocol Tier Wants Kai Alongside Scallop](#why-a-protocol-tier-wants-kai-alongside-scallop)
+- [No Pre-Call Accrual Required](#no-pre-call-accrual-required)
+- [Protocol PTB Recipe: Supply](#protocol-ptb-recipe-supply)
+- [Protocol PTB Recipe: Redeem (with strategy walk)](#protocol-ptb-recipe-redeem-with-strategy-walk)
+- [Protocol-Tier Permission Invariant](#protocol-tier-permission-invariant)
+- [Events Emitted by Protocol Kai Operations](#events-emitted-by-protocol-kai-operations)
+- [Error Cheat Sheet (protocol-flavored)](#error-cheat-sheet-protocol-flavored)
 
 ## Why a Protocol Tier Wants Kai Alongside Scallop
 

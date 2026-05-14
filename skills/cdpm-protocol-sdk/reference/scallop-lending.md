@@ -1,21 +1,15 @@
 # Scallop Lending — Protocol Operations
 
-> **REQUIRED — every Scallop PTB starts with `accrue_interest_for_market`.**
-> Any PTB that calls `scallop_start_supply` or `scallop_start_redeem` MUST have
-> `protocol::accrue_interest::accrue_interest_for_market(version, market, clock)`
-> as **command 0**. cdpm enforces this on-chain: omitting the pre-step aborts at
-> the cdpm boundary with `EStaleScallopState (1011)` before any balance is touched.
-> The Scallop TS SDK helpers `scallopTx.deposit` / `depositQuick`
-> (`sui-scallop-sdk/src/builders/coreBuilder.ts:139-148, 335-358`) do **NOT**
-> inject this call — you must add it explicitly. There is no SDK shortcut and no
-> optional path. This applies to **every** Scallop touch from a protocol bot,
-> agent, or owner.
+## Contents
 
-cdpm exposes a hot-potato lending integration with **Scallop** alongside Kai SAV. The same protocol-tier authorization rules that apply to Kai apply to Scallop: a whitelisted protocol bot may drive `scallop_start_supply` / `scallop_start_redeem` against a `Market` only when `pm.agents` is empty. The gate inside `assert_caller_authorized` is the union `is_owner || is_agent || (is_in_access_list && pm.agents.is_empty())`.
-
-`scallop_finish_*` only check `ticket.pm_id == object::id(pm)`. A correctly-shaped PTB therefore enforces protocol-tier access on the start side and binds the ticket to the same PM on the finish side.
-
----
+- [Why a Protocol Tier Wants Scallop Alongside Kai](#why-a-protocol-tier-wants-scallop-alongside-kai)
+- [Pre-Call Accrual Is Mandatory](#pre-call-accrual-is-mandatory)
+- [Protocol PTB Recipe: Supply](#protocol-ptb-recipe-supply)
+- [Protocol PTB Recipe: Redeem (with yield-fee deduction)](#protocol-ptb-recipe-redeem-with-yield-fee-deduction)
+- [Protocol-Tier Permission Invariant](#protocol-tier-permission-invariant)
+- [Trust Boundary](#trust-boundary)
+- [Events Emitted by Protocol Scallop Operations](#events-emitted-by-protocol-scallop-operations)
+- [Error Cheat Sheet (protocol-flavored)](#error-cheat-sheet-protocol-flavored)
 
 ## Why a Protocol Tier Wants Scallop Alongside Kai
 

@@ -1,6 +1,14 @@
 # Agent Operations
 
-> **Tip**: Agents can read the `pool_id` from the PositionManager's `position` field instead of passing it as a parameter. This ensures the correct pool is always used.
+## Contents
+
+- [Helper: Get Pool ID from PositionManager](#helper-get-pool-id-from-positionmanager)
+- [Add Liquidity](#add-liquidity)
+- [Remove Liquidity](#remove-liquidity)
+- [Collect Fees](#collect-fees)
+- [Collect Rewards](#collect-rewards)
+- [Transfer Fee to Balance](#transfer-fee-to-balance)
+- [Scallop Lending (Supply / Redeem Idle Balance)](#scallop-lending-supply-redeem-idle-balance)
 
 ## Helper: Get Pool ID from PositionManager
 

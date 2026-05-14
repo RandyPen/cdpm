@@ -1,5 +1,13 @@
 # Fee Collection
 
+## Contents
+
+- [Collect Fees](#collect-fees)
+- [Collect Rewards](#collect-rewards)
+- [Withdraw from Fee Bag](#withdraw-from-fee-bag)
+- [Fee Events](#fee-events)
+- [Fee Collection Strategy](#fee-collection-strategy)
+
 ## Collect Fees
 
 ```typescript

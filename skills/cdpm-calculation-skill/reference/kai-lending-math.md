@@ -1,10 +1,18 @@
 # Kai SAV Lending Math
 
-This page documents the off-chain twins of every numeric formula the cdpm contract uses for Kai SAV supply / redeem (`kai_start_supply`, `kai_finish_supply`, `kai_start_redeem`, `kai_finish_redeem`). Use them to predict outputs **before** broadcasting, to validate dry-run results, and to size deposits so that `EZeroExpected (1007)` and `EAmountShortfall (1009)` never trip in production.
+## Contents
 
-All formulas mirror `sources/cdpm.move` exactly. The contract widens to `u128` before arithmetic and narrows back to `u64`, so every off-chain implementation should do the same.
-
----
+- [1. Vault Snapshot](#1-vault-snapshot)
+- [2. `compute_expected_yt` (used by `kai_start_supply`)](#2-compute_expected_yt-used-by-kai_start_supply)
+- [3. `compute_expected_underlying_kai` (used by `kai_start_redeem`)](#3-compute_expected_underlying_kai-used-by-kai_start_redeem)
+- [4. Principal Amortization (`pull_from_kai_lending`)](#4-principal-amortization-pull_from_kai_lending)
+- [5. Yield Fee Inside `kai_finish_redeem`](#5-yield-fee-inside-kai_finish_redeem)
+- [6. End-to-End Prediction Helper](#6-end-to-end-prediction-helper)
+- [7. Inverse Direction — Sizing Redemptions](#7-inverse-direction-sizing-redemptions)
+- [8. Reading Vault State Off-Chain](#8-reading-vault-state-off-chain)
+- [9. Safety Margins](#9-safety-margins)
+- [10. Reading Live Vault APY Off-Chain (Supply-Side Half of the Picker)](#10-reading-live-vault-apy-off-chain-supply-side-half-of-the-picker)
+- [11. Cross-Reference](#11-cross-reference)
 
 ## 1. Vault Snapshot
 
@@ -480,7 +488,9 @@ function capRedeemBurnRaw(exact: bigint, wrapperRaw: bigint): bigint | null {
 
 100 wrapper raw ≈ 100 YT × ~1.25 underlying/YT ≈ 125 raw underlying ≈ $4e-7 in SUI / $1.25e-4 in USDC. Residual stays in `pm.lending` until close.
 
-**User close-PM — top-up via `coin::join`**: emit a `0x2::coin::join(coinT, topup)` between `kai_start_redeem` and `kai_finish_redeem`, where `topup` is a small `Coin<T>` (recommended default `FINISH_REDEEM_TOPUP_DEFAULT_RAW = 30n` — about 10× the empirical dust ceiling on current single-strategy mainnet vaults) spliced from `tx.gas` (SUI) or the user's wallet (`getCoins → mergeCoins → splitCoins`). The top-up is folded into `redeemed_amount`, making the assert pass; it then flows into `interest = redeemed − principal` and the protocol service fee is taken on the inflated interest, so the fee is **not bypassed**.
+**User close-PM — top-up via `coin::join`**: emit a `0x2::coin::join(coinT, topup)` between `kai_start_redeem` and `kai_finish_redeem`, where `topup` is a small `Coin<T>` (recommended default `FINISH_REDEEM_TOPUP_DEFAULT_RAW = 30n` — about 10× the empirical dust ceiling on current single-strategy mainnet vaults). The top-up is folded into `redeemed_amount`, making the assert pass; it then flows into `interest = redeemed − principal` and the protocol service fee is taken on the inflated interest, so the fee is **not bypassed**.
+
+Topup source — **three-tier priority**: `pm.balance[T]` (via `user_remove_liquidity_from_balance<T>`) → `pm.fee[T]` (via `user_withdraw_fee<T>`) → user wallet (`tx.gas` for SUI, `getCoins → mergeCoins → splitCoins` otherwise). Both PM-internal entrypoints are owner-gated and use `balance::split` when `amount < entry_value`, so a 30-raw slice does not disturb the rest of the entry. The net user cost is `topup × fee_rate ≈ 3 raw` at 10% fee_rate — **independent of which tier supplied the topup**: pulling from `pm.fee[T]` is not a "fee-on-fee" multiplier, because only the `topup × fee_rate` portion of the topup is consumed by the service fee, regardless of origin. The advantage of preferring the PM-internal tiers is purely UX: the close-PM PTB stays self-contained and is not blocked when the wallet holds no `Coin<T>`. The required off-chain pre-scan of `pm.balance` / `pm.fee` keys is free — close-PM has to enumerate them anyway because `user_close_pm` calls `destroy_empty` on both bags.
 
 Cross-references:
 

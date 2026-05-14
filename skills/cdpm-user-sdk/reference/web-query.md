@@ -1,6 +1,12 @@
 # Web Query Guide
 
-For web applications, use GraphQL to query all PositionManagers owned by a user through their Record.
+## Contents
+
+- [Setup GraphQL Client](#setup-graphql-client)
+- [Query PositionManagers by Record](#query-positionmanagers-by-record)
+- [Get Single PositionManager Details](#get-single-positionmanager-details)
+- [Complete Web Query Flow](#complete-web-query-flow)
+- [Query with Additional Pool Info](#query-with-additional-pool-info)
 
 ## Setup GraphQL Client
 

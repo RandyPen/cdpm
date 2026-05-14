@@ -1,6 +1,9 @@
 # Event Monitoring
 
-> Event timestamps are available on the `SuiEvent.timestampMs` envelope at query time — the on-chain payload no longer duplicates a `timestamp` field.
+## Contents
+
+- [Agent Events](#agent-events)
+- [Event Subscription](#event-subscription)
 
 ## Agent Events
 

@@ -1,5 +1,10 @@
 # Error Handling
 
+## Contents
+
+- [Common Agent Errors](#common-agent-errors)
+- [Recovery Strategies](#recovery-strategies)
+
 ## Common Agent Errors
 
 ```typescript

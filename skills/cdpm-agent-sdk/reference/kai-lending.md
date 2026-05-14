@@ -1,16 +1,12 @@
 # Kai SAV Lending — Agent Operations
 
-cdpm exposes a second hot-potato lending integration alongside Scallop: **Kai SAV** (Strategy-Aggregating Vault). Agents authorized in `pm.agents` can drive supply / redeem against a Kai `Vault<T, YT>` exactly like they can against Scallop, paying the same yield fee on interest. The same `assert_caller_authorized` gate inside `kai_start_supply` / `kai_start_redeem` admits **owner**, **agent**, or **whitelisted protocol bot in agents-empty mode**. `kai_finish_*` only check `ticket.pm_id == object::id(pm)`.
+## Contents
 
-This page is the agent-flavored counterpart to [`cdpm-user-sdk/reference/kai-lending.md`](../../cdpm-user-sdk/reference/kai-lending.md). It re-emphasizes:
-
-- **Yield fee applies to agents.** `kai_finish_redeem` computes `fee_amount = floor(max(0, redeemed − principal_portion) × fee_house.fee_rate / 10_000)` regardless of caller, so agent-driven Kai redeems pay the same fee as owner / protocol redeems.
-- **No escape hatch for lending.** cdpm does **not** expose a `user_extract_kai_yt`-style wrapper-extraction function for anyone — neither agents nor the owner. If Kai is unreachable (Version bump, withdrawals disabled, etc.) the abort happens inside the inner `vault::withdraw` / `redeem_withdraw_ticket` call before any cdpm `*_finish_*` command runs, so the hot-potato ticket is never consumed and `pm.lending` stays intact. Recovery is to retry the normal `kai_start_redeem` → `vault::withdraw` → `kai_finish_redeem` flow once Kunalabs ships an SDK update against the new Version; cdpm itself stays operational throughout.
-- **Agents cannot short-change the vault.** `kai_finish_supply` requires `Coin<YT>` and asserts `actual >= ticket.expected_yt`. `YT`'s `TreasuryCap` is private to `kai_sav::vault::Vault<T, YT>`, so external code cannot mint a fake `Coin<YT>`. The same defence applies on redeem (`Coin<T>` only comes out of `vault::redeem_withdraw_ticket` after the strategy walk).
-- **No pre-call accrual.** Unlike Scallop, Kai's vault auto-accounts time-locked profit via `tlb::max_withdrawable` inside `total_available_balance`, so the PTB does **not** need to start with an accrual command. cdpm's `compute_expected_yt` / `compute_expected_underlying_kai` read the same auto-accruing function the live `vault::deposit` / `vault::withdraw` use.
-- **Canonical Vault binding (F-03 hardening).** `kai_start_*` records `vault_id = object::id(vault)` on the ticket; `kai_finish_*` re-takes `&kai_vault::Vault<T,YT>` and asserts the id matches, aborting with `EWrongVault (1013)`. Reuse the same `tx.object(vaultObjectId)` handle across `start_*` and `finish_*`.
-
----
+- [Agent PTB Recipe: Supply](#agent-ptb-recipe-supply)
+- [Agent PTB Recipe: Redeem (with strategy walk)](#agent-ptb-recipe-redeem-with-strategy-walk)
+- [What Agents CANNOT Do With Kai](#what-agents-cannot-do-with-kai)
+- [Event Subscription](#event-subscription)
+- [Error Cheat Sheet](#error-cheat-sheet)
 
 ## Agent PTB Recipe: Supply
 

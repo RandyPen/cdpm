@@ -26,15 +26,17 @@ import { BinUtils, FeeUtils } from '@cetusprotocol/dlmm-sdk/utils'
 ## Topics
 
 ### Core Calculations
-- **[Liquidity Calculation](reference/liquidity-calculation.md)** - Constant sum formula, calculate liquidity, get amounts
-- **[Strategy Distributions](reference/strategy-distributions.md)** - `Spot` / `Curve` / `BidAsk` weight formulas (`MAX=2000`, `MIN=200`), per-bin shape (flat / bell / U), bid-vs-ask side coin assignment, single-sided fallback when `active_id` is outside the range, raw-weight inspection via `WeightUtils.toWeight*`, full `BinLiquidityInfo` via `StrategyUtils.toAmountsBothSideByStrategy` / `autoFillCoinByStrategy`, and the `use_bin_infos` flag trade-off
-- **[Bin Price Calculations](reference/bin-price-calculations.md)** - Bin ID from price, price from bin ID, Q64x64 price
-- **[Position Management](reference/position-management.md)** - Position count, split bins into positions
-- **[Fee Calculations](reference/fee-calculations.md)** - Variable fee, protocol fee, composition fee
-- **[Position Query](reference/position-query.md)** - Query PositionManager assets, fees, and rewards
-- **[Scallop Lending Math](reference/scallop-lending-math.md)** - Expected sCoin / underlying, principal amortization, yield-fee deduction, **redemption sizing** (inverse formulas: sCoin to burn for target underlying / target net-after-fee, with worked example), **live supply APY query** via `@scallop-io/sui-scallop-sdk` (`getMarketPool` returning `MarketPool | undefined`, supply-only field subset with raw-vs-decimaled split clarified), **canonical Scallop-vs-Kai supply picker** that returns `{ venue: 'scallop' | 'kai' | 'idle', apy, detail }`, and **granular PTB-builder hooks** (`txBlock.deposit` / `txBlock.withdraw` accept tx-result coins and slot inside cdpm's hot-potato; mint/redeem auto-accrue interest internally)
-- **[Kai SAV Lending Math](reference/kai-lending-math.md)** - Expected YT / underlying for Kai's `<T, YT>` vault, principal amortization, yield-fee deduction, **redemption sizing** (inverse formulas: YT to burn for target underlying / target net-after-fee, with worked example, plus `vault.withdrawTAmt` as an on-chain inverse-sizing alternative for full-drain flows), **live vault APY query** via `@kunalabs-io/kai` (`VAULTS` mainnet-only map with `paused_*` warning, `getVaultStats` returning `{ tvl, apr, apy }` with `apy = exp(apr) − 1`), supply-side half of the cross-protocol picker; plus the SDK's `vault.deposit` / `vault.withdraw` (auto-walks all registered strategies — `getStrategies` returns a static descriptor list) that composes into cdpm's hot-potato PTB
-- **[Cross-Protocol PTB (cdpm + Scallop + Kai)](reference/cross-protocol-ptb.md)** - **Canonical Mysten-rooted shared-`Transaction` pattern** for composing cdpm hot-potato calls with Scallop SDK builders and Kai SDK builders into a single atomic PTB. Multi-approach comparison (raw `tx.moveCall` vs Mysten-rooted vs Scallop-rooted vs separate-PTB vs pure-SDK) with viability and trade-off table; worked single-protocol supply examples for both venues; **atomic Scallop ↔ Kai rebalance** in one PTB (both directions, with code); five integration caveats (sign with `tx` not `scallopTx`; `setSender` before `*Quick`; pin `@mysten/sui` to one major so `instanceof Transaction` adoption works; never feed `*Quick` outputs into cdpm finishes; re-snapshot inputs before signing); SDK file:line reference appendix
+- **[Liquidity Calculation](reference/liquidity-calculation.md)** — Constant-sum formula, `getLiquidity`, `calculateOutByShare`.
+- **[Strategy Distributions](reference/strategy-distributions.md)** — `Spot` / `Curve` / `BidAsk` weights (`MAX=2000`, `MIN=200`), single-sided fallback, `StrategyUtils.toAmountsBothSideByStrategy` / `autoFillCoinByStrategy`.
+- **[Bin Price Calculations](reference/bin-price-calculations.md)** — Bin ↔ price conversions, Q64x64 price.
+- **[Position Management](reference/position-management.md)** — Position count, split bins into positions.
+- **[Fee Calculations](reference/fee-calculations.md)** — Variable / protocol / composition fee.
+- **[Position Query](reference/position-query.md)** — Query PositionManager assets, fees, rewards.
+
+### Lending Math (Scallop & Kai SAV)
+- **[Scallop Lending Math](reference/scallop-lending-math.md)** — Expected sCoin / underlying, principal amortization, yield-fee deduction, redemption sizing (inverse formulas + worked example), live supply APY via `@scallop-io/sui-scallop-sdk`, Scallop-vs-Kai picker, granular PTB-builder hooks.
+- **[Kai SAV Lending Math](reference/kai-lending-math.md)** — Same shape for `<T, YT>` vaults; live APY via `@kunalabs-io/kai`; full-drain dust handling and `LENDING_SAFE_MARGIN_WRAPPER_RAW` floor (§9.1).
+- **[Cross-Protocol PTB (cdpm + Scallop + Kai)](reference/cross-protocol-ptb.md)** — Mysten-rooted shared-`Transaction` pattern, approach comparison table, atomic Scallop ↔ Kai rebalance, caller-specific full-drain patterns (§5.1), integration caveats.
 
 ### Advanced Topics
 - **[Price Conversion](reference/price-conversion.md)** - Compare CDPM prices with external exchanges

@@ -1,5 +1,13 @@
 # Creating Positions
 
+## Contents
+
+- [1. Create Position (First Time User)](#1-create-position-first-time-user)
+- [2. Create Position (Existing User)](#2-create-position-existing-user)
+- [3. Check if User Has Record](#3-check-if-user-has-record)
+- [Close Position](#close-position)
+- [Events](#events)
+
 ## 1. Create Position (First Time User)
 
 For first-time users without a Record, create Record and PositionManager in the same PTB:
@@ -181,14 +189,17 @@ async function createPositionSmart(
 > shape with the Kai branch for uniformity. In both cases the close-PM
 > PTB MUST insert `0x2::coin::join(coinT, topup)` between the redeem
 > chain and `*_finish_redeem`, where `topup` is a small `Coin<T>`
-> (~30 raw underlying, recommended client-side default) spliced from the
-> user's wallet — `tx.gas` for SUI, `client.getCoins({ owner, coinType: T
-> })` for others. Throw a clear error in the close-PM builder when the
-> wallet has no `Coin<T>` so the UI can prompt the user to acquire a
-> dust amount before retry. See `reference/kai-lending.md` § Top-Up
-> Pattern (and the Scallop twin) for the full MoveCall sequence — that
-> recipe stands on its own; no external reference implementation is
-> required to copy.
+> (~30 raw underlying, recommended client-side default). **Source the
+> topup via a three-tier resolver**: `pm.balance[T]` (via
+> `user_remove_liquidity_from_balance<T>`) first, then `pm.fee[T]` (via
+> `user_withdraw_fee<T>`), then the user's wallet (`tx.gas` for SUI,
+> else `getCoins → mergeCoins → splitCoins`). Only throw a clear error
+> when **all three tiers** are empty so the UI can prompt the user to
+> acquire a dust amount before retry — in practice rare, since `pm.balance[T]`
+> usually carries residual LP fees by the time close-PM runs. See
+> `reference/kai-lending.md` § Top-Up Pattern for the `resolveTopup`
+> helper and the full MoveCall sequence — that recipe stands on its own;
+> no external reference implementation is required to copy.
 
 ```typescript
 async function closePosition(
@@ -220,7 +231,7 @@ async function closePosition(
 
 ### Close Position Safely (collect rewards first)
 
-The following variant sweeps every `RewardType` on the pool **before** closing, so no incentive rewards are lost:
+The following variant sweeps every `RewardType` on the pool **before** closing, so no incentive rewards are lost. It also drains every residual `pm.balance[T]` and `pm.fee[T]` (mandatory — `user_close_pm` calls `destroy_empty` on both bags) and emits **one** batched `transferObjects` at the end instead of one call per coin (each `transferObjects` is its own PTB command with its own base cost):
 
 ```typescript
 async function closePositionSafe(
@@ -232,8 +243,13 @@ async function closePositionSafe(
   rewardCoinTypes: string[],  // e.g. ["0x2::sui::SUI", "0x...::rewardX::RewardX"]
   coinTypeA: string,
   coinTypeB: string,
+  // Off-chain pre-scan of pm.balance and pm.fee dynamic-field keys + values.
+  // The same scan feeds resolveTopup (see kai-lending.md § Top-Up Pattern).
+  pmSnap: { balance: Map<string, bigint>; fee: Map<string, bigint> },
 ) {
   const tx = new Transaction();
+  const REDEEM_ALL_U64 = 0xffffffffffffffffn;
+  const toTransfer: TransactionObjectArgument[] = [];
 
   // Step 1: collect every reward type BEFORE close
   for (const rewardType of rewardCoinTypes) {
@@ -247,10 +263,37 @@ async function closePositionSafe(
         tx.object(versionedId),
       ],
     });
-    tx.transferObjects([rewardCoin], signer.toSuiAddress());
+    toTransfer.push(rewardCoin);
   }
 
-  // Step 2: close
+  // Step 2: (if any lending entries) run *_finish_redeem flows here.
+  // The top-up between each *_start_redeem and *_finish_redeem is sourced
+  // through the three-tier resolver (pm.balance[T] → pm.fee[T] → wallet) —
+  // see kai-lending.md § Top-Up Pattern. Topup-split handles are consumed
+  // by coin::join and MUST NOT enter toTransfer. The post-finish underlying
+  // lands back in pm.balance[T] and is drained by Step 3.
+
+  // Step 3: drain every remaining bag key. Use REDEEM_ALL_U64 so the entry
+  // is fully removed (amount >= entry_value → bag::remove, leaving an empty
+  // bag for user_close_pm's destroy_empty).
+  for (const T of pmSnap.balance.keys()) {
+    const [coin] = tx.moveCall({
+      target: `${CDPM_PACKAGE}::cdpm::user_remove_liquidity_from_balance`,
+      typeArguments: [T],
+      arguments: [tx.object(pmId), tx.pure.u64(REDEEM_ALL_U64)],
+    });
+    toTransfer.push(coin);
+  }
+  for (const T of pmSnap.fee.keys()) {
+    const [coin] = tx.moveCall({
+      target: `${CDPM_PACKAGE}::cdpm::user_withdraw_fee`,
+      typeArguments: [T],
+      arguments: [tx.object(pmId), tx.pure.u64(REDEEM_ALL_U64)],
+    });
+    toTransfer.push(coin);
+  }
+
+  // Step 4: close (consumes pm; bag::destroy_empty asserts both bags are empty)
   tx.moveCall({
     target: `${CDPM_PACKAGE}::cdpm::user_close_pm`,
     typeArguments: [coinTypeA, coinTypeB],
@@ -264,9 +307,16 @@ async function closePositionSafe(
     ],
   });
 
+  // Step 5: ONE batched transfer for everything destined to the user.
+  if (toTransfer.length > 0) {
+    tx.transferObjects(toTransfer, signer.toSuiAddress());
+  }
+
   return await client.signAndExecuteTransaction({ signer, transaction: tx });
 }
 ```
+
+> The LP underlying (`Coin<CoinTypeA>` / `Coin<CoinTypeB>` from `pool::close_position`) is transferred to the sender **inside** `user_close_pm` via Move-side `transfer::public_transfer` — those two coins do not pass through the client and are not part of `toTransfer`.
 
 ## Events
 

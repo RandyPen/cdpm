@@ -1,5 +1,11 @@
 # Automation Strategies
 
+## Contents
+
+- [Strategy 1: Auto-Compounding](#strategy-1-auto-compounding)
+- [Strategy 2: Rebalancing](#strategy-2-rebalancing)
+- [Strategy 3: Fee Collection Scheduler](#strategy-3-fee-collection-scheduler)
+
 ## Strategy 1: Auto-Compounding
 
 Automatically collect fees and add them back to the position:

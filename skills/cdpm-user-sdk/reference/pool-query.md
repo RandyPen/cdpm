@@ -1,6 +1,11 @@
 # Pool Query Guide
 
-Query pools by coin types and fee tier. Coin types must be sorted alphabetically.
+## Contents
+
+- [Sort Coin Types](#sort-coin-types)
+- [Query Pool by Registry](#query-pool-by-registry)
+- [Alternative: Query Pool Created Events](#alternative-query-pool-created-events)
+- [Available Fee Configurations](#available-fee-configurations)
 
 ## Sort Coin Types
 

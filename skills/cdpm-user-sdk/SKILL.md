@@ -135,6 +135,6 @@ try {
 }
 ```
 
-## Complete Example
+## End-to-End Workflow
 
-See [examples/user-workflow.ts](examples/user-workflow.ts) for a complete end-to-end workflow.
+For the full close-PM flow (collect rewards → drain `pm.balance` / `pm.fee` → batched `transferObjects` → `user_close_pm`), see [`reference/workflows.md`](reference/workflows.md) § Close Position Safely.

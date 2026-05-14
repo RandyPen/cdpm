@@ -1,8 +1,18 @@
 # Strategy Distributions (Spot / Curve / BidAsk)
 
-When you call `sdk.Position.calculateAddLiquidityInfo({ ..., strategy_type })` the SDK turns your `(amount_a, amount_b, lower_bin_id, upper_bin_id, active_id)` into a per-bin breakdown by first computing a **weight** for every bin in the range, then prorating the amounts. The shape of that weight curve is the strategy.
+## Contents
 
-This page documents the three built-in strategies — what they look like, the exact weight formula, when to use each, and the edge cases. All numbers below come from `cetus-sdk-v2/packages/dlmm/src/utils/weightUtils.ts` and `strategyUtils.ts`.
+- [Constants](#constants)
+- [The `StrategyType` enum](#the-strategytype-enum)
+- [Weight formulas](#weight-formulas)
+- [Side semantics (which coin sits where)](#side-semantics-which-coin-sits-where)
+- [Strategy intent — when to pick what](#strategy-intent-when-to-pick-what)
+- [Edge case — `active_id` outside the range (single-sided liquidity)](#edge-case-active_id-outside-the-range-single-sided-liquidity)
+- [Computing weights / amounts directly](#computing-weights-amounts-directly)
+- [On-chain vs SDK-computed distribution (Cetus-direct only)](#on-chain-vs-sdk-computed-distribution-cetus-direct-only)
+- [Binding to the cdpm contract](#binding-to-the-cdpm-contract)
+- [Per-bin shares for rebalance scheduling](#per-bin-shares-for-rebalance-scheduling)
+- [Cross-references](#cross-references)
 
 ## Constants
 

@@ -1,6 +1,15 @@
 # PositionManager Query Guide
 
-This guide explains how to query PositionManager information, including asset balances, unclaimed fees, and rewards. The queries use transaction simulation to get accurate, up-to-date data.
+## Contents
+
+- [Overview](#overview)
+- [Setup](#setup)
+- [Type Definitions](#type-definitions)
+- [Core Functions](#core-functions)
+- [Usage Examples](#usage-examples)
+- [Integration with Cetus DLMM SDK](#integration-with-cetus-dlmm-sdk)
+- [Best Practices](#best-practices)
+- [Related Calculations](#related-calculations)
 
 ## Overview
 

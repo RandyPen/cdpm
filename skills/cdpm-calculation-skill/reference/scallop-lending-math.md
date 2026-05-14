@@ -1,10 +1,17 @@
 # Scallop Lending Math
 
-This page documents the off-chain twins of every numeric formula the cdpm contract uses for Scallop supply / redeem. Use them to predict outputs **before** broadcasting, to validate dry-run results, and to size deposits so that `EZeroExpected (1007)` and `EAmountShortfall (1009)` never trip in production.
+## Contents
 
-All formulas mirror `sources/cdpm.move` exactly. The contract widens to `u128` before arithmetic and narrows back to `u64`, so every off-chain implementation should do the same.
-
----
+- [1. Reserve Snapshot](#1-reserve-snapshot)
+- [2. `compute_expected_scoin` (used by `scallop_start_supply`)](#2-compute_expected_scoin-used-by-scallop_start_supply)
+- [3. `compute_expected_underlying_scallop` (used by `scallop_start_redeem`)](#3-compute_expected_underlying_scallop-used-by-scallop_start_redeem)
+- [4. Principal Amortization (`pull_from_scallop_lending`)](#4-principal-amortization-pull_from_scallop_lending)
+- [5. Yield Fee Inside `scallop_finish_redeem`](#5-yield-fee-inside-scallop_finish_redeem)
+- [6. End-to-End Prediction Helper](#6-end-to-end-prediction-helper)
+- [7. Inverse Direction — Sizing Redemptions](#7-inverse-direction-sizing-redemptions)
+- [8. Reading Reserve State Off-Chain](#8-reading-reserve-state-off-chain)
+- [9. Safety Margins](#9-safety-margins)
+- [10. Reading Live Supply APY Off-Chain (Scallop vs Kai Picker)](#10-reading-live-supply-apy-off-chain-scallop-vs-kai-picker)
 
 ## 1. Reserve Snapshot
 
@@ -466,7 +473,7 @@ Same overall caller pattern as the Kai counterpart — see [`kai-lending-math.md
 The cap pattern is still applied as **defense-in-depth** against future Scallop rounding changes and for parity with Kai's recipe (so the same orchestrator helper handles both protocols). Recommended client-side approach:
 
 - **Protocol / agent** callers cap `scoinAmount` at `min(neededWrapper, entry.wrapperRaw − LENDING_SAFE_MARGIN_WRAPPER_RAW)` (recommended default `100n` sCoin raw). Never pass `u64::MAX`. Use a pure helper — see the `capRedeemBurnRaw` example in [`kai-lending-math.md` §9.1](./kai-lending-math.md#91-full-drain-dust-and-the-lending_safe_margin_wrapper_raw-floor); the helper is protocol-agnostic.
-- **User close-PM** inserts `0x2::coin::join(coinT, topup)` between `scallop_start_redeem` and `scallop_finish_redeem`, where `topup` is ~30 raw underlying spliced from `tx.gas` (SUI) or a user-wallet coin (USDC / others). For Scallop the top-up is structurally unnecessary in the common case, but the close-PM PTB shares its shape with the Kai branch (where the top-up *is* required) — keeping the same code path is simpler than special-casing. The top-up is folded into `redeemed_amount`; the service fee on `interest = redeemed − principal` is taken on the inflated interest, so the fee is **not bypassed**.
+- **User close-PM** inserts `0x2::coin::join(coinT, topup)` between `scallop_start_redeem` and `scallop_finish_redeem`, where `topup` is ~30 raw underlying. Same **three-tier source priority** as the Kai branch (`pm.balance[T]` → `pm.fee[T]` → wallet) — see [`kai-lending-math.md` §9.1](./kai-lending-math.md#91-full-drain-dust-and-the-lending_safe_margin_wrapper_raw-floor) for the rationale; net user cost is `topup × fee_rate ≈ 3 raw` and is invariant to source. For Scallop the top-up is structurally unnecessary in the common case, but the close-PM PTB shares its shape with the Kai branch (where the top-up *is* required) — keeping the same code path is simpler than special-casing. The top-up is folded into `redeemed_amount`; the service fee on `interest = redeemed − principal` is taken on the inflated interest, so the fee is **not bypassed**.
 
 Cross-references:
 

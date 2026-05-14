@@ -1,41 +1,14 @@
 # Scallop Lending (Idle Funds)
 
-> **REQUIRED — every Scallop PTB starts with `accrue_interest_for_market`.**
-> Any PTB that calls `scallop_start_supply` or `scallop_start_redeem` MUST have
-> `protocol::accrue_interest::accrue_interest_for_market(version, market, clock)`
-> as **command 0**. cdpm enforces this on-chain: omitting the pre-step aborts at
-> the cdpm boundary with `EStaleScallopState (1011)` before any balance is touched.
-> The Scallop TS SDK helpers `scallopTx.deposit` / `depositQuick`
-> (`sui-scallop-sdk/src/builders/coreBuilder.ts:139-148, 335-358`) do **NOT**
-> inject this call — you must add it explicitly. There is no SDK shortcut and no
-> optional path.
+## Contents
 
-`PositionManager` exposes a hot-potato lending API that lets the **owner** (and authorized agents / whitelisted protocol bots) park unused balance into Scallop and earn yield while the position is idle. Scallop is **one of two yield destinations** — the other is Kai SAV, documented in [`kai-lending.md`](./kai-lending.md). Both share the same `pm.lending: Bag`, ticket-shape, and yield-fee math; the disambiguation lives in the function-name prefix (`scallop_*` vs `kai_*`) and the bag key (`type_name<T>` for Scallop, `type_name<YT>` for Kai).
-
-The on-chain shape:
-
-```move
-use protocol::reserve::MarketCoin;
-
-public struct PositionManager has key {
-    id: UID,
-    owner: address,
-    agents: VecSet<address>,
-    position: Option<Position>,
-    balance: Bag,
-    fee: Bag,
-    lending: Bag,                 // shared with Kai; Scallop entries keyed by `type_name<T>`, value = ScallopVault<T>
-}
-
-public struct ScallopVault<phantom T> has store {
-    scoin: Balance<MarketCoin<T>>, // Scallop sCoin (yield-bearing market coin)
-    principal: u64,                // Original underlying deposited (for yield accounting)
-}
-```
-
-There is **at most one Scallop vault per underlying type T** (Kai entries for the same `T` live under a different key, `type_name<YT>`, so they cannot collide). The sCoin type is structurally pinned to `MarketCoin<T>` by the type system — there is no separate `S` generic, so a fake-sCoin variant simply cannot be passed in.
-
----
+- [Hot-Potato API Overview](#hot-potato-api-overview)
+- [PTB Recipe: Supply](#ptb-recipe-supply)
+- [PTB Recipe: Redeem (with yield-fee deduction)](#ptb-recipe-redeem-with-yield-fee-deduction)
+- [No Wrapper-Extract Escape](#no-wrapper-extract-escape)
+- [Closing a PositionManager With Active Vaults](#closing-a-positionmanager-with-active-vaults)
+- [Events](#events)
+- [Error Cheat Sheet](#error-cheat-sheet)
 
 ## Hot-Potato API Overview
 
@@ -340,9 +313,9 @@ The Cetus DLMM `Position` is the only object cdpm cannot recover from upstream b
 
 ### Top-Up Pattern (Defensive — Same Shape as Kai)
 
-Same PTB shape as the Kai counterpart — see [`kai-lending.md` § Top-Up Pattern](./kai-lending.md#top-up-pattern-required-for-full-drain) for the full recipe. The only structural difference: the redeem chain's intermediate Move-call is `protocol::redeem::redeem` (yielding `coinT`), and `coin::join(coinT, topup)` sits immediately after it, before `scallop_finish_redeem`.
+Same PTB shape as the Kai counterpart — see [`kai-lending.md` § Top-Up Pattern](./kai-lending.md#top-up-pattern-required-for-full-drain) for the full recipe, including the **three-tier `resolveTopup` helper** (`pm.balance[T]` → `pm.fee[T]` → wallet) and the **batched `transferObjects`** convention. The only structural difference: the redeem chain's intermediate Move-call is `protocol::redeem::redeem` (yielding `coinT`), and `coin::join(coinT, topup)` sits immediately after it, before `scallop_finish_redeem`.
 
-Scallop's math is friendlier than Kai's: `protocol::redeem::redeem` and cdpm's `compute_expected_underlying_scallop` evaluate the same single floor-div on the same balance-sheet snapshot within the PTB, so `redeemed_amount == expected_underlying` exactly — no observed dust. The top-up is therefore **defensive, not strictly required** today; close-PM keeps it in place for uniform code paths with Kai (where it *is* required) and as a forward-compatibility hedge against Scallop changing its rounding. Same `FINISH_REDEEM_TOPUP_DEFAULT_RAW = 30n` recommended default applies. See [`cdpm-calculation-skill/reference/scallop-lending-math.md` §9.1](../../cdpm-calculation-skill/reference/scallop-lending-math.md#91-full-drain-dust-and-the-lending_safe_margin_wrapper_raw-floor) for the math.
+Scallop's math is friendlier than Kai's: `protocol::redeem::redeem` and cdpm's `compute_expected_underlying_scallop` evaluate the same single floor-div on the same balance-sheet snapshot within the PTB, so `redeemed_amount == expected_underlying` exactly — no observed dust. The top-up is therefore **defensive, not strictly required** today; close-PM keeps it in place for uniform code paths with Kai (where it *is* required) and as a forward-compatibility hedge against Scallop changing its rounding. Same `FINISH_REDEEM_TOPUP_DEFAULT_RAW = 30n` recommended default applies; same three-tier source priority applies. See [`cdpm-calculation-skill/reference/scallop-lending-math.md` §9.1](../../cdpm-calculation-skill/reference/scallop-lending-math.md#91-full-drain-dust-and-the-lending_safe_margin_wrapper_raw-floor) for the math.
 
 ---
 

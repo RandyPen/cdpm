@@ -1,33 +1,14 @@
 # Kai SAV Lending (Idle Funds)
 
-`PositionManager` exposes a second hot-potato lending integration alongside Scallop: **Kai SAV** (Strategy-Aggregating Vault). It lets the **owner** (and authorized agents / whitelisted protocol bots under the same `assert_caller_authorized` rules as Scallop) park idle balance into a Kai vault and earn yield while the position sits idle.
+## Contents
 
-The on-chain shape:
-
-```move
-use kai_sav::vault as kai_vault;
-
-public struct PositionManager has key {
-    id: UID,
-    owner: address,
-    agents: VecSet<address>,
-    position: Option<Position>,
-    balance: Bag,
-    fee: Bag,
-    lending: Bag,                   // shared with Scallop; key disambiguates
-}
-
-public struct KaiVault<phantom T, phantom YT> has store {
-    yt_balance: Balance<YT>,        // yield token issued by Kai's Vault<T, YT>
-    principal: u64,                 // original underlying for yield accounting
-}
-```
-
-Kai uses a **two-parameter** generic — `T` for the underlying coin (e.g. `USDC`) and `YT` for the per-vault yield token (e.g. `YUSDC`). `YT`'s `TreasuryCap` is held privately by `Vault<T, YT>`, so external packages cannot mint a forged `Coin<YT>`. `kai_sav::vault::new` is `public(package)` — only Kai's own modules can create a `Vault<T, YT>`, so a fake `Vault<T, EvilYT>` cannot be passed to `kai_start_supply`.
-
-The `lending: Bag` is the **same bag** Scallop uses, but the bag key is `type_name<YT>` (Scallop uses `type_name<T>`). A single PositionManager can therefore hold both a `ScallopVault<USDC>` and a `KaiVault<USDC, YUSDC>` at the same time without collision.
-
----
+- [Hot-Potato API Overview](#hot-potato-api-overview)
+- [PTB Recipe: Supply](#ptb-recipe-supply)
+- [PTB Recipe: Redeem (with strategy walk)](#ptb-recipe-redeem-with-strategy-walk)
+- [No Wrapper-Extract Escape](#no-wrapper-extract-escape)
+- [Closing a PositionManager With Active Vaults](#closing-a-positionmanager-with-active-vaults)
+- [Events](#events)
+- [Error Cheat Sheet](#error-cheat-sheet)
 
 ## Hot-Potato API Overview
 
@@ -380,12 +361,71 @@ The Cetus DLMM `Position` is the only object cdpm cannot recover from upstream b
 
 ### Top-Up Pattern (Required for Full Drain)
 
-Owner-driven close-PM is the **only** caller that legitimately needs to fully empty a Kai entry — protocol bots and agents intentionally leave a small wrapper residual (see [`cdpm-agent-sdk/reference/kai-lending.md`](../../cdpm-agent-sdk/reference/kai-lending.md#dont-full-drain-a-lending-entry) and [`cdpm-protocol-sdk/reference/kai-lending.md`](../../cdpm-protocol-sdk/reference/kai-lending.md)). On full drain (`ytAmount = u64::MAX`), the strategy-walker chain returns ~2-3 raw underlying less than `expected_underlying` due to per-step floor-div, reliably tripping `EAmountShortfall (1009)`. The fix: insert a `0x2::coin::join(coinT, topup)` between the redeem chain and `kai_finish_redeem`, where `topup` is a small `Coin<T>` (~30 raw) from the user's wallet.
+Owner-driven close-PM is the **only** caller that legitimately needs to fully empty a Kai entry — protocol bots and agents intentionally leave a small wrapper residual (see [`cdpm-agent-sdk/reference/kai-lending.md`](../../cdpm-agent-sdk/reference/kai-lending.md#dont-full-drain-a-lending-entry) and [`cdpm-protocol-sdk/reference/kai-lending.md`](../../cdpm-protocol-sdk/reference/kai-lending.md)). On full drain (`ytAmount = u64::MAX`), the strategy-walker chain returns ~2-3 raw underlying less than `expected_underlying` due to per-step floor-div, reliably tripping `EAmountShortfall (1009)`. The fix: insert a `0x2::coin::join(coinT, topup)` between the redeem chain and `kai_finish_redeem`, where `topup` is a small `Coin<T>` (~30 raw).
+
+**Topup source — three-tier priority (`pm.balance[T]` → `pm.fee[T]` → wallet)**
+
+Prefer pulling the topup from inside the PM. Both `user_remove_liquidity_from_balance<T>` and `user_withdraw_fee<T>` are owner-gated public entrypoints; when `amount < entry_value` they `balance::split` and keep the bag key, so a 30-raw slice does not disturb the rest of the entry. Falling back to the wallet only matters when the user has never interacted with `T` before (no LP add/remove, no prior redeem) — in practice rare. Net cost is `topup × fee_rate` regardless of source.
+
+The pre-scan is free: close-PM already has to enumerate every key of `pm.balance` and `pm.fee` (because `user_close_pm` calls `destroy_empty` on both bags). Reuse that scan as the `pmSnap` snapshot below.
 
 ```ts
-import { Transaction } from "@mysten/sui/transactions";
+import { Transaction, type TransactionObjectArgument } from "@mysten/sui/transactions";
 
 const FINISH_REDEEM_TOPUP_DEFAULT_RAW = 30n; // ~10× the dust upper bound
+
+// pmSnap is built off-chain once per close-PM PTB by walking pm.balance and pm.fee
+// dynamic fields. Type: { balance: Map<T, bigint>, fee: Map<T, bigint> }.
+async function resolveTopup(
+  tx: Transaction,
+  client: SuiClient,
+  pmSnap: { balance: Map<string, bigint>; fee: Map<string, bigint> },
+  pmId: string,
+  T: string,
+  ownerAddress: string,
+): Promise<TransactionObjectArgument> {
+  const amt = FINISH_REDEEM_TOPUP_DEFAULT_RAW;
+
+  // 1) pm.balance[T] — preferred. Subtract locally so a second redeem of the
+  //    same T this PTB sees the post-split value.
+  const balVal = pmSnap.balance.get(T) ?? 0n;
+  if (balVal >= amt) {
+    pmSnap.balance.set(T, balVal - amt);
+    const [coin] = tx.moveCall({
+      target: `${CDPM}::cdpm::user_remove_liquidity_from_balance`,
+      typeArguments: [T],
+      arguments: [tx.object(pmId), tx.pure.u64(amt)],
+    });
+    return coin;
+  }
+
+  // 2) pm.fee[T]
+  const feeVal = pmSnap.fee.get(T) ?? 0n;
+  if (feeVal >= amt) {
+    pmSnap.fee.set(T, feeVal - amt);
+    const [coin] = tx.moveCall({
+      target: `${CDPM}::cdpm::user_withdraw_fee`,
+      typeArguments: [T],
+      arguments: [tx.object(pmId), tx.pure.u64(amt)],
+    });
+    return coin;
+  }
+
+  // 3) Wallet fallback. SUI → split from gas; others → getCoins.
+  if (T === '0x2::sui::SUI') {
+    return tx.splitCoins(tx.gas, [tx.pure.u64(amt)])[0]!;
+  }
+  const { data } = await client.getCoins({ owner: ownerAddress, coinType: T, limit: 50 });
+  if (data.length === 0) {
+    throw new Error(
+      `No topup source for ${T}: pm.balance=${balVal}, pm.fee=${feeVal}, wallet empty. ` +
+      `Acquire ≥${amt} raw and retry.`
+    );
+  }
+  const head = tx.object(data[0]!.coinObjectId);
+  if (data.length > 1) tx.mergeCoins(head, data.slice(1).map(c => tx.object(c.coinObjectId)));
+  return tx.splitCoins(head, [tx.pure.u64(amt)])[0]!;
+}
 
 // 1. start_redeem returns (coinYT, redeemTicket).
 const [coinYT, redeemTicket] = tx.moveCall({
@@ -397,17 +437,8 @@ const [coinYT, redeemTicket] = tx.moveCall({
 // 2-5. vault::withdraw / supply_pool::withdraw / redeem_withdraw_ticket / from_balance → coinT
 //      (omitted; same as the standard redeem recipe above)
 
-// 6. NEW: source the top-up. SUI → split from gas; non-SUI → query wallet.
-const topup =
-  T === '0x2::sui::SUI'
-    ? tx.splitCoins(tx.gas, [tx.pure.u64(FINISH_REDEEM_TOPUP_DEFAULT_RAW)])[0]!
-    : (async () => {
-        const { data } = await client.getCoins({ owner: userAddress, coinType: T, limit: 50 });
-        if (data.length === 0) throw new Error(`Wallet holds no ${T} for close-PM top-up — acquire ≥${FINISH_REDEEM_TOPUP_DEFAULT_RAW} raw and retry`);
-        const head = tx.object(data[0]!.coinObjectId);
-        if (data.length > 1) tx.mergeCoins(head, data.slice(1).map(c => tx.object(c.coinObjectId)));
-        return tx.splitCoins(head, [tx.pure.u64(FINISH_REDEEM_TOPUP_DEFAULT_RAW)])[0]!;
-      })();
+// 6. Source the top-up via the three-tier resolver.
+const topup = await resolveTopup(tx, client, pmSnap, pmId, T, userAddress);
 
 // 7. Merge top-up into coinT so `coin.value() >= expected_underlying`.
 tx.moveCall({
@@ -426,7 +457,20 @@ tx.moveCall({
 });
 ```
 
-The user's net cost is `topup × fee_rate` — at 10% fee_rate, ~3 raw underlying per redeem (≪ $1e-4 for SUI / USDC at typical prices). See [`cdpm-calculation-skill/reference/kai-lending-math.md` §9.1](../../cdpm-calculation-skill/reference/kai-lending-math.md#91-full-drain-dust-and-the-lending_safe_margin_wrapper_raw-floor) for the dust math and [`cross-protocol-ptb.md` §5.1](../../cdpm-calculation-skill/reference/cross-protocol-ptb.md#51-caller-specific-full-drain-patterns) for the side-by-side comparison with protocol/agent patterns.
+The user's net cost is `topup × fee_rate` — at 10% fee_rate, ~3 raw underlying per redeem (≪ $1e-4 for SUI / USDC at typical prices), **independent of which tier supplied the topup**. The structural advantage of preferring `pm.balance` / `pm.fee` is purely UX: the close-PM PTB becomes self-contained and the user is not blocked when their wallet holds no `Coin<T>`. See [`cdpm-calculation-skill/reference/kai-lending-math.md` §9.1](../../cdpm-calculation-skill/reference/kai-lending-math.md#91-full-drain-dust-and-the-lending_safe_margin_wrapper_raw-floor) for the dust math and [`cross-protocol-ptb.md` §5.1](../../cdpm-calculation-skill/reference/cross-protocol-ptb.md#51-caller-specific-full-drain-patterns) for the side-by-side comparison with protocol/agent patterns.
+
+**Batched `transferObjects` at the end of the PTB**
+
+The close-PM PTB ultimately returns many `Coin<*>` objects to the user: collected rewards, residual `pm.balance[T]` (one per type, drained with `amount = u64::MAX`), residual `pm.fee[T]`, etc. Each is a separate PTB command; calling `tx.transferObjects` once per object is one PTB command per coin, each with its own base cost. Sui's `transferObjects` accepts a vector — batch every user-bound coin into one final call:
+
+```ts
+const toTransfer: TransactionObjectArgument[] = [];
+// ... push collected rewards, residual balance/fee withdrawals, etc. ...
+// Topup-split handles must NOT enter toTransfer — they are consumed by coin::join.
+tx.transferObjects(toTransfer, signer.toSuiAddress());
+```
+
+See `workflows.md` § Close Position Safely for the full template.
 
 ---
 

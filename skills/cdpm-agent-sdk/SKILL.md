@@ -100,8 +100,4 @@ function distributeLiquidity(totalA: string, totalB: string, bins: number[], bin
 }
 ```
 
-See `cdpm-calculation` skill for complete reference.
-
-## Complete Example
-
-See [examples/agent-strategy.ts](examples/agent-strategy.ts) for a complete agent implementation with auto-compounding strategy.
+See `cdpm-calculation-skill` for the full reference (formulas, redemption sizing, distribution math).

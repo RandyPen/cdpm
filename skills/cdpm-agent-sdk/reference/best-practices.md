@@ -1,5 +1,14 @@
 # Best Practices
 
+## Contents
+
+- [1. Pre-Operation Checks](#1-pre-operation-checks)
+- [2. Batch Operations](#2-batch-operations)
+- [3. Gas Optimization](#3-gas-optimization)
+- [Lending Pre-Flight](#lending-pre-flight)
+- [Surfacing Close-Position Warnings](#surfacing-close-position-warnings)
+- [Security Guidelines](#security-guidelines)
+
 ## 1. Pre-Operation Checks
 
 ```typescript

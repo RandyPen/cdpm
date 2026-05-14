@@ -1,5 +1,12 @@
 # Agent Management
 
+## Contents
+
+- [Authorize Agent](#authorize-agent)
+- [Revoke Agent](#revoke-agent)
+- [List Authorized Agents](#list-authorized-agents)
+- [Security Best Practices](#security-best-practices)
+
 ## Authorize Agent
 
 ```typescript

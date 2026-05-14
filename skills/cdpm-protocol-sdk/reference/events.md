@@ -1,6 +1,12 @@
 # Events
 
-> Event timestamps are available on the `SuiEvent.timestampMs` envelope at query time — the on-chain payload no longer duplicates a `timestamp` field.
+## Contents
+
+- [Admin Events](#admin-events)
+- [Protocol Operation Events](#protocol-operation-events)
+- [Scallop Lending Events](#scallop-lending-events)
+- [Kai SAV Lending Events](#kai-sav-lending-events)
+- [Event Subscription](#event-subscription)
 
 ## Admin Events
 

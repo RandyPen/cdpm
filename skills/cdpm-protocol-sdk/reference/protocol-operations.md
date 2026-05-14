@@ -1,6 +1,13 @@
 # Protocol Operations
 
-> **Tip**: Protocol operations can read the `pool_id` from the PositionManager's `position` field instead of passing it as a parameter.
+## Contents
+
+- [Helper: Get Pool ID from PositionManager](#helper-get-pool-id-from-positionmanager)
+- [Add Liquidity (Protocol)](#add-liquidity-protocol)
+- [Remove Liquidity (Protocol)](#remove-liquidity-protocol)
+- [Transfer Fee to Balance (Protocol)](#transfer-fee-to-balance-protocol)
+- [Collect Fees (Protocol)](#collect-fees-protocol)
+- [Scallop Lending (Supply / Redeem)](#scallop-lending-supply-redeem)
 
 ## Helper: Get Pool ID from PositionManager
 

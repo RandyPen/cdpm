@@ -194,6 +194,3 @@ function parseError(error: string): string {
 }
 ```
 
-## Complete Example
-
-See [examples/protocol-integration.ts](examples/protocol-integration.ts) for a complete protocol integration example.

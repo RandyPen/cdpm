@@ -1,10 +1,16 @@
 # Composing a Cross-Protocol PTB (cdpm + Scallop + Kai)
 
-cdpm wraps both Scallop and Kai SAV with a hot-potato ticket pattern (`scallop_start_*` / `kai_start_*` returning a no-`drop` no-`store` no-`key` ticket that must be consumed by `*_finish_*` in the same PTB). Single-protocol PTB recipes for each side live in [`scallop-lending-math.md`](./scallop-lending-math.md) §10.5 and [`kai-lending-math.md`](./kai-lending-math.md) §10.5. **This page covers the bridge** — how a third-party developer composes cdpm raw `moveCall`s, Scallop SDK builders, and Kai SDK builders into a single Mysten `Transaction`, including the atomic Scallop ↔ Kai rebalance flow.
+## Contents
 
-The two sub-pages cover the **what** of each SDK's builder surface; this page covers the **how** of putting them together.
-
----
+- [1. Interop Fact: One Mysten `Transaction` Backs All Three](#1-interop-fact-one-mysten-transaction-backs-all-three)
+- [2. Approach Comparison](#2-approach-comparison)
+- [3. Canonical Pattern](#3-canonical-pattern)
+- [4. Worked Examples](#4-worked-examples)
+- [5. Caveats](#5-caveats)
+- [5.1 Caller-Specific Full-Drain Patterns](#51-caller-specific-full-drain-patterns)
+- [6. When to Reach for Approach A Instead](#6-when-to-reach-for-approach-a-instead)
+- [7. SDK File Reference](#7-sdk-file-reference)
+- [8. Cross-Reference](#8-cross-reference)
 
 ## 1. Interop Fact: One Mysten `Transaction` Backs All Three
 
@@ -400,8 +406,9 @@ The right way to handle full drain depends on **who signs the PTB**:
 | Signer | PM owner wallet | `AccessList.allow` keypair | Address in `pm.agents` |
 | Goal | Truly empty `pm.lending` (so `user_close_pm` passes `ELendingNotEmpty 1004`) | Free up underlying for an `add_liquidity` on the next bin tick | Same as protocol |
 | Burn amount | `u64::MAX` (drain) | `min(neededWrapper, wrapperRaw − SAFE_MARGIN)` | Same as protocol |
-| Dust handling | `coin::join(coinT, topup)` between `*_start_redeem` and `*_finish_redeem` to satisfy the assert. Topup ≈ 30 raw underlying; spliced from `tx.gas` (SUI) or `getCoins → mergeCoins → splitCoins` (others). | Leave SAFE_MARGIN raw of wrapper behind. Residual is reclaimed at close-PM time. | Same. |
-| Where the topup ends up | Folded into `redeemed_amount` → `interest = redeemed − principal` includes it → service fee is taken on inflated interest → fee NOT bypassed. | n/a (no topup). | n/a. |
+| Dust handling | `coin::join(coinT, topup)` between `*_start_redeem` and `*_finish_redeem` to satisfy the assert. Topup ≈ 30 raw underlying. | Leave SAFE_MARGIN raw of wrapper behind. Residual is reclaimed at close-PM time. | Same. |
+| Topup source | **Three-tier priority** — `pm.balance[T]` (`user_remove_liquidity_from_balance<T>`, partial split keeps bag key) → `pm.fee[T]` (`user_withdraw_fee<T>`) → user wallet (`tx.gas` for SUI, else `getCoins → mergeCoins → splitCoins`). The off-chain bag-key pre-scan is needed for close-PM anyway (`destroy_empty`), so the resolver is free. | n/a | n/a |
+| Where the topup ends up | Folded into `redeemed_amount` → `interest = redeemed − principal` includes it → service fee is taken on inflated interest → fee NOT bypassed. Net user cost = `topup × fee_rate ≈ 3 raw` at 10% rate, **invariant to which tier supplied the topup**. | n/a (no topup). | n/a. |
 
 Recommended client-side default constants (illustrative — clients should define these at the top of their lending-helper module; both apply uniformly to Kai and Scallop):
 
@@ -419,12 +426,17 @@ See the math derivation in [`kai-lending-math.md` §9.1](./kai-lending-math.md#9
 PTB shape diff (Kai, user vs protocol):
 
 ```ts
-// USER close-PM (full drain via topup)
+// USER close-PM (full drain via topup; three-tier source resolver)
+// topupCoin = await resolveTopup(tx, client, pmSnap, pmId, T, owner):
+//   pm.balance[T] ≥ 30 raw  →  user_remove_liquidity_from_balance<T>(30)
+//   else pm.fee[T] ≥ 30 raw →  user_withdraw_fee<T>(30)
+//   else SUI               →  tx.splitCoins(tx.gas, [30])
+//   else                   →  getCoins → mergeCoins → splitCoins(30)
 const startRet = tx.moveCall({ target: `${cdpm}::cdpm::kai_start_redeem`,
   arguments: [..., tx.pure.u64(REDEEM_ALL_U64), ...] });
 // ... vault::withdraw / supply_pool::withdraw / redeem_withdraw_ticket / from_balance → coinT
 tx.moveCall({ target: '0x2::coin::join', typeArguments: [T],
-  arguments: [coinT, topupCoin] });       // <— NEW: closes the dust gap
+  arguments: [coinT, topupCoin] });       // <— closes the dust gap
 tx.moveCall({ target: `${cdpm}::cdpm::kai_finish_redeem`,
   arguments: [..., coinT, ...] });        // assert now passes
 

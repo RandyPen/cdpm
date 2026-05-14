@@ -1,5 +1,13 @@
 # Position Management
 
+## Contents
+
+- [Helper: Get Pool ID from PositionManager](#helper-get-pool-id-from-positionmanager)
+- [Add Liquidity](#add-liquidity)
+- [Remove Liquidity](#remove-liquidity)
+- [Extract Position (for Cetus DLMM Package Upgrade)](#extract-position-for-cetus-dlmm-package-upgrade)
+- [Balance Management](#balance-management)
+
 ## Helper: Get Pool ID from PositionManager
 
 When working with a PositionManager, you can read the associated pool ID from its `position` field:

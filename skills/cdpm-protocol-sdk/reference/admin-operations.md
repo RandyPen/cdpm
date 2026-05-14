@@ -1,7 +1,11 @@
 # Admin Operations
 
-> **Note — FeeHouse lifecycle**
-> `FeeHouse` is a single shared object created during `init`; there is no runtime creation function. Admin workflows only read/update the existing `FeeHouse` (e.g. `admin_set_fee`, `admin_collect_fee_return_coin`) — they never construct a new one.
+## Contents
+
+- [Set Fee Rate](#set-fee-rate)
+- [Manage AccessList](#manage-accesslist)
+- [Collect Protocol Fees](#collect-protocol-fees)
+- [Transfer AdminCap](#transfer-admincap)
 
 ## Set Fee Rate
 

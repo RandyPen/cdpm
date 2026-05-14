@@ -1,26 +1,14 @@
 # Scallop Lending — Agent Operations
 
-> **REQUIRED — every Scallop PTB starts with `accrue_interest_for_market`.**
-> Any PTB that calls `scallop_start_supply` or `scallop_start_redeem` MUST have
-> `protocol::accrue_interest::accrue_interest_for_market(version, market, clock)`
-> as **command 0**. cdpm enforces this on-chain: omitting the pre-step aborts at
-> the cdpm boundary with `EStaleScallopState (1011)` before any balance is touched.
-> The Scallop TS SDK helpers `scallopTx.deposit` / `depositQuick`
-> (`sui-scallop-sdk/src/builders/coreBuilder.ts:139-148, 335-358`) do **NOT**
-> inject this call — you must add it explicitly. There is no SDK shortcut and no
-> optional path.
+## Contents
 
-cdpm exposes a hot-potato lending integration with **Scallop** alongside Kai SAV. Agents authorized in `pm.agents` can drive supply / redeem against a Scallop `Market` exactly like they can against Kai, paying the same yield fee on interest. The same `assert_caller_authorized` gate inside `scallop_start_supply` / `scallop_start_redeem` admits **owner**, **agent**, or **whitelisted protocol bot in agents-empty mode**. `scallop_finish_*` only check `ticket.pm_id == object::id(pm)`.
-
-This page is the agent-flavored counterpart to [`cdpm-user-sdk/reference/scallop-lending.md`](../../cdpm-user-sdk/reference/scallop-lending.md). It re-emphasizes (most critical first):
-
-- **Pre-call accrual is mandatory; cdpm now enforces it.** Unlike Kai, Scallop's reserve is **not** auto-accruing per block. `scallop_start_supply` / `scallop_start_redeem` now take `&Clock` and assert `borrow_dynamics::last_updated_by_type(market.borrow_dynamics(), type<T>) == clock::timestamp_ms(clock) / 1000`. Omitting `protocol::accrue_interest::accrue_interest_for_market(version, market, clock)` as command 0 aborts at the cdpm boundary with `EStaleScallopState (1011)` before any balance is touched. **This is non-negotiable for every Scallop PTB the agent signs.**
-- **Canonical Market binding.** `start_*` records `market_id = object::id(market)` on the ticket; `scallop_finish_*` re-takes `&Market` and asserts the id matches, aborting with `EWrongMarket (1012)`. Reuse the same `tx.object(SCALLOP_MARKET_ID)` across `start_*` and `finish_*`.
-- **Yield fee applies to agents.** `scallop_finish_redeem` computes `fee_amount = floor(max(0, redeemed − principal_portion) × fee_house.fee_rate / 10_000)` regardless of caller, so agent-driven Scallop redeems pay the same fee as owner / protocol redeems.
-- **No escape hatch for lending.** cdpm does **not** expose a `user_extract_scallop_market_coin`-style wrapper-extraction function for anyone — neither agents nor the owner. If Scallop is unreachable (Version bump, paused market, etc.) the abort happens inside the inner `mint::mint` / `redeem::redeem` call before any cdpm `*_finish_*` command runs, so the hot-potato ticket is never consumed and `pm.lending` stays intact. Recovery is to retry the normal `scallop_start_redeem` → `redeem::redeem` → `scallop_finish_redeem` flow once Scallop ships an SDK update against the new Version; cdpm itself stays operational throughout.
-- **Agents cannot short-change the vault.** `scallop_finish_supply` requires `Coin<MarketCoin<T>>` and asserts `actual >= ticket.expected_scoin`. `MarketCoin<T>` has only `drop` ability and no public constructor — the only way to obtain a non-zero `Coin<MarketCoin<T>>` is through Scallop's `protocol::mint::mint<T>`, so external code cannot mint a fake sCoin. The same defence applies on redeem (`Coin<T>` only comes out of `protocol::redeem::redeem<T>` after burning a real sCoin).
-
----
+- [Agent PTB Recipe: Supply](#agent-ptb-recipe-supply)
+- [Agent PTB Recipe: Redeem (with yield-fee deduction)](#agent-ptb-recipe-redeem-with-yield-fee-deduction)
+- [When to Call `scallop_start_supply` vs Leave Funds Idle](#when-to-call-scallop_start_supply-vs-leave-funds-idle)
+- [Pre-Flight: `accrue_interest_for_market` Snapshot Timing](#pre-flight-accrue_interest_for_market-snapshot-timing)
+- [Failure Modes](#failure-modes)
+- [Choosing Between Scallop and Kai for the Same `T`](#choosing-between-scallop-and-kai-for-the-same-t)
+- [Event Subscription](#event-subscription)
 
 ## Agent PTB Recipe: Supply
 
