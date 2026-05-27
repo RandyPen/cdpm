@@ -281,6 +281,8 @@ async function protocolRedeemForTargetNet(
 
 **Cap the burn at `wrapperRaw − LENDING_SAFE_MARGIN_WRAPPER_RAW`** (recommended client-side default `100n` sCoin raw) — same `capRedeemBurnRaw` helper as the Kai branch (see [`cdpm-protocol-sdk/reference/kai-lending.md`](./kai-lending.md)); the helper is protocol-agnostic. Residual stays in `pm.lending` and is reclaimed when the user closes the PM.
 
+**Dust topup (defensive).** Unlike Kai — where the strategy-walk floor-div makes a `coin::join` topup **mandatory on every redeem** (see [`kai-lending.md` "Floor-div dust"](./kai-lending.md)) — Scallop's `redeem::redeem` shares cdpm's exact floor-div formula, so `redeemed == expected` and no topup is normally needed. For parity and robustness against a future Scallop rounding change, cdpm's own worker merges the **same tiny `Coin<T>` topup (≈ 3 raw, sourced from the bot wallet) on the Scallop path too** before `scallop_finish_redeem`. It is a near-zero donation (the whole topup lands in `pm.balance[T]`) — keep it minimal exactly as on the Kai path; oversizing it on a hot path accumulates. External bots may omit it for Scallop, but wiring it identically for both protocols is the simpler, safer default.
+
 Always re-snapshot reserve and vault state *after* the `accrue_interest_for_market` command and before sizing — stale snapshots predict a higher `denom` than the live reserve and can leave the bot 1-2 underlying short.
 
 ---
