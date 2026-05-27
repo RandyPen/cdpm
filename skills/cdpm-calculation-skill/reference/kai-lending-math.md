@@ -493,6 +493,16 @@ function capRedeemBurnRaw(exact: bigint, wrapperRaw: bigint): bigint | null {
 - **Frequent automated caller (worker / agent / protocol bot) → minimal, ~`3n` raw.** `3n` = the ~2-3 raw single-strategy dust ceiling, provably ≥ the real dust while donating ≤ 3 raw (often 0). On a hot path an oversized topup is a steady wallet drain. cdpm's worker uses `RECONCILE_REDEEM_TOPUP_RAW = 3` (env-tunable). **Source is the caller's OWN wallet only** — there is no `protocol_*`/`agent_*` call that yields a spendable `Coin<T>` from PM bags (the PM-internal withdraws are owner-gated), so the bot wallet must hold a little of each redeemable underlying (`tx.gas` for SUI; `listCoins → mergeCoins → splitCoins` otherwise).
 - **Rare owner close-PM → reliability over thrift, `FINISH_REDEEM_TOPUP_DEFAULT_RAW = 30n`** (≈10× the dust ceiling). Not a hot path, so the margin is harmless. Owner-signed, so it can use a **three-tier source**: `pm.balance[T]` (`user_remove_liquidity_from_balance<T>`) → `pm.fee[T]` (`user_withdraw_fee<T>`) → user wallet. Both PM-internal entrypoints `balance::split` when `amount < entry_value`, so a 30-raw slice doesn't disturb the entry. Net user cost is `topup × fee_rate ≈ 3 raw` at 10% fee_rate, **independent of which tier supplied it** (only the `topup × fee_rate` portion is consumed by the service fee — pulling from `pm.fee[T]` is not "fee-on-fee"). Preferring the PM-internal tiers is purely UX: the close-PM PTB stays self-contained when the wallet holds no `Coin<T>`; the key pre-scan is free since `user_close_pm` enumerates both bags for `destroy_empty` anyway.
 
+**(3) When you DEPLOY the redeemed underlying in the SAME PTB (redeem → add_liquidity), size the deploy to a guaranteed LOWER bound of the conversion, not to the requested `want`.** The redeem and the deploy should both come from one proportional `share` under one live ratio `r`:
+
+```
+wrapperSplit = totalWrapper × share          // share = want / heldUnderlying = want / r ; the YT/sCoin to burn
+realized     = floor(amountRaw × r) − M      // guaranteed-minimum underlying the burn surfaces (M = small floor margin, ~3 raw)
+deployTotal ≤ available + realized           // clamp the add to this, NOT available + want
+```
+
+`want / r` and `floor(amountRaw × r)` are the two sides of the same linear conversion, so the burned wrapper and the deployed underlying agree by construction. But the actual underlying that lands in the bag is `floor(amountRaw × r) − walkDust` (+ the topup from (2)); clamping the deploy to `realized = floor(amountRaw × r) − M` (a strict lower bound) is what prevents the deploy from out-running the redeem and aborting `0x2::balance::split` ENotEnough (Move abort 2) at `add_liquidity`. cdpm's worker uses `REDEEM_REALIZED_SAFETY_MARGIN_RAW = 3` (env-tunable); the unrealized few raw stay in the bag and deploy next cycle. This is separate from, and additional to, the (2) topup that satisfies the `finish_redeem` assert.
+
 Cross-references:
 
 - `cdpm-protocol-sdk/reference/kai-lending.md` — protocol PTB template (no full drain)
