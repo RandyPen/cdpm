@@ -397,50 +397,40 @@ await client.signAndExecuteTransaction({ signer, transaction: tx });
 
 ## 5.1 Caller-Specific Full-Drain Patterns
 
-`*_finish_redeem` asserts `redeemed_amount >= expected_underlying` (cdpm `EAmountShortfall = 1009`). For **Kai**, the upstream `kai_leverage_supply_pool::withdraw → vault::redeem_withdraw_ticket` chain applies floor-div per strategy step, accumulating O(strategies × 1 raw) dust that hides behind §7's ceiling math on partial redeems but trips the assert on a full drain (`ytAmount = u64::MAX`). For **Scallop**, the upstream `protocol::redeem::redeem` uses the same single floor-div formula as cdpm's `compute_expected_underlying_scallop`, so the redeemed amount equals `expected_underlying` exactly in the common case — but the same cap pattern is applied for defense-in-depth and parity with Kai. See `kai-lending-math.md` §9.1 and `scallop-lending-math.md` §9.1 for the math.
+`*_finish_redeem` enforces `redeemed_amount + REDEEM_DUST_TOLERANCE_RAW >= expected_underlying` (cdpm `EAmountShortfall = 1009`; `REDEEM_DUST_TOLERANCE_RAW = 4`). For **Kai**, the upstream `kai_leverage_supply_pool::withdraw → vault::redeem_withdraw_ticket` chain floors twice per strategy, so dust ≈ 2 raw × (strategies drawn) — single-strategy mainnet SAVs ⟹ ≤2 raw, well within the on-chain tolerance. For **Scallop**, the upstream `protocol::redeem::redeem` uses the same single floor-div formula as cdpm's `compute_expected_underlying_scallop`, so the redeemed amount equals `expected_underlying` exactly in the common case. See [`kai-lending-math.md` §9.1](./kai-lending-math.md#91-floor-div-dust-on-chain-tolerance-and-deploy-side-floor) and [`scallop-lending-math.md` §9.1](./scallop-lending-math.md#91-floor-div-dust-on-chain-tolerance-and-the-lending_safe_margin_wrapper_raw-floor) for the math.
 
-The right way to handle full drain depends on **who signs the PTB**:
+**No `coin::join` topup is required** anywhere — cdpm absorbs floor-div dust on-chain. Capping the burn still matters as a *separate* concern (leaves a residual entry; avoids removing the bag key on partial drains). Caller-shape choices:
 
 | | User close-PM | Protocol (worker) | Agent |
 |---|---|---|---|
 | Signer | PM owner wallet | `AccessList.allow` keypair | Address in `pm.agents` |
 | Goal | Truly empty `pm.lending` (so `user_close_pm` passes `ELendingNotEmpty 1004`) | Free up underlying for an `add_liquidity` on the next bin tick | Same as protocol |
 | Burn amount | `u64::MAX` (drain) | `min(neededWrapper, wrapperRaw − SAFE_MARGIN)` | Same as protocol |
-| Dust handling | `coin::join(coinT, topup)` between `*_start_redeem` and `*_finish_redeem` to satisfy the assert. Topup ≈ 30 raw underlying. | Leave SAFE_MARGIN raw of wrapper behind. Residual is reclaimed at close-PM time. | Same. |
-| Topup source | **Three-tier priority** — `pm.balance[T]` (`user_remove_liquidity_from_balance<T>`, partial split keeps bag key) → `pm.fee[T]` (`user_withdraw_fee<T>`) → user wallet (`tx.gas` for SUI, else `getCoins → mergeCoins → splitCoins`). The off-chain bag-key pre-scan is needed for close-PM anyway (`destroy_empty`), so the resolver is free. | n/a | n/a |
-| Where the topup ends up | Folded into `redeemed_amount` → `interest = redeemed − principal` includes it → service fee is taken on inflated interest → fee NOT bypassed. Net user cost = `topup × fee_rate ≈ 3 raw` at 10% rate, **invariant to which tier supplied the topup**. | n/a (no topup). | n/a. |
+| Dust handling | Handled on-chain by `REDEEM_DUST_TOLERANCE_RAW`. No topup needed. | Same. | Same. |
 
-Recommended client-side default constants (illustrative — clients should define these at the top of their lending-helper module; both apply uniformly to Kai and Scallop):
+Recommended client-side default constants:
 
 ```ts
-// raw units of the wrapper token (YT for Kai, sCoin for Scallop)
+// raw units of the wrapper token (YT for Kai, sCoin for Scallop). Leaves a
+// residual entry on partial drains so the bag key survives.
 const LENDING_SAFE_MARGIN_WRAPPER_RAW = 100n;
-// raw units of underlying T for the close-PM top-up
-const FINISH_REDEEM_TOPUP_DEFAULT_RAW = 30n;
 // sentinel for "drain everything" — pulls min(arg, available) inside cdpm
 const REDEEM_ALL_U64 = 0xffffffffffffffffn;
 ```
 
-See the math derivation in [`kai-lending-math.md` §9.1](./kai-lending-math.md#91-full-drain-dust-and-the-lending_safe_margin_wrapper_raw-floor) / [`scallop-lending-math.md` §9.1](./scallop-lending-math.md#91-full-drain-dust-and-the-lending_safe_margin_wrapper_raw-floor).
+**Optional fallback (only if dust ever exceeds 4 raw).** A future ≥3-strategy vault could surface dust > 4 raw; in that rare case, merge a small `Coin<T>` topup of `observedDust − 4` raw between `*_start_redeem` and `*_finish_redeem` via `0x2::coin::join`. Preferred over raising the on-chain constant (which would weaken the high-value-asset margin — see [`kai-lending-math.md` §9.1](./kai-lending-math.md#91-floor-div-dust-on-chain-tolerance-and-deploy-side-floor)).
 
-PTB shape diff (Kai, user vs protocol):
+PTB shape (Kai, user vs protocol — both topup-free):
 
 ```ts
-// USER close-PM (full drain via topup; three-tier source resolver)
-// topupCoin = await resolveTopup(tx, client, pmSnap, pmId, T, owner):
-//   pm.balance[T] ≥ 30 raw  →  user_remove_liquidity_from_balance<T>(30)
-//   else pm.fee[T] ≥ 30 raw →  user_withdraw_fee<T>(30)
-//   else SUI               →  tx.splitCoins(tx.gas, [30])
-//   else                   →  getCoins → mergeCoins → splitCoins(30)
+// USER close-PM (full drain)
 const startRet = tx.moveCall({ target: `${cdpm}::cdpm::kai_start_redeem`,
   arguments: [..., tx.pure.u64(REDEEM_ALL_U64), ...] });
 // ... vault::withdraw / supply_pool::withdraw / redeem_withdraw_ticket / from_balance → coinT
-tx.moveCall({ target: '0x2::coin::join', typeArguments: [T],
-  arguments: [coinT, topupCoin] });       // <— closes the dust gap
 tx.moveCall({ target: `${cdpm}::cdpm::kai_finish_redeem`,
-  arguments: [..., coinT, ...] });        // assert now passes
+  arguments: [..., coinT, ...] });        // assert auto-tolerates ≤4 raw dust
 
-// PROTOCOL / AGENT partial (no topup, no full drain)
+// PROTOCOL / AGENT partial (cap-the-burn)
 const safe = wrapperRaw - LENDING_SAFE_MARGIN_WRAPPER_RAW;
 const burn = exact >= safe ? safe : exact;
 tx.moveCall({ target: `${cdpm}::cdpm::kai_start_redeem`,

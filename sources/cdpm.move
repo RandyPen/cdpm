@@ -28,6 +28,17 @@ use kai_sav::vault as kai_vault;
 const FEE_DENOMINATOR: u128 = 10000;
 const MAX_FEE_RATE: u128 = 3000;
 
+/// Max raw underlying the protocol redeem path may floor below cdpm's
+/// single-floor `expected_underlying`. The Kai withdrawal walk floors twice
+/// per strategy (underlying->shares muldiv, then shares->underlying
+/// redeem_lossy), so dust ~= 2 raw x (strategies drawn from); single-strategy
+/// mainnet SAVs => <=2 raw. Scallop shares cdpm's exact floor-div => ~0 raw
+/// (defensive only). A relaxed `>=` lets an authorized agent skim at most this
+/// many raw per redeem, but each call burns gas: at 4 raw the worst-case asset
+/// (xBTC, ~$0.001/raw) skims ~0.67x per-tx gas at today's BTC/SUI ratio, i.e.
+/// net-negative. Absolute, not bps, because the dust is constant in principal.
+const REDEEM_DUST_TOLERANCE_RAW: u64 = 4;
+
 const ENotOwner: u64          = 1001;     // caller is not pm.owner
 const ENotAllow: u64          = 1002;     // caller not in agents / access list (or invariant broken)
 const EInvalidFeeRate: u64    = 1003;     // admin_set_fee given rate > MAX_FEE_RATE (30%)
@@ -893,14 +904,10 @@ public fun protocol_collect_fee<CoinTypeA, CoinTypeB>(
         versioned,
         ctx,
     );
-    let amount_a_before = balance_a.value();
-    let amount_b_before = balance_b.value();
-    take_fee<CoinTypeA>(&mut balance_a, fee_house);
-    take_fee<CoinTypeB>(&mut balance_b, fee_house);
+    let fee_a = take_fee<CoinTypeA>(&mut balance_a, fee_house);
+    let fee_b = take_fee<CoinTypeB>(&mut balance_b, fee_house);
     let amount_a = balance_a.value();
     let amount_b = balance_b.value();
-    let fee_a = amount_a_before - amount_a;
-    let fee_b = amount_b_before - amount_b;
     add_to_fee<CoinTypeA>(pm, balance_a.into_coin(ctx));
     add_to_fee<CoinTypeB>(pm, balance_b.into_coin(ctx));
     
@@ -934,10 +941,8 @@ public fun protocol_collect_reward<CoinTypeA, CoinTypeB, RewardType>(
         versioned,
         ctx,
     );
-    let amount_before = balance_reward.value();
-    take_fee<RewardType>(&mut balance_reward, fee_house);
+    let fee_amount = take_fee<RewardType>(&mut balance_reward, fee_house);
     let amount = balance_reward.value();
-    let fee_amount = amount_before - amount;
     add_to_fee<RewardType>(pm, balance_reward.into_coin(ctx));
     
     event::emit(ProtocolRewardCollected {
@@ -1261,7 +1266,7 @@ fun add_to_balance<T>(
 ) {
     if (coin.value() == 0) { coin.destroy_zero(); return };
     let coin_type = type_name::with_defining_ids<T>().into_string();
-    if (bag::contains<String>(&pm.balance, coin_type)) {
+    if (bag::contains_with_type<String, Balance<T>>(&pm.balance, coin_type)) {
         balance::join<T>(bag::borrow_mut(&mut pm.balance, coin_type), coin.into_balance());
     } else {
         bag::add<String, Balance<T>>(&mut pm.balance, coin_type, coin.into_balance());
@@ -1275,7 +1280,7 @@ fun withdraw_from_balance<T>(
 ): Coin<T> {
     if (amount == 0) return coin::zero<T>(ctx);
     let coin_type = type_name::with_defining_ids<T>().into_string();
-    assert!(bag::contains<String>(&pm.balance, coin_type), ENoSuchBalance);
+    assert!(bag::contains_with_type<String, Balance<T>>(&pm.balance, coin_type), ENoSuchBalance);
     let balance_bm = bag::borrow_mut<String, Balance<T>>(&mut pm.balance, coin_type);
     let balance_amount = balance::value<T>(balance_bm);
     if (amount >= balance_amount) {
@@ -1291,7 +1296,7 @@ fun add_to_fee<T>(
 ) {
     if (coin.value() == 0) { coin.destroy_zero(); return };
     let coin_type = type_name::with_defining_ids<T>().into_string();
-    if (bag::contains<String>(&pm.fee, coin_type)) {
+    if (bag::contains_with_type<String, Balance<T>>(&pm.fee, coin_type)) {
         balance::join<T>(bag::borrow_mut(&mut pm.fee, coin_type), coin.into_balance());
     } else {
         bag::add<String, Balance<T>>(&mut pm.fee, coin_type, coin.into_balance());
@@ -1305,7 +1310,7 @@ fun withdraw_from_fee<T>(
 ): Coin<T> {
     if (amount == 0) return coin::zero<T>(ctx);
     let coin_type = type_name::with_defining_ids<T>().into_string();
-    assert!(bag::contains<String>(&pm.fee, coin_type), ENoSuchBalance);
+    assert!(bag::contains_with_type<String, Balance<T>>(&pm.fee, coin_type), ENoSuchBalance);
     let balance_bm = bag::borrow_mut<String, Balance<T>>(&mut pm.fee, coin_type);
     let balance_amount = balance::value<T>(balance_bm);
     if (amount >= balance_amount) {
@@ -1315,14 +1320,22 @@ fun withdraw_from_fee<T>(
     }
 }
 
+/// Takes `fee_house.fee_rate / FEE_DENOMINATOR` of the entire `balance_in` as
+/// protocol fee and routes it to `FeeHouse`. Returns the raw `fee_amount`
+/// taken (0 if the cut rounds to zero). For full-amount-billable income —
+/// DLMM swap fees, reward claims. **Do NOT use on lending redeem paths**:
+/// `*_finish_redeem` charges the fee only on `interest = redeemed − principal`
+/// and keeps its inline carve-out (see scallop_finish_redeem / kai_finish_redeem).
 fun take_fee<T>(
     balance_in: &mut Balance<T>,
     fee_house: &mut FeeHouse,
-) {
+): u64 {
     let amount_in = balance::value<T>(balance_in);
     let fee_amount = (((amount_in as u128) * (fee_house.fee_rate as u128) / FEE_DENOMINATOR) as u64);
+    if (fee_amount == 0) { return 0 };
     let fee = balance::split<T>(balance_in, fee_amount);
     deposit_into_fee_house<T>(fee_house, fee);
+    fee_amount
 }
 
 fun deposit_into_fee_house<T>(
@@ -1330,7 +1343,7 @@ fun deposit_into_fee_house<T>(
     fee: Balance<T>,
 ) {
     let coin_type = type_name::with_defining_ids<T>().into_string();
-    if (bag::contains<String>(&fee_house.fee, coin_type)) {
+    if (bag::contains_with_type<String, Balance<T>>(&fee_house.fee, coin_type)) {
         balance::join<T>(bag::borrow_mut(&mut fee_house.fee, coin_type), fee);
     } else {
         bag::add<String, Balance<T>>(&mut fee_house.fee, coin_type, fee);
@@ -1356,7 +1369,7 @@ fun add_to_scallop_lending<T>(
     principal_added: u64,
 ) {
     let coin_type = type_name::with_defining_ids<T>().into_string();
-    if (bag::contains<String>(&pm.lending, coin_type)) {
+    if (bag::contains_with_type<String, ScallopVault<T>>(&pm.lending, coin_type)) {
         let vault = bag::borrow_mut<String, ScallopVault<T>>(&mut pm.lending, coin_type);
         balance::join<MarketCoin<T>>(&mut vault.scoin, scoin);
         vault.principal = vault.principal + principal_added;
@@ -1374,7 +1387,7 @@ fun pull_from_scallop_lending<T>(
     want_amount: u64,
 ): (Balance<MarketCoin<T>>, u64) {
     let coin_type = type_name::with_defining_ids<T>().into_string();
-    assert!(bag::contains<String>(&pm.lending, coin_type), ENoSuchVault);
+    assert!(bag::contains_with_type<String, ScallopVault<T>>(&pm.lending, coin_type), ENoSuchVault);
     let total_scoin = balance::value<MarketCoin<T>>(
         &bag::borrow<String, ScallopVault<T>>(&pm.lending, coin_type).scoin,
     );
@@ -1528,7 +1541,12 @@ public fun scallop_finish_redeem<T>(
     assert!(pm_id == object::id(pm), EWrongPm);
     assert!(market_id == object::id(market), EWrongMarket);
     let redeemed_amount = underlying.value();
-    assert!(redeemed_amount >= expected_underlying, EAmountShortfall);
+    // Tolerate floor-div dust: the protocol redeem path may floor a few raw
+    // below cdpm's single-floor `expected_underlying` (see REDEEM_DUST_TOLERANCE_RAW).
+    // Subtraction is guarded so it never underflows; no addition, so no overflow.
+    if (expected_underlying > redeemed_amount) {
+        assert!(expected_underlying - redeemed_amount <= REDEEM_DUST_TOLERANCE_RAW, EAmountShortfall);
+    };
     let mut underlying_balance = underlying.into_balance();
 
     let (interest, fee_amount) = if (redeemed_amount > principal_portion) {
@@ -1565,7 +1583,7 @@ fun add_to_kai_lending<T, YT>(
     principal_added: u64,
 ) {
     let key = type_name::with_defining_ids<YT>().into_string();
-    if (bag::contains<String>(&pm.lending, key)) {
+    if (bag::contains_with_type<String, KaiVault<T, YT>>(&pm.lending, key)) {
         let v = bag::borrow_mut<String, KaiVault<T, YT>>(&mut pm.lending, key);
         balance::join<YT>(&mut v.yt_balance, yt_balance);
         v.principal = v.principal + principal_added;
@@ -1583,7 +1601,7 @@ fun pull_from_kai_lending<T, YT>(
     want_amount: u64,
 ): (Balance<YT>, u64) {
     let key = type_name::with_defining_ids<YT>().into_string();
-    assert!(bag::contains<String>(&pm.lending, key), ENoSuchVault);
+    assert!(bag::contains_with_type<String, KaiVault<T, YT>>(&pm.lending, key), ENoSuchVault);
     let total_yt = balance::value<YT>(
         &bag::borrow<String, KaiVault<T, YT>>(&pm.lending, key).yt_balance,
     );
@@ -1711,7 +1729,13 @@ public fun kai_finish_redeem<T, YT>(
     assert!(pm_id == object::id(pm), EWrongPm);
     assert!(vault_id == object::id(vault), EWrongVault);
     let redeemed_amount = underlying.value();
-    assert!(redeemed_amount >= expected_underlying, EAmountShortfall);
+    // Tolerate floor-div dust: the Kai strategy walk floors twice per strategy,
+    // surfacing a few raw below cdpm's single-floor `expected_underlying`
+    // (see REDEEM_DUST_TOLERANCE_RAW). Subtraction is guarded so it never
+    // underflows; no addition, so no overflow.
+    if (expected_underlying > redeemed_amount) {
+        assert!(expected_underlying - redeemed_amount <= REDEEM_DUST_TOLERANCE_RAW, EAmountShortfall);
+    };
     let mut underlying_balance = underlying.into_balance();
 
     let (interest, fee_amount) = if (redeemed_amount > principal_portion) {
@@ -1800,7 +1824,7 @@ public fun test_only_withdraw_from_fee<T>(
 public fun test_only_take_fee<T>(
     balance_in: &mut Balance<T>,
     fee_house: &mut FeeHouse,
-) {
+): u64 {
     take_fee<T>(balance_in, fee_house)
 }
 
@@ -1980,6 +2004,11 @@ public fun spec_scallop_supply_ticket_expected_scoin<T>(ticket: &ScallopSupplyTi
 }
 
 #[spec_only]
+public fun spec_scallop_supply_ticket_principal<T>(ticket: &ScallopSupplyTicket<T>): u64 {
+    ticket.principal
+}
+
+#[spec_only]
 public fun spec_scallop_redeem_ticket_pm_id<T>(ticket: &ScallopRedeemTicket<T>): ID {
     ticket.pm_id
 }
@@ -1992,6 +2021,11 @@ public fun spec_scallop_redeem_ticket_market_id<T>(ticket: &ScallopRedeemTicket<
 #[spec_only]
 public fun spec_scallop_redeem_ticket_expected_underlying<T>(ticket: &ScallopRedeemTicket<T>): u64 {
     ticket.expected_underlying
+}
+
+#[spec_only]
+public fun spec_scallop_redeem_ticket_principal_portion<T>(ticket: &ScallopRedeemTicket<T>): u64 {
+    ticket.principal_portion
 }
 
 #[spec_only]
@@ -2010,6 +2044,11 @@ public fun spec_kai_supply_ticket_expected_yt<T, YT>(ticket: &KaiSupplyTicket<T,
 }
 
 #[spec_only]
+public fun spec_kai_supply_ticket_principal<T, YT>(ticket: &KaiSupplyTicket<T, YT>): u64 {
+    ticket.principal
+}
+
+#[spec_only]
 public fun spec_kai_redeem_ticket_pm_id<T, YT>(ticket: &KaiRedeemTicket<T, YT>): ID {
     ticket.pm_id
 }
@@ -2022,4 +2061,305 @@ public fun spec_kai_redeem_ticket_vault_id<T, YT>(ticket: &KaiRedeemTicket<T, YT
 #[spec_only]
 public fun spec_kai_redeem_ticket_expected_underlying<T, YT>(ticket: &KaiRedeemTicket<T, YT>): u64 {
     ticket.expected_underlying
+}
+
+#[spec_only]
+public fun spec_kai_redeem_ticket_principal_portion<T, YT>(ticket: &KaiRedeemTicket<T, YT>): u64 {
+    ticket.principal_portion
+}
+
+#[spec_only]
+public fun spec_redeem_dust_tolerance_raw(): u64 {
+    REDEEM_DUST_TOLERANCE_RAW
+}
+
+#[spec_only]
+public fun spec_max_fee_rate(): u64 {
+    (MAX_FEE_RATE as u64)
+}
+
+// ---------------------------------------------------------------------------
+// Spec-only state probes for finish_* `requires` clauses.
+//
+// These let the spec read the pre-call state of `pm.lending` / `pm.balance` /
+// `fee_house.fee` so it can assume away balance::join overflow paths that the
+// real cross-protocol PTB flow never reaches (skills/cdpm-calculation-skill/
+// reference/cross-protocol-ptb.md: ticket.principal comes from clamped coin
+// values, not arbitrary u64). Returns 0 when the bag entry is absent so the
+// spec can unconditionally write `requires(probe + delta <= U64_MAX)`.
+// ---------------------------------------------------------------------------
+
+#[spec_only]
+public fun spec_pm_scallop_vault_exists<T>(pm: &PositionManager): bool {
+    let key = type_name::with_defining_ids<T>().into_string();
+    bag::contains_with_type<String, ScallopVault<T>>(&pm.lending, key)
+}
+
+#[spec_only]
+public fun spec_pm_kai_vault_exists<T, YT>(pm: &PositionManager): bool {
+    let key = type_name::with_defining_ids<YT>().into_string();
+    bag::contains_with_type<String, KaiVault<T, YT>>(&pm.lending, key)
+}
+
+#[spec_only]
+public fun spec_pm_scallop_vault_principal<T>(pm: &PositionManager): u64 {
+    let key = type_name::with_defining_ids<T>().into_string();
+    if (bag::contains_with_type<String, ScallopVault<T>>(&pm.lending, key)) {
+        bag::borrow<String, ScallopVault<T>>(&pm.lending, key).principal
+    } else { 0 }
+}
+
+#[spec_only]
+public fun spec_pm_scallop_vault_scoin_value<T>(pm: &PositionManager): u64 {
+    let key = type_name::with_defining_ids<T>().into_string();
+    if (bag::contains_with_type<String, ScallopVault<T>>(&pm.lending, key)) {
+        balance::value<MarketCoin<T>>(&bag::borrow<String, ScallopVault<T>>(&pm.lending, key).scoin)
+    } else { 0 }
+}
+
+#[spec_only]
+public fun spec_pm_kai_vault_principal<T, YT>(pm: &PositionManager): u64 {
+    let key = type_name::with_defining_ids<YT>().into_string();
+    if (bag::contains_with_type<String, KaiVault<T, YT>>(&pm.lending, key)) {
+        bag::borrow<String, KaiVault<T, YT>>(&pm.lending, key).principal
+    } else { 0 }
+}
+
+#[spec_only]
+public fun spec_pm_kai_vault_yt_value<T, YT>(pm: &PositionManager): u64 {
+    let key = type_name::with_defining_ids<YT>().into_string();
+    if (bag::contains_with_type<String, KaiVault<T, YT>>(&pm.lending, key)) {
+        balance::value<YT>(&bag::borrow<String, KaiVault<T, YT>>(&pm.lending, key).yt_balance)
+    } else { 0 }
+}
+
+#[spec_only]
+public fun spec_pm_balance_value<T>(pm: &PositionManager): u64 {
+    let key = type_name::with_defining_ids<T>().into_string();
+    if (bag::contains_with_type<String, Balance<T>>(&pm.balance, key)) {
+        balance::value<T>(bag::borrow<String, Balance<T>>(&pm.balance, key))
+    } else { 0 }
+}
+
+#[spec_only]
+public fun spec_fee_house_balance_value<T>(fee_house: &FeeHouse): u64 {
+    let key = type_name::with_defining_ids<T>().into_string();
+    if (bag::contains_with_type<String, Balance<T>>(&fee_house.fee, key)) {
+        balance::value<T>(bag::borrow<String, Balance<T>>(&fee_house.fee, key))
+    } else { 0 }
+}
+
+// Bag size probes — `bag::add` increments `bag.size` (u64), so the prover
+// needs `size < u64::MAX` to discharge the implicit overflow. Real bags are
+// bounded by the number of distinct `coin_type` strings written across a
+// PM's lifetime — far below u64::MAX in any conceivable deployment.
+
+#[spec_only]
+public fun spec_pm_lending_size(pm: &PositionManager): u64 {
+    bag::length(&pm.lending)
+}
+
+#[spec_only]
+public fun spec_pm_balance_size(pm: &PositionManager): u64 {
+    bag::length(&pm.balance)
+}
+
+#[spec_only]
+public fun spec_pm_fee_size(pm: &PositionManager): u64 {
+    bag::length(&pm.fee)
+}
+
+#[spec_only]
+public fun spec_fee_house_size(fee_house: &FeeHouse): u64 {
+    bag::length(&fee_house.fee)
+}
+
+// `compute_expected_*` wrappers — exposed for `*_start_*_spec` postcondition
+// "ticket.expected_* == formula" assertions. Same body as the private fns.
+
+#[spec_only]
+public fun spec_compute_expected_scoin<T>(market: &Market, coin_amount: u64): u64 {
+    compute_expected_scoin<T>(market, coin_amount)
+}
+
+#[spec_only]
+public fun spec_compute_expected_underlying_scallop<T>(market: &Market, scoin_amount: u64): u64 {
+    compute_expected_underlying_scallop<T>(market, scoin_amount)
+}
+
+#[spec_only]
+public fun spec_compute_expected_yt<T, YT>(
+    vault: &kai_vault::Vault<T, YT>,
+    clock: &Clock,
+    t_amount: u64,
+): u64 {
+    compute_expected_yt<T, YT>(vault, clock, t_amount)
+}
+
+#[spec_only]
+public fun spec_compute_expected_underlying_kai<T, YT>(
+    vault: &kai_vault::Vault<T, YT>,
+    clock: &Clock,
+    yt_amount: u64,
+): u64 {
+    compute_expected_underlying_kai<T, YT>(vault, clock, yt_amount)
+}
+
+// Redeem ticket field accessors needed by `*_start_redeem_spec` ensures.
+
+#[spec_only]
+public fun spec_scallop_redeem_ticket_scoin_burned<T>(ticket: &ScallopRedeemTicket<T>): u64 {
+    ticket.scoin_burned
+}
+
+#[spec_only]
+public fun spec_kai_redeem_ticket_yt_burned<T, YT>(ticket: &KaiRedeemTicket<T, YT>): u64 {
+    ticket.yt_burned
+}
+
+// Thin `#[spec_only] public fun` wrappers around the private lending helpers
+// so the cross-module spec package can verify them. Each is a 1:1 forwarder;
+// the prover proves properties of the wrapper, which transfer trivially to
+// the wrapped private fn.
+
+#[spec_only]
+public fun spec_call_add_to_scallop_lending<T>(
+    pm: &mut PositionManager,
+    scoin: Balance<MarketCoin<T>>,
+    principal_added: u64,
+) {
+    add_to_scallop_lending<T>(pm, scoin, principal_added)
+}
+
+#[spec_only]
+public fun spec_call_pull_from_scallop_lending<T>(
+    pm: &mut PositionManager,
+    want_amount: u64,
+): (Balance<MarketCoin<T>>, u64) {
+    pull_from_scallop_lending<T>(pm, want_amount)
+}
+
+#[spec_only]
+public fun spec_call_add_to_kai_lending<T, YT>(
+    pm: &mut PositionManager,
+    yt_balance: Balance<YT>,
+    principal_added: u64,
+) {
+    add_to_kai_lending<T, YT>(pm, yt_balance, principal_added)
+}
+
+#[spec_only]
+public fun spec_call_pull_from_kai_lending<T, YT>(
+    pm: &mut PositionManager,
+    want_amount: u64,
+): (Balance<YT>, u64) {
+    pull_from_kai_lending<T, YT>(pm, want_amount)
+}
+
+// Wrappers for the `compute_expected_*` helpers.
+#[spec_only]
+public fun spec_call_compute_expected_scoin<T>(market: &Market, coin_amount: u64): u64 {
+    compute_expected_scoin<T>(market, coin_amount)
+}
+
+#[spec_only]
+public fun spec_call_compute_expected_underlying_scallop<T>(
+    market: &Market,
+    scoin_amount: u64,
+): u64 {
+    compute_expected_underlying_scallop<T>(market, scoin_amount)
+}
+
+#[spec_only]
+public fun spec_call_compute_expected_yt<T, YT>(
+    vault: &kai_vault::Vault<T, YT>,
+    clock: &Clock,
+    t_amount: u64,
+): u64 {
+    compute_expected_yt<T, YT>(vault, clock, t_amount)
+}
+
+#[spec_only]
+public fun spec_call_compute_expected_underlying_kai<T, YT>(
+    vault: &kai_vault::Vault<T, YT>,
+    clock: &Clock,
+    yt_amount: u64,
+): u64 {
+    compute_expected_underlying_kai<T, YT>(vault, clock, yt_amount)
+}
+
+// Scallop market accessors. The if-contains pattern lets the prover treat
+// these as total functions (no abort) so they can be called freely from
+// spec preconditions/postconditions. When the sheet for `T` is absent the
+// real `compute_expected_*` aborts; the spec mirrors this via a separate
+// `requires(spec_scallop_market_sheet_exists<T>(market))`.
+
+#[spec_only]
+public fun spec_scallop_market_sheet_exists<T>(market: &Market): bool {
+    let reserve = market::vault(market);
+    let sheets = reserve::balance_sheets(reserve);
+    let key = type_name::with_defining_ids<T>();
+    wit_table::contains(sheets, key)
+}
+
+#[spec_only]
+public fun spec_scallop_market_supply<T>(market: &Market): u64 {
+    let reserve = market::vault(market);
+    let sheets = reserve::balance_sheets(reserve);
+    let key = type_name::with_defining_ids<T>();
+    if (wit_table::contains(sheets, key)) {
+        let sheet = wit_table::borrow(sheets, key);
+        let (_, _, _, supply) = reserve::balance_sheet(sheet);
+        supply
+    } else { 0 }
+}
+
+#[spec_only]
+public fun spec_scallop_market_cash<T>(market: &Market): u64 {
+    let reserve = market::vault(market);
+    let sheets = reserve::balance_sheets(reserve);
+    let key = type_name::with_defining_ids<T>();
+    if (wit_table::contains(sheets, key)) {
+        let sheet = wit_table::borrow(sheets, key);
+        let (cash, _, _, _) = reserve::balance_sheet(sheet);
+        cash
+    } else { 0 }
+}
+
+#[spec_only]
+public fun spec_scallop_market_debt<T>(market: &Market): u64 {
+    let reserve = market::vault(market);
+    let sheets = reserve::balance_sheets(reserve);
+    let key = type_name::with_defining_ids<T>();
+    if (wit_table::contains(sheets, key)) {
+        let sheet = wit_table::borrow(sheets, key);
+        let (_, debt, _, _) = reserve::balance_sheet(sheet);
+        debt
+    } else { 0 }
+}
+
+#[spec_only]
+public fun spec_scallop_market_revenue<T>(market: &Market): u64 {
+    let reserve = market::vault(market);
+    let sheets = reserve::balance_sheets(reserve);
+    let key = type_name::with_defining_ids<T>();
+    if (wit_table::contains(sheets, key)) {
+        let sheet = wit_table::borrow(sheets, key);
+        let (_, _, revenue, _) = reserve::balance_sheet(sheet);
+        revenue
+    } else { 0 }
+}
+
+// Kai vault accessors.
+#[spec_only]
+public fun spec_kai_vault_total_available<T, YT>(
+    vault: &kai_vault::Vault<T, YT>,
+    clock: &Clock,
+): u64 {
+    kai_vault::total_available_balance<T, YT>(vault, clock)
+}
+
+#[spec_only]
+public fun spec_kai_vault_yt_supply<T, YT>(vault: &kai_vault::Vault<T, YT>): u64 {
+    kai_vault::total_yt_supply<T, YT>(vault)
 }

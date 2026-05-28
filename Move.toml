@@ -14,7 +14,7 @@ edition = "2024"         # edition = "legacy" to use legacy (pre-2024) Move
 # identifiers it already uses without an explicit `[addresses]` block
 # here.
 #
-# Patched cetusdlmm: identical to upstream `mainnet-v0.8.0` except for
+# Patched cetusdlmm: identical to upstream `mainnet-v0.9.0` except for
 # one missing `use sui::vec_map;` import inside a `#[test_only]` helper
 # (`partner.move:193`) that breaks `sui move test`. Its `[package].name`
 # is also lowercased to `cetusdlmm` (see the patched Move.toml header)

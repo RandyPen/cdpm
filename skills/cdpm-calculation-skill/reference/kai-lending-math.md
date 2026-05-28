@@ -464,15 +464,35 @@ When sizing inputs:
 - For batched protocol bots: snapshot once per batch, not once per PM. As long as the batch fits in one block, all redeems see the same `total_available_balance`. Across blocks, re-snapshot.
 - **Strategy walks add a soft latency budget.** Each strategy walker is a move-call that runs the strategy module's settlement logic. Large vaults with many strategies make the redeem PTB longer (and gas-hungrier) than the equivalent Scallop redeem. Build the PTB length into your gas budget.
 
-### 9.1 Full-drain dust and the `LENDING_SAFE_MARGIN_WRAPPER_RAW` floor
+### 9.1 Floor-div dust, on-chain tolerance, and deploy-side floor
 
-`kai_finish_redeem` enforces `redeemed_amount >= expected_underlying`. `expected_underlying` is `floor(yt_burned × total_available / yt_supply)` (§3). The actual `redeemed_amount` returned by `kai_leverage_supply_pool::withdraw → vault::redeem_withdraw_ticket` applies **floor-div per strategy step**. Each step truncates at most 1 raw underlying, so cumulative dust is **O(strategies × 1 raw) ≈ 2-3 raw** for current single-strategy mainnet vaults. **Constant w.r.t. principal.**
+`kai_finish_redeem` records `expected_underlying = floor(yt_burned × total_available / yt_supply)` at start time (§3) — **one** floor. The Kai withdrawal path floors *again* downstream:
 
-> ⚠️ **Correction (was wrong before).** It was once claimed here that partial redeems are safe because §7's ceiling rounding of `yt_burned` leaves the walker output above `expected_underlying`, and that only full drains (`yt_amount = u64::MAX`) trip 1009. **Production disproved this:** a capped *partial* redeem trips `EAmountShortfall (1009)` just the same. The ceiling rounding is applied to the YT *input*, but `expected_underlying` is then recomputed from that (rounded-up) YT, and the strategy walk floors *again* on the way out — so `redeemed_amount < expected_underlying` by the per-step dust regardless of partial vs. full, and **it cannot be sized away** (raising `yt_burned` raises `expected_underlying` in lockstep). The dust is per-redeem and constant.
+- `vault::withdraw` (`kai_sav/vault.move:678`) computes the *same* `muldiv` target, then the final priority loop (`vault.move:767-785`) reclaims the proportional-split residual — **vault-level allocation is exact**.
+- The shortfall lives in `redeem_withdraw_ticket:817`: each strategy's `withdrawn_balance` ≤ its `to_withdraw` because `kai_leverage_supply_pool::withdraw` (`kai_sav/kai_leverage_supply_pool.move:286-301`) floors **twice** per strategy (`muldiv(shares, to_withdraw, nominal)` then `redeem_lossy`). Overshoots are skimmed to profit and capped at `to_withdraw`, so the result is always ≤ requested.
 
-So **two mitigations are needed together** (both are client-side, not part of the cdpm Move contract):
+⟹ **dust ≈ 2 raw × (strategies actually drawn from)**. Free-balance-served redeems contribute ~0. All current mainnet SAVs are single-strategy ⟹ **≤2 raw**. Constant in principal, not proportional. Withdraw-then-redeposit cannot raise it: dust never accumulates across calls (fresh ticket each redeem), and growing `free_balance` only makes later redeems more free-balance-served ⟹ *less* dust.
 
-**(1) Cap the burn — `LENDING_SAFE_MARGIN_WRAPPER_RAW = 100n` (illustrative).** Never burn the full `entry.wrapperRaw`; cap at `min(neededWrapper, wrapperRaw − SAFE_MARGIN)`. This keeps a residual in `pm.lending` and avoids the *full-drain* cliff, but on its own does **not** clear the per-redeem dust — pair it with the topup below.
+**Interaction with the protocol fee.** `*_finish_redeem` computes `interest = redeemed_amount − principal_portion` and splits `fee = floor(interest × fee_rate / 10000)` off the *redeemed coin* into `FeeHouse` (`cdpm.move:1534-1545` / `1717-1728`) **after** the assert passes. The assert compares the *gross* `redeemed_amount`, so the dust analysis and the `TOL = 4` choice are independent of the fee. Net user receipt is still `redeemed − fee`; size for *net* targets via the `*ForTargetNet` helpers in §7. Under the relaxed assert a skim of `S ≤ TOL` raw by an authorized agent yields: agent +`S`, PM −`S × (1 − fee_rate)`, FeeHouse −`S × fee_rate` — attacker profit is unchanged, the fee acts as a partial absorber of the user's loss, all sub-cent dust either way.
+
+**On-chain mitigation (current).** The cdpm contract absorbs this dust via a module constant:
+
+```move
+// sources/cdpm.move
+const REDEEM_DUST_TOLERANCE_RAW: u64 = 4;
+// kai_finish_redeem / scallop_finish_redeem:
+if (expected_underlying > redeemed_amount) {
+    assert!(expected_underlying - redeemed_amount <= REDEEM_DUST_TOLERANCE_RAW, EAmountShortfall);
+};
+```
+
+`4` covers single-strategy dust (≤2) with 2-raw margin. The relaxed `>=` lets an authorized agent skim at most 4 raw per redeem, gas-gated: the attack profitability condition reduces to the price ratio `R = P_token_per_raw / P_SUI_per_MIST` — proportional market moves leave the margin invariant. For the worst case (xBTC, ~$0.001/raw) skim ≈ 0.67× per-tx gas at today's BTC/SUI ratio ⟹ net-negative.
+
+> **Historical note.** Earlier guidance required a mandatory `coin::join` dust topup on every redeem — the topup ran into `pm.balance[T]`, donating dust per call. The on-chain tolerance replaces it for the ≤2-strategy case (today, all mainnet vaults). The topup is no longer required.
+
+**Optional fallback — `coin::join` topup** (only needed for a *future* multi-strategy vault whose dust exceeds 4 raw, i.e. ≥3 strategies drawn). Emit `0x2::coin::join(coinT, topup)` between `kai_start_redeem` and `kai_finish_redeem`, where `topup ≥ observedDust − REDEEM_DUST_TOLERANCE_RAW` raw of `Coin<T>`. Preferred over raising the global constant (which would weaken the xBTC margin). Source: caller wallet (agents/bots) or any of `pm.balance[T]` / `pm.fee[T]` / wallet (owner close-PM). The topup folds into `redeemed_amount` ⟹ `interest = redeemed − principal` includes it ⟹ service fee is taken on the inflated interest, **not bypassed**.
+
+**Cap-the-burn (still useful for ≠1009 reasons).** Capping `yt_amount` at `min(neededWrapper, wrapperRaw − SAFE_MARGIN)` leaves a residual in `pm.lending` (avoids the full-drain cliff and a removed bag entry) — independent of the dust concern, which is now handled on-chain.
 
 ```ts
 // Client-side constant (not from the cdpm contract). Pick once per project.
@@ -486,14 +506,7 @@ function capRedeemBurnRaw(exact: bigint, wrapperRaw: bigint): bigint | null {
 }
 ```
 
-**(2) Dust topup via `coin::join` on EVERY redeem (partial or full).** Emit `0x2::coin::join(coinT, topup)` between `kai_start_redeem` and `kai_finish_redeem`. `topup` is a small `Coin<T>`; it folds into `redeemed_amount` to clear the assert, then flows into `interest = redeemed − principal`, so the service fee is taken on the inflated interest — **not bypassed**.
-
-**Size the topup to the dust bound and no more** — it is *donated* into `pm.balance[T]` every redeem. Two regimes:
-
-- **Frequent automated caller (worker / agent / protocol bot) → minimal, ~`3n` raw.** `3n` = the ~2-3 raw single-strategy dust ceiling, provably ≥ the real dust while donating ≤ 3 raw (often 0). On a hot path an oversized topup is a steady wallet drain. cdpm's worker uses `RECONCILE_REDEEM_TOPUP_RAW = 3` (env-tunable). **Source is the caller's OWN wallet only** — there is no `protocol_*`/`agent_*` call that yields a spendable `Coin<T>` from PM bags (the PM-internal withdraws are owner-gated), so the bot wallet must hold a little of each redeemable underlying (`tx.gas` for SUI; `listCoins → mergeCoins → splitCoins` otherwise).
-- **Rare owner close-PM → reliability over thrift, `FINISH_REDEEM_TOPUP_DEFAULT_RAW = 30n`** (≈10× the dust ceiling). Not a hot path, so the margin is harmless. Owner-signed, so it can use a **three-tier source**: `pm.balance[T]` (`user_remove_liquidity_from_balance<T>`) → `pm.fee[T]` (`user_withdraw_fee<T>`) → user wallet. Both PM-internal entrypoints `balance::split` when `amount < entry_value`, so a 30-raw slice doesn't disturb the entry. Net user cost is `topup × fee_rate ≈ 3 raw` at 10% fee_rate, **independent of which tier supplied it** (only the `topup × fee_rate` portion is consumed by the service fee — pulling from `pm.fee[T]` is not "fee-on-fee"). Preferring the PM-internal tiers is purely UX: the close-PM PTB stays self-contained when the wallet holds no `Coin<T>`; the key pre-scan is free since `user_close_pm` enumerates both bags for `destroy_empty` anyway.
-
-**(3) When you DEPLOY the redeemed underlying in the SAME PTB (redeem → add_liquidity), size the deploy to a guaranteed LOWER bound of the conversion, not to the requested `want`.** The redeem and the deploy should both come from one proportional `share` under one live ratio `r`:
+**Deploy-side realized floor (unchanged, separate concern).** When the SAME PTB also deploys the redeemed underlying (redeem → `add_liquidity`), size the deploy to a guaranteed LOWER bound of the conversion, not to the requested `want`:
 
 ```
 wrapperSplit = totalWrapper × share          // share = want / heldUnderlying = want / r ; the YT/sCoin to burn
@@ -501,7 +514,7 @@ realized     = floor(amountRaw × r) − M      // guaranteed-minimum underlying
 deployTotal ≤ available + realized           // clamp the add to this, NOT available + want
 ```
 
-`want / r` and `floor(amountRaw × r)` are the two sides of the same linear conversion, so the burned wrapper and the deployed underlying agree by construction. But the actual underlying that lands in the bag is `floor(amountRaw × r) − walkDust` (+ the topup from (2)); clamping the deploy to `realized = floor(amountRaw × r) − M` (a strict lower bound) is what prevents the deploy from out-running the redeem and aborting `0x2::balance::split` ENotEnough (Move abort 2) at `add_liquidity`. cdpm's worker uses `REDEEM_REALIZED_SAFETY_MARGIN_RAW = 3` (env-tunable); the unrealized few raw stay in the bag and deploy next cycle. This is separate from, and additional to, the (2) topup that satisfies the `finish_redeem` assert.
+The on-chain `REDEEM_DUST_TOLERANCE_RAW` clears the cdpm-boundary `1009` but the actual coin still lands `floor(amountRaw × r) − walkDust` short. Clamping the deploy to `realized = floor(amountRaw × r) − M` (a strict lower bound) is what prevents the downstream `0x2::balance::split` ENotEnough (Move abort 2) at `add_liquidity`. cdpm's worker uses `REDEEM_REALIZED_SAFETY_MARGIN_RAW = 3` (env-tunable); the unrealized few raw stay in the bag and deploy next cycle.
 
 Cross-references:
 

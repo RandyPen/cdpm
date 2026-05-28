@@ -179,27 +179,19 @@ async function createPositionSmart(
 > See `reference/scallop-lending.md` and `reference/kai-lending.md` for
 > the full recipes.
 >
-> **IMPORTANT — full-drain top-up required (Kai; defensive for Scallop)**
-> Each `*_finish_redeem` asserts `redeemed_amount >= expected_underlying`.
-> For Kai, the upstream redeem chain applies per-strategy floor-div,
-> returning ~2-3 raw underlying less than predicted; on a full drain
-> (`amount = u64::MAX`) the assert reliably trips with `EAmountShortfall
-> (1009)`. Scallop's upstream uses the same single floor-div formula as
-> cdpm, so it has no observed dust — but the close-PM PTB shares its
-> shape with the Kai branch for uniformity. In both cases the close-PM
-> PTB MUST insert `0x2::coin::join(coinT, topup)` between the redeem
-> chain and `*_finish_redeem`, where `topup` is a small `Coin<T>`
-> (~30 raw underlying, recommended client-side default). **Source the
-> topup via a three-tier resolver**: `pm.balance[T]` (via
-> `user_remove_liquidity_from_balance<T>`) first, then `pm.fee[T]` (via
-> `user_withdraw_fee<T>`), then the user's wallet (`tx.gas` for SUI,
-> else `getCoins → mergeCoins → splitCoins`). Only throw a clear error
-> when **all three tiers** are empty so the UI can prompt the user to
-> acquire a dust amount before retry — in practice rare, since `pm.balance[T]`
-> usually carries residual LP fees by the time close-PM runs. See
-> `reference/kai-lending.md` § Top-Up Pattern for the `resolveTopup`
-> helper and the full MoveCall sequence — that recipe stands on its own;
-> no external reference implementation is required to copy.
+> **Full-drain dust handled on-chain (no top-up required).** Each
+> `*_finish_redeem` enforces `redeemed_amount + REDEEM_DUST_TOLERANCE_RAW
+> >= expected_underlying` (`REDEEM_DUST_TOLERANCE_RAW = 4` raw). The Kai
+> strategy walk floors twice per strategy ⟹ dust ≈ 2 raw × (strategies
+> drawn) — single-strategy mainnet SAVs ⟹ ≤2, safely under the tolerance.
+> Scallop's upstream shares cdpm's single floor-div ⟹ dust ≈ 0. The
+> close-PM PTB therefore does **not** need a `coin::join` topup — neither
+> on the Kai branch nor on the Scallop branch — and does not need the
+> three-tier topup resolver. If a future Kai vault ever draws from ≥3
+> strategies and 1009 reappears, the contingency fallback is documented
+> in `reference/kai-lending.md` § Full-Drain Pattern (insert a
+> `coin::join(coinT, topup)` of `observedDust − 4` raw between the
+> redeem chain and `kai_finish_redeem`).
 
 ```typescript
 async function closePosition(

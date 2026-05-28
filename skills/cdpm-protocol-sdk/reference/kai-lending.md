@@ -228,18 +228,11 @@ async function protocolRedeemFromKai(
     arguments: [balanceT],
   });
 
-  // REQUIRED dust topup (see "Floor-div dust" below). The strategy walk
-  // surfaces a few raw units less than `ticket.expected`, so EVERY redeem —
-  // partial or full — must merge a tiny `Coin<T>` to clear the
-  // `redeemed >= expected` assert. `topupCoin` must come from the PROTOCOL
-  // BOT'S OWN WALLET: cdpm has no protocol-tier call that hands back a
-  // spendable Coin<T> from PM bags. For SUI, split from `tx.gas`; otherwise
-  // fetch an owned coin via `client.listCoins({ owner, coinType })`.
-  tx.moveCall({
-    target: '0x2::coin::join',
-    typeArguments: [underlyingCoinType],
-    arguments: [coinT, topupCoin], // topupCoin: ~3 raw (dust bound) from the bot wallet
-  });
+  // No dust topup needed: cdpm's `kai_finish_redeem` tolerates up to
+  // `REDEEM_DUST_TOLERANCE_RAW = 4` raw of floor-div dust on-chain (covers
+  // single-strategy mainnet SAV dust ≤2 raw with margin). See "Floor-div
+  // dust" below. Optional fallback for a future ≥3-strategy vault whose
+  // dust exceeds 4: insert an extra `coin::join(coinT, topupCoin)` here.
 
   tx.moveCall({
     target: `${CDPM_PACKAGE}::cdpm::kai_finish_redeem`,
@@ -310,19 +303,17 @@ async function protocolRedeemForTargetNet(
 }
 ```
 
-`ytToBurnForTargetNet` may return `MAX_U64` when the `KaiVault<T, YT>` entry cannot satisfy `desiredNet`. **Protocol callers must NOT pass `MAX_U64` to `kai_start_redeem`** — full drain reliably trips `EAmountShortfall (1009)` on the floor-div dust from the strategy walker (see [`cdpm-calculation-skill/reference/kai-lending-math.md` §9.1](../../cdpm-calculation-skill/reference/kai-lending-math.md#91-full-drain-dust-and-the-lending_safe_margin_wrapper_raw-floor) for the math).
+`ytToBurnForTargetNet` may return `MAX_U64` when the `KaiVault<T, YT>` entry cannot satisfy `desiredNet`. **Protocol callers should still cap the burn** — not because of `1009` (now handled on-chain by `REDEEM_DUST_TOLERANCE_RAW`, see below) but to leave a residual `pm.lending` entry so the bag key survives and the user's close-PM path stays clean. See [`cdpm-calculation-skill/reference/kai-lending-math.md` §9.1](../../cdpm-calculation-skill/reference/kai-lending-math.md#91-floor-div-dust-on-chain-tolerance-and-deploy-side-floor) for the math.
 
-Instead, **cap the burn at `wrapperRaw − LENDING_SAFE_MARGIN_WRAPPER_RAW`** (default 100 YT). The residual stays in `pm.lending` and is reclaimed when the user closes the PM.
+Cap at `wrapperRaw − LENDING_SAFE_MARGIN_WRAPPER_RAW` (default 100 YT). The residual is reclaimed when the user closes the PM.
 
-### Floor-div dust: EVERY Kai redeem needs a `coin::join` topup
+### Floor-div dust: tolerated on-chain (no topup needed)
 
-> ⚠️ **Capping the burn is necessary but NOT sufficient.** It was once assumed that only full-drain (`MAX_U64`) trips 1009 and that any capped *partial* redeem is safe. **Production proved otherwise:** a capped partial redeem trips `EAmountShortfall (1009)` just the same. The cause is structural — `kai_start_redeem` records `ticket.expected` from the YT amount at the vault rate, while the strategy walk (`vault::withdraw` → `kai_leverage_supply_pool::withdraw` → `redeem_withdraw_ticket`) surfaces `floor(...)`, a few raw units short. That gap is **constant w.r.t. redeem size** (it's a per-withdraw rounding artifact, ~1–3 raw), so it CANNOT be escaped by sizing — burning more YT raises `expected` and `surfaced` together. Only a topup closes it.
+cdpm's `kai_finish_redeem` tolerates floor-div dust up to `REDEEM_DUST_TOLERANCE_RAW = 4` raw on-chain. The Kai strategy walk floors twice per strategy (`muldiv` underlying→shares, then `redeem_lossy` shares→underlying), so dust ≈ 2 raw × (strategies drawn). All current mainnet SAVs are single-strategy ⟹ ≤2 raw, well within the tolerance. Dust is constant in principal (not proportional) and structural to the vault — not raised by transaction patterns like withdraw-then-redeposit.
 
-**Every** `kai_finish_redeem` — partial or full — must merge a small `Coin<T>` topup into the redeemed coin via `0x2::coin::join` *before* the finish call (shown in the example above).
+⟹ **Protocol bots do NOT need a `coin::join` dust topup on `kai_finish_redeem`.** No per-redeem donation into `pm.balance`, no per-asset wallet pre-funding. (Earlier guidance required a mandatory ~3 raw topup from the bot wallet; that requirement is removed. Capping the burn remains useful for the residual-entry reason above.)
 
-**Size it as SMALL as the dust allows.** The *whole* topup lands in `pm.balance[T]` (less the proportional service fee on the inflated interest) — i.e. it is **donated** from the bot wallet to the PM on *every* redeem. A protocol bot that reconciles frequently pays this on a hot path, so an oversized topup is a steady accumulated drain. The floor-div dust is bounded by the number of floor steps in the walk: `vault::withdraw` + `kai_leverage_supply_pool::withdraw` (×strategies) + `redeem_withdraw_ticket`, ≤ 1 raw each → **~3 raw for the current single-strategy vaults**. A topup equal to that bound (≈ 3 raw) is provably ≥ the real dust yet donates at most 3 raw (often 0). Only raise it if a vault adds strategies and 1009 reappears. (cdpm's own worker uses `RECONCILE_REDEEM_TOPUP_RAW = 3`; the rare owner-signed close-PM path uses a fatter 30-raw margin precisely because it is *not* a hot path.)
-
-**Topup source = the protocol bot's own wallet.** cdpm exposes **no** protocol-tier function that returns a spendable `Coin<T>` from PM bags (`pm.balance` / `pm.fee`) — the bag-withdraw functions (`user_withdraw_fee`, `user_remove_liquidity_from_balance`) are owner-gated (see [`permission-system.md`](./permission-system.md)). The close-PM PTB can source the topup from those bags only because it is owner-signed; a protocol bot cannot. So **the protocol execution wallet MUST hold a small balance of every redeemable underlying** (USDC, DEEP, WAL, HAEDAL, …). SUI is free — split it from `tx.gas`. At ~3 raw per redeem the drain is glacial, but the wallet does need an occasional refill.
+**Optional fallback (rare).** If a future ≥3-strategy vault surfaces dust > 4 raw and 1009 reappears, merge `(observedDust − 4)` raw of `Coin<T>` between the redeem chain and `kai_finish_redeem`. Preferred over raising the on-chain constant (which would weaken the high-value-asset margin — see [`cdpm-calculation-skill/reference/kai-lending-math.md` §9.1](../../cdpm-calculation-skill/reference/kai-lending-math.md#91-floor-div-dust-on-chain-tolerance-and-deploy-side-floor)). cdpm exposes no protocol-tier function that returns a spendable `Coin<T>` from PM bags, so the topup must come from the bot wallet — but this is a contingency, not a normal hot-path requirement.
 
 ```typescript
 const LENDING_SAFE_MARGIN_WRAPPER_RAW = 100n;
@@ -421,7 +412,7 @@ cdpm emits no extraction event for Kai lending — there is no wrapper-extract f
 | 1006 | `EReserveEmpty` | `total_yt_supply == 0` on the live vault — degenerate. Bootstrap by supplying first or skip this vault. |
 | 1007 | `EZeroExpected` | Amount too small for the current vault ratio. Increase amount; for tiny TVL vaults, batch multiple PMs into one supply. |
 | 1008 | `EWrongPm` | Hot-potato ticket consumed against a different PM. Bug in batch construction — assert `pmId` consistency across all four cdpm move-calls in the batch. |
-| 1009 | `EAmountShortfall` | Three distinct causes: (a) **any** redeem (partial OR full) without a `coin::join` dust topup — the strategy walk surfaces a few raw units below `ticket.expected`; merge a small `Coin<T>` (≈ 3 raw, the single-strategy dust bound — keep it minimal, it's donated to the PM every redeem) from the bot wallet before `kai_finish_redeem` (see "Floor-div dust"). (b) `ytAmount = MAX_U64` (full drain) compounds the dust; cap at `wrapperRaw − LENDING_SAFE_MARGIN_WRAPPER_RAW` AND topup. (c) Vault state moved between snapshot and signing — re-snapshot just before signing. |
+| 1009 | `EAmountShortfall` | Floor-div dust up to 4 raw is tolerated on-chain (`REDEEM_DUST_TOLERANCE_RAW`), so for current single-strategy mainnet SAVs this should not trip from rounding. Most likely cause: vault state moved between snapshot and signing — re-snapshot just before signing. Rare future cause: a ≥3-strategy vault whose dust exceeds 4 raw — fall back to a `coin::join` topup of `(observedDust − 4)` raw before `kai_finish_redeem` (see "Floor-div dust"). |
 | 1013 | `EWrongVault` | `kai_finish_*` received a `&Vault<T,YT>` whose id ≠ ticket.vault_id. Reuse the same `tx.object(vaultObjectId)` handle across `start_*` and `finish_*`. |
 
 External aborts that bubble up from Kai itself (cdpm does not produce these):
