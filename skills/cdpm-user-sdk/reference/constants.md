@@ -3,26 +3,26 @@
 ## CDPM Package
 
 ```typescript
-const CDPM_PACKAGE = '0x64a5ce66d153b46d82a9a7cdb81cddbf6922fdf146fced2d9771c940094546b3';
+const CDPM_PACKAGE = '0x3284fd6e5e5b0ee4db61b67f9cf6e890809e6d45f6b4fc20639ba7a4897a8f7d';
 const FEE_DENOMINATOR = 10000;
 const DEFAULT_FEE_RATE = 2000; // 20%
 const MAX_FEE_RATE = 3000;     // 30% — enforced cap in admin_set_fee
 ```
 
 Publish references:
-- publish tx digest: `8jxPYBYGKFNDykaaK6h1g3G9s1DcMnvfmxZWpQV4hXAJ`
-- package immutable digest: `4JiW8f1oKASJBKeVTmd9Em7RYFk1DhvRgJKtTSX85xxM` (proves the contract cannot be upgraded)
+- publish tx digest: `3MADyx9qAdyWz2ZGDfN2vRaJPSK1ju4r8BeFZe9YfXs7`
+- package immutable digest: `2bt3pA5wE8WtWswtuEXeBETzRtz8xb5vkTttGRSZt22R` (proves the contract cannot be upgraded)
 
 ## CDPM Object IDs (Mainnet)
 
 ```typescript
 const CDPM_MAINNET = {
-  PACKAGE_ID:        '0x64a5ce66d153b46d82a9a7cdb81cddbf6922fdf146fced2d9771c940094546b3',
-  FEE_HOUSE_ID:      '0xf2e6c4c5ad2e108d2e1d9c0be628693d5ab129c8f067656ac835a153d962c284',
-  ACCESS_LIST_ID:    '0x879596447bc3f136719bb3da479ffe709a09d277fb55b114ff3abba07e9f7fec',
-  ADMIN_CAP_ID:      '0x6bd034ecf69e32bdb3242bf4dd2f903e18dce692a9d682e71922789e4268bcbe',
-  GLOBAL_RECORD_ID:  '0x0c1359061172789489da16bf77cd045cbaf07e70e5a7597748a9d67a3aff7a85',
-  RECORD_TYPE:       '0x64a5ce66d153b46d82a9a7cdb81cddbf6922fdf146fced2d9771c940094546b3::cdpm::Record',
+  PACKAGE_ID:        '0x3284fd6e5e5b0ee4db61b67f9cf6e890809e6d45f6b4fc20639ba7a4897a8f7d',
+  FEE_HOUSE_ID:      '0x3b1fab3cb97bac7f3cb761818d8084b1332cad8478224f5498a6ab0f1069f484',
+  ACCESS_LIST_ID:    '0xb91e0828f5367a17c27da3bc4f6b19e3d89378b403d9c0c754d8d81c9200ceff',
+  ADMIN_CAP_ID:      '0xebdfb970dbfe1d6759b89fdb79dd1da3846cd6530d5d453cdec2f894848e7398',
+  GLOBAL_RECORD_ID:  '0x24cccaf55a1182ea441e7cff231357d8d8dc306e13a2ad38cab306a6451bf938',
+  RECORD_TYPE:       '0x3284fd6e5e5b0ee4db61b67f9cf6e890809e6d45f6b4fc20639ba7a4897a8f7d::cdpm::Record',
 };
 ```
 
