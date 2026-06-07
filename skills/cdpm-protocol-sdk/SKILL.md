@@ -9,7 +9,7 @@ description: TypeScript SDK guide for CDPM protocol integration and management. 
 
 CDPM (Cetus DLMM Position Manager) protocol layer provides managed liquidity services with fee extraction. This guide covers protocol integration, admin operations, and architecture details.
 
-**Package Address**: `0x3ad00d82541cfd1fd13568f24b43bf9e36718611533a4853e722438b90ea61f3` (only-dep-upgrades digest: `CmP8QVdyQta1EAQiNpjn9mwkvM56WhzVKjnCVaBh5mWU` — `cdpm.move` bytecode is locked; only dependency-version upgrades are allowed). Other shared object IDs live in [`../cdpm-user-sdk/reference/constants.md`](../cdpm-user-sdk/reference/constants.md).
+**Package Address**: `0x573584cc4698e82fd85f2b54e64ad4cd901c42b768f7628ec167bf2d24aa2aa7` (only-dep-upgrades digest: `F5kVa3YDSHoBvJvYJFH9y5dANCJScEdyZoxZLLy6qd15` — `cdpm.move` bytecode is locked; only dependency-version upgrades are allowed). Other shared object IDs live in [`../cdpm-user-sdk/reference/constants.md`](../cdpm-user-sdk/reference/constants.md).
 
 ```typescript
 import { Transaction } from '@mysten/sui/transactions';
@@ -155,7 +155,7 @@ async function validateProtocolOperation(
 ```typescript
 // Source: sources/cdpm.move — codes are SHARED between Scallop and Kai integrations.
 const ERROR_CODES = {
-  ENotOwner:           1001, // Caller is not pm.owner (user-only operations such as user_get_position / user_get_and_return_position)
+  ENotOwner:           1001, // Caller is not pm.owner (owner-only operations such as user_close_pm, user_insert_agent)
   ENotAllow:           1002, // Caller not in agents / access list, or protocol-tier gating with non-empty pm.agents
   EInvalidFeeRate:     1003, // admin_set_fee given rate > MAX_FEE_RATE (5000 / 50%)
   ELendingNotEmpty:    1004, // user_close_pm called with non-empty lending Bag (any Scallop or Kai entry)

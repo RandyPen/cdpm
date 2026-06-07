@@ -211,58 +211,11 @@ async function removeLiquidityWithAutoPoolId(
 }
 ```
 
-## Extract Position (for Cetus DLMM Package Upgrade)
-
-In case of a Cetus DLMM package upgrade, the owner can extract the underlying `Position` from the PositionManager. The PositionManager retains its identity and balance/fee bags but its `position` field becomes `None` until a new Position is deposited (e.g. via `user_deposit_position`).
-
-> Signature: `user_get_position(pm: &mut PositionManager, ctx: &TxContext)` — **does not take Clock**.
-
-```typescript
-async function getPosition(
-  client: SuiGrpcClient,
-  signer: any,
-  pmId: string
-) {
-  const tx = new Transaction();
-
-  // Position is transferred directly to ctx.sender() inside Move
-  tx.moveCall({
-    target: `${CDPM_PACKAGE}::cdpm::user_get_position`,
-    arguments: [
-      tx.object(pmId),
-    ],
-  });
-
-  return await client.signAndExecuteTransaction({ signer, transaction: tx });
-}
-
-// Variant: get the Position back as a PTB result for further composition
-async function getAndReturnPosition(
-  client: SuiGrpcClient,
-  signer: any,
-  pmId: string
-) {
-  const tx = new Transaction();
-
-  const [position] = tx.moveCall({
-    target: `${CDPM_PACKAGE}::cdpm::user_get_and_return_position`,
-    arguments: [
-      tx.object(pmId),
-    ],
-  });
-
-  // ... use `position` in subsequent moveCalls, e.g. transfer or re-deposit
-  tx.transferObjects([position], signer.getPublicKey().toSuiAddress());
-
-  return await client.signAndExecuteTransaction({ signer, transaction: tx });
-}
-```
-
 ## Wrap an Existing Position into a New PM
 
 `user_deposit_position` wraps a `Position` object the caller already owns
-(e.g. one extracted earlier via `user_get_and_return_position`, or one
-obtained directly from a Cetus DLMM call) into a fresh `PositionManager`. The owner is set to `ctx.sender()`, the `position`
+(e.g. one obtained directly from a Cetus DLMM call) into a fresh
+`PositionManager`. The owner is set to `ctx.sender()`, the `position`
 field is filled with the supplied `Position`, and all three bags
 (`balance`, `fee`, `lending`) start empty.
 

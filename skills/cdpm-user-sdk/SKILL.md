@@ -9,7 +9,7 @@ description: TypeScript SDK guide for CDPM (Cetus DLMM Position Manager) end-use
 
 CDPM (Cetus DLMM Position Manager) is a proxy contract for managing Cetus DLMM positions with support for user self-management, agent delegation, protocol-managed operations, and two optional lending integrations for idle funds: **Scallop** (single-generic `<T>` market coin) and **Kai SAV** (two-generic `<T, YT>` strategy-aggregating vault). Both integrations share `pm.lending: Bag` and a single `fee_house.fee_rate` knob.
 
-**Package Address**: `0x3ad00d82541cfd1fd13568f24b43bf9e36718611533a4853e722438b90ea61f3` (only-dep-upgrades digest: `CmP8QVdyQta1EAQiNpjn9mwkvM56WhzVKjnCVaBh5mWU` — `cdpm.move` bytecode is locked; only dependency-version upgrades are allowed). Other shared object IDs live in [`reference/constants.md`](reference/constants.md).
+**Package Address**: `0x573584cc4698e82fd85f2b54e64ad4cd901c42b768f7628ec167bf2d24aa2aa7` (only-dep-upgrades digest: `F5kVa3YDSHoBvJvYJFH9y5dANCJScEdyZoxZLLy6qd15` — `cdpm.move` bytecode is locked; only dependency-version upgrades are allowed). Other shared object IDs live in [`reference/constants.md`](reference/constants.md).
 
 > The `PositionManager` struct contains a `lending: Bag` holding both Scallop `ScallopVault<T>` entries (keyed by `type_name<T>`) and Kai SAV `KaiVault<T, YT>` entries (keyed by `type_name<YT>`) — both can coexist on a single PM. See [Scallop Lending](reference/scallop-lending.md) and [Kai SAV Lending](reference/kai-lending.md) for end-user PTB recipes.
 
@@ -31,7 +31,7 @@ const client = new SuiGrpcClient({
   baseUrl: 'https://fullnode.mainnet.sui.io:443',
   network: 'mainnet',
 });
-const CDPM_PACKAGE = '0x3ad00d82541cfd1fd13568f24b43bf9e36718611533a4853e722438b90ea61f3';
+const CDPM_PACKAGE = '0x573584cc4698e82fd85f2b54e64ad4cd901c42b768f7628ec167bf2d24aa2aa7';
 ```
 
 ## Topics

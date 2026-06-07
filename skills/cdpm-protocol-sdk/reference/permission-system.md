@@ -17,7 +17,6 @@
 | `user_withdraw_fee` | yes | no | no | no |
 | `user_insert_agent` / `user_remove_agent` | yes | no | no | no |
 | `user_close_pm` (requires `pm.balance`, `pm.fee`, `pm.lending` empty and no Cetus rewards owed) | yes | no | no | no |
-| `user_get_position` / `user_get_and_return_position` (Cetus DLMM Position extraction) | yes | no | no | no |
 | `agent_add_liquidity` / `agent_remove_liquidity` | no | yes | no | no |
 | `agent_collect_fee` / `agent_collect_reward` (routes coin into `pm.fee`) | no | yes | no | no |
 | `agent_transfer_fee_to_balance` | no | yes | no | no |

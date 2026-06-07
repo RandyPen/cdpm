@@ -10,7 +10,7 @@
 ```typescript
 // cdpm error codes (sources/cdpm.move). Codes are SHARED across all integrations.
 const CDPM_ERROR_CODES = {
-  ENotOwner:           1001, // Caller is not pm.owner (e.g. agent tried user_get_position / user_get_and_return_position)
+  ENotOwner:           1001, // Caller is not pm.owner (e.g. agent tried user_close_pm)
   ENotAllow:           1002, // assert_caller_authorized failed, or pm.agents invariant broken
   EInvalidFeeRate:     1003, // admin_set_fee given rate > MAX_FEE_RATE = 5000 (50%)
   ELendingNotEmpty:    1004, // user_close_pm called with non-empty pm.lending (any Scallop or Kai entry)
@@ -25,7 +25,7 @@ async function handleAgentError(error: any): Promise<string> {
   const errorStr = error.toString();
 
   if (errorStr.includes('ENotOwner')) {
-    return 'Operation requires owner permission. Agents cannot call user_get_position / user_get_and_return_position (the Cetus DLMM Position object is owner-only).';
+    return 'Operation requires owner permission. Agents cannot call owner-only entries such as user_close_pm, user_insert_agent / user_remove_agent, or user_withdraw_fee.';
   } else if (errorStr.includes('ENotAllow')) {
     return 'Agent not in pm.agents. Contact owner for authorization.';
   } else if (errorStr.includes('ELendingNotEmpty')) {

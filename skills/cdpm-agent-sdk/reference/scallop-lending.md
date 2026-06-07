@@ -200,7 +200,7 @@ Yield-vs-gas tradeoff:
 
 | Code | Constant | Trigger | Recovery |
 |------|----------|---------|----------|
-| 1001 | `ENotOwner` | Agent attempted an owner-only function (e.g. `user_get_position`). | Escalate to owner. |
+| 1001 | `ENotOwner` | Agent attempted an owner-only function (e.g. `user_close_pm`). | Escalate to owner. |
 | 1002 | `ENotAllow` | Agent address not in `pm.agents`. | Re-check `pm.agents` before retry. |
 | 1005 | `ENoSuchVault` | `scallop_redeem` for a `T` that has never been supplied (or was fully drained). | Snapshot `pm.lending` before sizing. |
 | 1006 | `ENoSuchBalance` | `scallop_supply` for a `T` that has no entry in `pm.balance`. | Verify `pm.balance` has the underlying before signing. |

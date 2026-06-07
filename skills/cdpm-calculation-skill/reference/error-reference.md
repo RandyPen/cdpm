@@ -16,7 +16,7 @@ These are the abort codes from the `cdpm::cdpm` module. They are **shared** betw
 
 | Code | Constant | Cause | Off-chain mitigation |
 |------|----------|-------|----------------------|
-| 1001 | `ENotOwner` | Non-owner called an owner-only function (e.g. `user_get_position` / `user_get_and_return_position`, `user_add_liquidity_to_position`, `user_remove_liquidity_from_position`, `user_collect_fee`, `user_collect_reward`, `user_remove_liquidity_from_balance`, `user_withdraw_fee`, `user_insert_agent`, `user_remove_agent`, `user_close_pm`, `user_add_liquidity_to_balance`) | Check `pm.owner == sender` before signing |
+| 1001 | `ENotOwner` | Non-owner called an owner-only function (e.g. `user_add_liquidity_to_position`, `user_remove_liquidity_from_position`, `user_collect_fee`, `user_collect_reward`, `user_remove_liquidity_from_balance`, `user_withdraw_fee`, `user_insert_agent`, `user_remove_agent`, `user_close_pm`, `user_add_liquidity_to_balance`) | Check `pm.owner == sender` before signing |
 | 1002 | `ENotAllow` | `assert_caller_authorized` failed for `scallop_supply` / `scallop_redeem` / `kai_supply` / `kai_redeem`, or a `protocol_*` / `agent_*` access invariant broken | Verify caller is in `pm.agents` or `AccessList.allow` (and `pm.agents` is empty for the protocol path) |
 | 1003 | `EInvalidFeeRate` | `admin_set_fee` rate `>` 50% (`MAX_FEE_RATE = 5000` bp) | Cap `feeRateBp <= 5000` |
 | 1004 | `ELendingNotEmpty` | `user_close_pm` while `pm.lending` is non-empty (any Scallop or Kai entry) | Drain every `ScallopVault<T>` via `scallop_redeem` and every `KaiVault<T, YT>` via `kai_redeem` first |

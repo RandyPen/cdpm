@@ -3,26 +3,26 @@
 ## CDPM Package
 
 ```typescript
-const CDPM_PACKAGE = '0x3ad00d82541cfd1fd13568f24b43bf9e36718611533a4853e722438b90ea61f3';
+const CDPM_PACKAGE = '0x573584cc4698e82fd85f2b54e64ad4cd901c42b768f7628ec167bf2d24aa2aa7';
 const FEE_DENOMINATOR = 10000;
 const DEFAULT_FEE_RATE = 2000; // 20%
 const MAX_FEE_RATE = 5000;     // 50% — enforced cap in admin_set_fee
 ```
 
 Publish references:
-- publish tx digest: `Dd8mZN94kHNcV6uEcW2tzVa8DvsB6h9dfMEccpAwF2Rb`
-- only-dep-upgrades tx digest: `CmP8QVdyQta1EAQiNpjn9mwkvM56WhzVKjnCVaBh5mWU` (`cdpm.move` bytecode is locked; only dependency-version upgrades are allowed)
+- publish tx digest: `Cmq21bu5KUV95xM7VSczUwHRNEXyhbb8PSVBL4KZ3PVF`
+- only-dep-upgrades tx digest: `F5kVa3YDSHoBvJvYJFH9y5dANCJScEdyZoxZLLy6qd15` (`cdpm.move` bytecode is locked; only dependency-version upgrades are allowed)
 
 ## CDPM Object IDs (Mainnet)
 
 ```typescript
 const CDPM_MAINNET = {
-  PACKAGE_ID:        '0x3ad00d82541cfd1fd13568f24b43bf9e36718611533a4853e722438b90ea61f3',
-  FEE_HOUSE_ID:      '0x97a23b119f8fdecd52a4ad0623f744a34f4ae15ce484a3af727f1c693d4b90be',
-  ACCESS_LIST_ID:    '0xea634e81f8958105e760cdd9f9692803976b5aeedf5b27b8e70207dea2842ea4',
-  ADMIN_CAP_ID:      '0xe92e093469cf1554c89cfb3ff2b98449dc8dfab16a388f7486d16b21edea4606',
-  GLOBAL_RECORD_ID:  '0x14aaff55028348d9ba256f440229331e80ba53e155a5b6dfaa7fcd18a09a6b42',
-  RECORD_TYPE:       '0x3ad00d82541cfd1fd13568f24b43bf9e36718611533a4853e722438b90ea61f3::cdpm::Record',
+  PACKAGE_ID:        '0x573584cc4698e82fd85f2b54e64ad4cd901c42b768f7628ec167bf2d24aa2aa7',
+  FEE_HOUSE_ID:      '0x44cc921bdabdd4d868b32ba7081b71707b685eecc6b6034668281088bea0b5d8',
+  ACCESS_LIST_ID:    '0xdca06884b21a23d04f2664835c0c965dc80a5c40294b90d9d000c7b05707f803',
+  ADMIN_CAP_ID:      '0x91940a5f725a9359d9778501fb6b9e2eff45e629127d612e8ce9d0cdc1102463',
+  GLOBAL_RECORD_ID:  '0xee3b816d68c8d84fe90a2d0ad1861a6fb455d053f8edf6512a8953f7d3e77b95',
+  RECORD_TYPE:       '0x573584cc4698e82fd85f2b54e64ad4cd901c42b768f7628ec167bf2d24aa2aa7::cdpm::Record',
 };
 ```
 

@@ -9,7 +9,7 @@ description: TypeScript SDK guide for AI agents managing CDPM positions. Defines
 
 This guide is for AI agents authorized to manage CDPM positions on behalf of users. Agents have limited permissions and operate within specific boundaries.
 
-**Package Address**: `0x3ad00d82541cfd1fd13568f24b43bf9e36718611533a4853e722438b90ea61f3` (only-dep-upgrades digest: `CmP8QVdyQta1EAQiNpjn9mwkvM56WhzVKjnCVaBh5mWU` — `cdpm.move` bytecode is locked; only dependency-version upgrades are allowed). Other shared object IDs live in [`reference/constants.md`](reference/constants.md).
+**Package Address**: `0x573584cc4698e82fd85f2b54e64ad4cd901c42b768f7628ec167bf2d24aa2aa7` (only-dep-upgrades digest: `F5kVa3YDSHoBvJvYJFH9y5dANCJScEdyZoxZLLy6qd15` — `cdpm.move` bytecode is locked; only dependency-version upgrades are allowed). Other shared object IDs live in [`reference/constants.md`](reference/constants.md).
 
 ```typescript
 import { Transaction } from '@mysten/sui/transactions';
@@ -40,7 +40,6 @@ import { SuiGrpcClient } from '@mysten/sui/grpc';
 | Close Position | Only owner can close |
 | Authorize/Revoke Agents | Only owner can manage agents |
 | Modify PositionManager | Cannot change configuration |
-| `user_get_position` / `user_get_and_return_position` | Owner-only Cetus DLMM `Position` extraction — agents cannot pull the `Position` object |
 
 ### Permission Check
 

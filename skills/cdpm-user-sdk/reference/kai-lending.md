@@ -228,7 +228,7 @@ kai_redeem<T, ST, YT> → pm.balance[T] → user_remove_liquidity_from_balance<T
 
 If Kai is unreachable (Version bump, withdrawals disabled, paused vault, etc.) the abort happens inside the inner `vault::withdraw` / `redeem_withdraw_ticket` calls and `pm.lending` stays intact. Retry once Kunalabs lifts the disable flag or ships an SDK update against the new Vault Version; cdpm itself stays operational throughout.
 
-The Cetus DLMM `Position` is the only object cdpm cannot recover from upstream breakage in-band, and that one case is handled by the owner-only `user_get_position` / `user_get_and_return_position` extraction documented in [`position-management.md`](./position-management.md).
+If a Cetus DLMM, Scallop, or Kai dependency ships a non-breaking upgrade, cdpm publishes a `dep_only_upgrades` upgrade against the new dependency version; positions and lending vaults survive the upgrade with no user action. A breaking dependency type-identity change still requires a fresh cdpm deploy.
 
 ---
 

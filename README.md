@@ -40,7 +40,7 @@ public struct PositionManager has key {
     id: UID,
     owner: address,             // Position owner
     agents: VecSet<address>,    // Authorized agents
-    position: Option<Position>, // Cetus DLMM position
+    position: Position,         // Cetus DLMM position
     balance: Bag,               // Token balances (String -> Balance<T>)
     fee: Bag,                   // Accumulated fees (String -> Balance<T>)
     lending: Bag,               // Scallop sCoin holdings (String -> ScallopVault<T>)
@@ -135,8 +135,7 @@ public fun user_deposit_liquidity<CoinTypeA, CoinTypeB>(
     ctx: &mut TxContext,
 );
 
-// (b) Wrap an existing Cetus Position (e.g. one previously extracted via
-//     user_get_and_return_position) into a fresh PM.
+// (b) Wrap an existing Cetus `Position` the caller already holds into a fresh PM.
 public fun user_deposit_position(
     record: &mut Record,
     position: Position,
@@ -244,17 +243,18 @@ example `u64::MAX` for "withdraw everything") and guarantees that dust from
 rounding never strands a bag entry. Downstream functions that require an exact
 amount (e.g. `pool::add_liquidity`) will still abort, so no funds can be lost.
 
-### D-05: Contract Is Intentionally Immutable
-The CDPM package is published as immutable (see the `package immutable:
-HWJKADRh...` line near the top of this README). There is no pause switch, no
-upgrade path, and no emergency admin override beyond `admin_set_fee` (now
-capped at 50%) and `admin_transfer`.
+### D-05: Contract Is Locked to Dependency-Version Upgrades Only
+The CDPM package is published with the `only_dep_upgrades` upgrade policy
+(see the `package only_dep_upgrades:` line near the top of this README).
+`cdpm.move` bytecode is locked — no admin can change protocol logic — but
+dependency-version upgrades are permitted so the package can track new
+versions of Cetus DLMM, Scallop, and Kai SAV without a fresh deploy. The
+only admin levers remain `admin_set_fee` (capped at 50%) and `admin_transfer`.
 
-Rationale: users get guaranteed semantics; no admin can silently change
-behavior. If Cetus DLMM publishes a breaking upgrade, the response is to
-publish a **new** CDPM package, not to mutate this one. Users keep full
-control via `user_get_and_return_position` (see D-07) and can migrate
-positions manually into the new deployment.
+Rationale: users get guaranteed semantics on the cdpm side, and the contract
+can keep working when one of its dependency packages publishes a non-breaking
+upgrade. If a dependency ships a breaking type-identity change, a fresh cdpm
+deploy is still required.
 
 ### D-06: `user_close_pm` Drain-Preconditions Surface as cdpm Error Codes
 `user_close_pm` validates four drain-preconditions up front so the abort
@@ -279,20 +279,6 @@ diagnostic is always a cdpm error code, not an upstream framework abort:
 
 then calls `user_close_pm` in the same transaction. The user-sdk skill
 documents a helper; see `skills/cdpm-user-sdk/reference/workflows.md`.
-
-### D-07: `user_get_and_return_position` Is a Cetus-Upgrade Escape Hatch
-When Cetus DLMM ships a breaking upgrade that invalidates the current CDPM
-package, existing positions could become stranded.
-`user_get_and_return_position` lets the owner extract the raw `Position`
-object out of their `PositionManager` so they can interact with the upgraded
-Cetus package directly, or deposit it into a newly deployed CDPM version via
-`user_deposit_position`.
-
-After extraction `pm.position = None`. The original `PositionManager` is
-effectively retired: `balance` / `fee` bags can still be withdrawn normally,
-and the shell can be closed via `user_close_pm` (the `None` branch handles
-this). There is intentionally no "put back into the same PM" function —
-migration flows through a fresh PM.
 
 ### D-08: Scallop Lending — Direct-Integration Single-Shot Idle Yield
 Idle balances in `pm.balance` (assets outside the active bin range) can be
