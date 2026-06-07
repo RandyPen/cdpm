@@ -1,6 +1,6 @@
 ---
 name: cdpm-agent-sdk
-description: TypeScript SDK guide for AI agents managing CDPM positions. Defines permission boundaries, operation workflows, automation strategies, and the Scallop and Kai SAV hot-potato supply/redeem APIs agents share with owners and protocol bots. Use when building automated liquidity management agents.
+description: TypeScript SDK guide for AI agents managing CDPM positions. Defines permission boundaries, operation workflows, automation strategies, and the Scallop and Kai SAV supply/redeem APIs agents share with owners and protocol bots. Use when building automated liquidity management agents.
 ---
 
 # CDPM Agent SDK Guide
@@ -27,10 +27,10 @@ import { SuiGrpcClient } from '@mysten/sui/grpc';
 | Collect Fees | Collect fees from position (goes to fee bag) |
 | Collect Rewards | Collect rewards (goes to fee bag) |
 | Transfer Fee to Balance | Move fees from fee bag to balance |
-| Scallop `scallop_start_supply` / `scallop_finish_supply` | Park idle balance into Scallop |
-| Scallop `scallop_start_redeem` / `scallop_finish_redeem` | Pull underlying back; yield fee deducted from interest portion |
-| Kai SAV `kai_start_supply` / `kai_finish_supply` | Park idle balance into a Kai `Vault<T, YT>` |
-| Kai SAV `kai_start_redeem` / `kai_finish_redeem` | Pull underlying back via the multi-step strategy walk; same yield fee on interest |
+| Scallop `scallop_supply` | Park idle balance into Scallop |
+| Scallop `scallop_redeem` | Pull underlying back; yield fee deducted from interest portion |
+| Kai SAV `kai_supply` | Park idle balance into a Kai `Vault<T, YT>` |
+| Kai SAV `kai_redeem` | Pull underlying back via the strategy walk; same yield fee on interest |
 
 ### What Agents CANNOT Do
 
@@ -61,9 +61,9 @@ const isAuthorized = agents.includes(agentAddress);
 ## Topics
 
 ### Core Operations
-- **[Agent Operations](reference/agent-operations.md)** - Add/remove liquidity, collect fees, transfer fees, plus the Scallop hot-potato `scallop_start_*` / `scallop_finish_*` recipe (Kai SAV recipes live in the dedicated page below)
-- **[Scallop Lending](reference/scallop-lending.md)** - **REQUIRED PTB[0]: `protocol::accrue_interest::accrue_interest_for_market(version, market, clock)` — cdpm-enforced via `EStaleScallopState (1011)`, NOT injected by `scallopTx.deposit` / `depositQuick`.** Agent-driven `scallop_start_supply` / `scallop_start_redeem`; canonical `Market` rebinding on `finish_*` (`EWrongMarket = 1012`); yield fee shares `fee_house.fee_rate` with Kai; no wrapper-extract escape — exit only via the full redeem flow.
-- **[Kai SAV Lending](reference/kai-lending.md)** - Agent-driven `kai_start_supply` / `kai_start_redeem` with strategy walk and canonical `Vault` rebinding on `finish_*` (`EWrongVault = 1013`); yield fee shares `fee_house.fee_rate` with Scallop; no wrapper-extract escape — exit only via the full redeem flow
+- **[Agent Operations](reference/agent-operations.md)** - Add/remove liquidity, collect fees, transfer fees
+- **[Scallop Lending](reference/scallop-lending.md)** - Agent-driven `scallop_supply` / `scallop_redeem` (one `tx.moveCall` each); yield fee shares `fee_house.fee_rate` with Kai
+- **[Kai SAV Lending](reference/kai-lending.md)** - Agent-driven `kai_supply` / `kai_redeem` (one `tx.moveCall` each); yield fee shares `fee_house.fee_rate` with Scallop
 - **[Automation Strategies](reference/automation-strategies.md)** - Auto-compounding, rebalancing, fee collection scheduler
 
 ### Monitoring & Best Practices

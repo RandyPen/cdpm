@@ -4,8 +4,9 @@
 
 - [System Components](#system-components)
 - [Core Data Structures](#core-data-structures)
-- [Scallop Decoupling](#scallop-decoupling)
-- [Kai SAV Decoupling](#kai-sav-decoupling)
+- [Scallop Integration Surface](#scallop-integration-surface)
+- [Kai SAV Integration Surface](#kai-sav-integration-surface)
+- [Trust Boundary](#trust-boundary)
 
 ## System Components
 
@@ -33,8 +34,8 @@
 ```typescript
 interface FeeHouse {
   id: string;
-  fee_rate: number;          // Basis points (2000 = 20%); cap is 3000 / 30%
-  fee: Map<string, string>;  // coin_type -> balance (collected protocol cuts + Scallop yield fees)
+  fee_rate: number;          // Basis points (2000 = 20%); cap is 5000 / 50%
+  fee: Map<string, string>;  // coin_type -> Balance (collected protocol cuts and lending yield fees)
 }
 ```
 
@@ -43,7 +44,15 @@ interface FeeHouse {
 ```typescript
 interface AccessList {
   id: string;
-  allow: string[];  // Authorized protocol addresses
+  allow: string[];  // Authorized protocol addresses (VecSet<address>)
+}
+```
+
+### AdminCap
+
+```typescript
+interface AdminCap {
+  id: string;  // Owned object; the unique privileged capability
 }
 ```
 
@@ -53,10 +62,10 @@ interface AccessList {
 interface PositionManager {
   id: string;
   owner: string;
-  agents: string[];       // Authorized agent addresses
-  position: string | null; // Cetus DLMM Position ID
-  balance: Map<string, string>;  // Available funds
-  fee: Map<string, string>;      // Accumulated fees
+  agents: string[];        // VecSet<address> — authorized agent addresses
+  position: string | null; // Optional Cetus DLMM Position handle
+  balance: Map<string, string>;  // type_name<T> -> Balance<T>: spendable funds
+  fee: Map<string, string>;      // type_name<T> -> Balance<T>: yield bookkeeping
   // Unified lending bag — holds both Scallop and Kai SAV entries:
   //   Scallop: key = type_name<T>,  value = ScallopVault<T> { scoin: Balance<MarketCoin<T>>, principal }
   //   Kai SAV: key = type_name<YT>, value = KaiVault<T, YT>  { yt_balance: Balance<YT>,     principal }
@@ -87,32 +96,44 @@ interface KaiVault<T, YT> {
 }
 ```
 
-## Scallop Decoupling
+### GlobalRecord and Record
 
-cdpm imports only the read-only / hot-potato surface of Scallop:
+```typescript
+interface GlobalRecord {
+  id: string;
+  record: Map<string, string>;  // owner address -> Record id
+}
 
-- `protocol::market::{Self, Market}` (object handle)
-- `protocol::reserve` (view-only access to `balance_sheet`)
-- `protocol::borrow_dynamics` (view-only `last_updated_by_type` — used by the freshness floor in `assert_scallop_state_fresh`)
-- `x::wit_table` (view-only)
+interface Record {
+  id: string;
+  record: Map<string, boolean>; // PositionManager id -> tracking flag
+}
+```
 
-It does **NOT** import `protocol::mint`, `protocol::redeem`, `protocol::version::Version`, or `protocol::accrue_interest`. As a consequence, Scallop `Version` bumps no longer break cdpm — callers compose `accrue_interest`, `mint::mint` and `redeem::redeem` themselves inside the same PTB. The caller's `accrue_interest::accrue_interest_for_market(version, market, clock)` pre-step is mandatory (cdpm asserts `borrow_dynamics::last_updated_by_type == clock::timestamp_ms / 1000` and aborts with `EStaleScallopState (1011)` otherwise); the `borrow_dynamics` accessors used for this check are version-free `public` views, so the decoupling from Scallop `Version` is preserved.
+`GlobalRecord` is the shared index of registered owners; each owner holds one `Record` object that catalogues their `PositionManager` ids.
 
-## Kai SAV Decoupling
+## Scallop Integration Surface
 
-cdpm imports only the read-only surface of Kai SAV:
+cdpm imports the Scallop modules needed for in-call supply / redeem:
 
-- `kai_sav::vault as kai_vault` for the `Vault<T, YT>` type and the view functions
-  `total_available_balance(vault, clock)` and `total_yt_supply(vault)`.
+- `protocol::market::Market` (object handle, passed to mint / redeem)
+- `protocol::reserve::MarketCoin` (the sCoin yield token type)
+- `protocol::version::Version` (passed alongside the market)
+- `protocol::mint` (called inside `scallop_supply<T>`)
+- `protocol::redeem` (called inside `scallop_redeem<T>`)
 
-It does **NOT** import `kai_sav::vault::deposit`, `kai_sav::vault::withdraw`,
-`kai_sav::vault::redeem_withdraw_ticket`, or any strategy module. The mint/burn
-side is composed by the caller inside the PTB exactly like Scallop's `mint::mint`
-/ `redeem::redeem`. Strategy walks (`<strategy_module>::strategy_withdraw_for_vault`)
-are also caller-composed; cdpm never holds a `WithdrawTicket`.
+`scallop_supply<T>` and `scallop_redeem<T>` are each one `tx.moveCall` from the caller's perspective; cdpm runs the Scallop calls itself between withdrawing from the PM balance and re-depositing the resulting sCoin (supply) or underlying (redeem).
 
-> **Trust boundary.** Both Scallop and Kai integrations inherit upstream-team-trust
-> assumptions for their respective protocols. cdpm has no admin-side YT whitelist
-> and no Scallop-market whitelist; the mitigation surface is agent / protocol-bot
-> selection by the PM owner. See README D-08 / D-10 and DESIGN for the full
-> trust-boundary discussion.
+## Kai SAV Integration Surface
+
+cdpm imports the Kai SAV modules needed for in-call supply / redeem:
+
+- `kai_sav::vault as kai_vault` for `Vault<T, YT>` plus `deposit`, `withdraw`, and `redeem_withdraw_ticket`.
+- `kai_sav::kai_leverage_supply_pool as klsp` for `Strategy<T, ST>` and `klsp::withdraw`.
+- `kai_leverage::supply_pool::SupplyPool` for the strategy backing store.
+
+`kai_supply<T, YT>` is one `tx.moveCall`. `kai_redeem<T, ST, YT>` is also one `tx.moveCall` and is generic over the supply-pool strategy `<T, ST>`; cdpm walks `vault::withdraw → klsp::withdraw → vault::redeem_withdraw_ticket` internally.
+
+## Trust Boundary
+
+Both Scallop and Kai integrations inherit upstream-team-trust assumptions for their respective protocols. cdpm has no admin-side YT whitelist and no Scallop-market whitelist; the mitigation surface is agent / protocol-bot selection by the PM owner. See README D-08 / D-10 and DESIGN for the full trust-boundary discussion.

@@ -2,44 +2,31 @@
 
 ## Contents
 
-- [Agent PTB Recipe: Supply](#agent-ptb-recipe-supply)
-- [Agent PTB Recipe: Redeem (with yield-fee deduction)](#agent-ptb-recipe-redeem-with-yield-fee-deduction)
-- [When to Call `scallop_start_supply` vs Leave Funds Idle](#when-to-call-scallop_start_supply-vs-leave-funds-idle)
-- [Pre-Flight: `accrue_interest_for_market` Snapshot Timing](#pre-flight-accrue_interest_for_market-snapshot-timing)
+- [Agent Move Call: Supply](#agent-move-call-supply)
+- [Agent Move Call: Redeem (with yield-fee deduction)](#agent-move-call-redeem-with-yield-fee-deduction)
+- [When to Call `scallop_supply` vs Leave Funds Idle](#when-to-call-scallop_supply-vs-leave-funds-idle)
+- [Sizing Redemptions](#sizing-redemptions)
 - [Failure Modes](#failure-modes)
 - [Choosing Between Scallop and Kai for the Same `T`](#choosing-between-scallop-and-kai-for-the-same-t)
 - [Event Subscription](#event-subscription)
 
-## Agent PTB Recipe: Supply
+## Agent Move Call: Supply
 
-Authoritative signatures:
+Authoritative signature:
 
 ```move
-public fun scallop_start_supply<T>(
+public fun scallop_supply<T>(
     access: &AccessList,
     pm: &mut PositionManager,
-    market: &Market,
-    clock: &Clock,
+    version: &ScallopVersion,
+    market: &mut Market,
     amount: u64,
+    clock: &Clock,
     ctx: &mut TxContext,
-): (Coin<T>, ScallopSupplyTicket<T>);
-
-public fun scallop_finish_supply<T>(
-    pm: &mut PositionManager,
-    market: &Market,
-    ticket: ScallopSupplyTicket<T>,
-    scoin: Coin<MarketCoin<T>>,
 );
 ```
 
-4 commands (accrual prefix + 3 main):
-
-```
-1. protocol::accrue_interest::accrue_interest_for_market(version, market, clock)
-2. cdpm::scallop_start_supply<T>(access, pm, market, clock, amount)       → (coin_t, ticket)
-3. protocol::mint::mint<T>(version, market, coin_t, clock)                → coin_market<T>
-4. cdpm::scallop_finish_supply<T>(pm, market, ticket, coin_market)
-```
+One `tx.moveCall`:
 
 ```typescript
 import { Transaction } from '@mysten/sui/transactions';
@@ -53,48 +40,16 @@ async function agentSupplyToScallop(
 ) {
   const tx = new Transaction();
 
-  // REQUIRED PTB[0] — cdpm asserts EStaleScallopState (1011) without this.
-  // NOT injected by scallopTx.deposit / depositQuick.
   tx.moveCall({
-    target: `${SCALLOP_PROTOCOL}::accrue_interest::accrue_interest_for_market`,
-    arguments: [
-      tx.object(SCALLOP_VERSION_ID),
-      tx.object(SCALLOP_MARKET_ID),
-      tx.object('0x6'),
-    ],
-  });
-
-  const [coinT, ticket] = tx.moveCall({
-    target: `${CDPM_PACKAGE}::cdpm::scallop_start_supply`,
+    target: `${CDPM_PACKAGE}::cdpm::scallop_supply`,
     typeArguments: [underlyingCoinType],
     arguments: [
       tx.object(CDPM_MAINNET.ACCESS_LIST_ID),
       tx.object(pmId),
-      tx.object(SCALLOP_MARKET_ID),
-      tx.object('0x6'),
-      tx.pure.u64(amount),
-    ],
-  });
-
-  const [coinMarket] = tx.moveCall({
-    target: `${SCALLOP_PROTOCOL}::mint::mint`,
-    typeArguments: [underlyingCoinType],
-    arguments: [
       tx.object(SCALLOP_VERSION_ID),
       tx.object(SCALLOP_MARKET_ID),
-      coinT,
+      tx.pure.u64(amount),
       tx.object('0x6'),
-    ],
-  });
-
-  tx.moveCall({
-    target: `${CDPM_PACKAGE}::cdpm::scallop_finish_supply`,
-    typeArguments: [underlyingCoinType],
-    arguments: [
-      tx.object(pmId),
-      tx.object(SCALLOP_MARKET_ID),
-      ticket,
-      coinMarket,
     ],
   });
 
@@ -102,56 +57,45 @@ async function agentSupplyToScallop(
 }
 ```
 
-`scallop_start_supply` decreases `pm.balance[T]` by `amount` and stores `principal` for later yield accounting under the bag key `type_name<T>`. The first supply for a given `T` creates a fresh `ScallopVault<T>` entry; subsequent supplies of the same `T` add to it.
+`scallop_supply` decreases `pm.balance[T]` by `amount`, calls Scallop's `protocol::mint::mint<T>` internally, and stores the resulting `Balance<MarketCoin<T>>` plus the principal under the bag key `type_name<T>`. The first supply for a given `T` creates a fresh `ScallopVault<T>` entry; subsequent supplies of the same `T` add to it.
 
-**`MAX_U64` is a "drain whatever's there" sentinel.** `scallop_start_supply` pulls the underlying via the internal `withdraw_from_balance<T>` helper (`cdpm.move:1271-1286`), which clamps `amount >= balance_amount` and removes the bag entry; the post-clamp `coin.value()` is what feeds `compute_expected_scoin`. So passing `tx.pure.u64(MAX_U64)` consumes the entire `pm.balance[T]` entry, and the only remaining abort path is `EZeroExpected (1007)` if the entry is empty / dust. This mirrors `protocol_transfer_fee_to_balance`, which uses the same sentinel today (the helper has identical clamp logic in `withdraw_from_fee`, `cdpm.move:1301-1316`). Prefer the sentinel for atomic-rebalance flows where you'd otherwise have to dev-inspect the redeem residual and refeed it as `amount`. Use an explicit sized `amount` only when you intentionally want to leave a residual in `pm.balance[T]`.
+Scallop's `mint::mint` calls `accrue_interest_for_market` as its first step, so the balance sheet read by the mint is fresh by construction. The cdpm agent does not need to inject a separate accrual command.
+
+**`MAX_U64` is a "drain whatever's there" sentinel.** `scallop_supply` pulls the underlying via the internal `withdraw_from_balance<T>` helper, which clamps `amount >= balance_amount` and removes the bag entry. Passing `tx.pure.u64(MAX_U64)` consumes the entire `pm.balance[T]` entry. Use an explicit sized `amount` only when you intentionally want to leave a residual in `pm.balance[T]`.
 
 **Don't accidentally re-supply your own redeem proceeds.** A common agent bug: redeem from Scallop, then immediately re-supply the post-fee underlying back into the same market. Each round trip pays a yield fee on the interest portion, so churn is expensive. Track time-since-last-redeem and amortize.
 
 ---
 
-## Agent PTB Recipe: Redeem (with yield-fee deduction)
+## Agent Move Call: Redeem (with yield-fee deduction)
 
-Same freshness rule applies. Redeem deducts the protocol yield fee from the **interest portion only**, never from principal. The fee math lives entirely in `scallop_finish_redeem` (mirrors `kai_finish_redeem`):
+Redeem deducts the protocol yield fee from the **interest portion only**, never from principal:
 
 ```
-interest      = max(0, redeemed_amount − principal_portion)
-fee_amount    = floor(interest × fee_house.fee_rate / 10_000)
-to_pm_balance = redeemed_amount − fee_amount
+principal_portion = floor(vault.principal × want_amount / total_share)
+interest          = max(0, redeemed_amount − principal_portion)
+fee_amount        = floor(interest × fee_house.fee_rate / 10_000)
+to_pm_balance     = redeemed_amount − fee_amount
 ```
 
-`principal_portion` is the slice of stored principal proportional to the burned scoin: `principal_portion = floor(P_total × scoin_burned / S_total)` (see `pull_from_scallop_lending`).
+`principal_portion` is the slice of stored principal proportional to the burned sCoin (see `pull_from_scallop_lending`).
 
-Authoritative signatures:
+Authoritative signature:
 
 ```move
-public fun scallop_start_redeem<T>(
+public fun scallop_redeem<T>(
     access: &AccessList,
     pm: &mut PositionManager,
-    market: &Market,
-    clock: &Clock,
-    market_coin_amount: u64,
-    ctx: &mut TxContext,
-): (Coin<MarketCoin<T>>, ScallopRedeemTicket<T>);
-
-public fun scallop_finish_redeem<T>(
-    pm: &mut PositionManager,
-    market: &Market,
     fee_house: &mut FeeHouse,
-    ticket: ScallopRedeemTicket<T>,
-    underlying: Coin<T>,
+    version: &ScallopVersion,
+    market: &mut Market,
+    scoin_amount: u64,
+    clock: &Clock,
     ctx: &mut TxContext,
 );
 ```
 
-4 commands:
-
-```
-1. protocol::accrue_interest::accrue_interest_for_market(version, market, clock)
-2. cdpm::scallop_start_redeem<T>(access, pm, market, clock, scoin_amount) → (coin_market, ticket)
-3. protocol::redeem::redeem<T>(version, market, coin_market, clock)       → coin_t
-4. cdpm::scallop_finish_redeem<T>(pm, market, fee_house, ticket, coin_t)
-```
+One `tx.moveCall`:
 
 ```typescript
 async function agentRedeemFromScallop(
@@ -163,49 +107,17 @@ async function agentRedeemFromScallop(
 ) {
   const tx = new Transaction();
 
-  // REQUIRED PTB[0] — cdpm asserts EStaleScallopState (1011) without this.
-  // NOT injected by scallopTx.deposit / depositQuick.
   tx.moveCall({
-    target: `${SCALLOP_PROTOCOL}::accrue_interest::accrue_interest_for_market`,
-    arguments: [
-      tx.object(SCALLOP_VERSION_ID),
-      tx.object(SCALLOP_MARKET_ID),
-      tx.object('0x6'),
-    ],
-  });
-
-  const [coinMarket, ticket] = tx.moveCall({
-    target: `${CDPM_PACKAGE}::cdpm::scallop_start_redeem`,
+    target: `${CDPM_PACKAGE}::cdpm::scallop_redeem`,
     typeArguments: [underlyingCoinType],
     arguments: [
       tx.object(CDPM_MAINNET.ACCESS_LIST_ID),
       tx.object(pmId),
-      tx.object(SCALLOP_MARKET_ID),
-      tx.object('0x6'),
-      tx.pure.u64(scoinAmount),
-    ],
-  });
-
-  const [coinT] = tx.moveCall({
-    target: `${SCALLOP_PROTOCOL}::redeem::redeem`,
-    typeArguments: [underlyingCoinType],
-    arguments: [
+      tx.object(CDPM_MAINNET.FEE_HOUSE_ID),
       tx.object(SCALLOP_VERSION_ID),
       tx.object(SCALLOP_MARKET_ID),
-      coinMarket,
+      tx.pure.u64(scoinAmount),
       tx.object('0x6'),
-    ],
-  });
-
-  tx.moveCall({
-    target: `${CDPM_PACKAGE}::cdpm::scallop_finish_redeem`,
-    typeArguments: [underlyingCoinType],
-    arguments: [
-      tx.object(pmId),
-      tx.object(SCALLOP_MARKET_ID),
-      tx.object(CDPM_MAINNET.FEE_HOUSE_ID),
-      ticket,
-      coinT,
     ],
   });
 
@@ -213,32 +125,32 @@ async function agentRedeemFromScallop(
 }
 ```
 
-### Sizing Redemptions Before Calling `scallop_start_redeem`
+Scallop's `redeem::redeem` calls `accrue_interest_for_market` as its first step, so the balance sheet is fresh at the moment of redemption.
 
-Agent bots typically know "I need `K` underlying to fund a rebalance" and must compute `market_coin_amount` from that. `scallop_start_redeem` takes sCoin, not underlying, so the bot has to invert `compute_expected_underlying_scallop` (and the yield-fee deduction) before signing.
+**`scoin_amount = MAX_U64` drains the full vault entry.** When `want_amount >= total_scoin`, `pull_from_scallop_lending` removes the `ScallopVault<T>` entry from `pm.lending` and returns the entire stored `Balance<MarketCoin<T>>` plus all stored principal. Use this sentinel when closing out a position entirely; use an explicit sized amount for partial redeems.
 
-- **Pre-fee target** — I need at least `K` underlying out of Scallop, ignoring fee:
+### Sizing Redemptions
+
+Agent bots typically know "I need `K` underlying to fund a rebalance" and must compute `scoin_amount` from that. `scallop_redeem` takes sCoin, not underlying, so the bot inverts Scallop's `redeem` formula and the yield-fee deduction before signing.
+
+- **Pre-fee target** — at least `K` underlying delivered by Scallop, ignoring fee:
 
   ```
   scoin_to_burn = ceil(K × supply / denom)            // denom = cash + debt − revenue
   ```
 
-- **Post-fee target** — I want `K` net to land in `pm.balance[T]` after the yield fee. Closed-form (interest-exists branch, `p > π`):
+- **Post-fee target** — at least `K` net underlying credited to `pm.balance[T]`:
 
   ```
   Let r = fee_rate / 10000, π = P_vault / S_vault, p = denom / supply
-  scoin_to_burn ≈ ceil(K / (p × (1 − r) + r × π))
+  scoin_to_burn ≈ ceil(K / (p × (1 − r) + r × π))     when p >  π   (interest exists)
+  scoin_to_burn  = ceil(K × supply / denom)           when p <= π   (no interest, no fee)
   ```
 
-  No-interest branch (`p <= π`): `scoin_to_burn = ceil(K × supply / denom)` (fee is zero).
-
-Both use **ceiling division** because cdpm's prediction floors. The full derivation, edge cases (no-interest branch, vault drain, socialized loss), and an iterative refinement helper (`scoinToBurnForTargetNet`) live in [`cdpm-calculation-skill/reference/scallop-lending-math.md`](../../cdpm-calculation-skill/reference/scallop-lending-math.md) section 7.
+Both use **ceiling division** because Scallop's redeem floors the underlying output. The full derivation and an iterative refinement helper live in [`cdpm-calculation-skill/reference/scallop-lending-math.md`](../../cdpm-calculation-skill/reference/scallop-lending-math.md) section 7.
 
 ```typescript
-import {
-  scoinToBurnForTargetUnderlying,
-  scoinToBurnForTargetNet,
-} from './scallop-lending-math';
+import { scoinToBurnForTargetNet } from './scallop-lending-math';
 
 async function agentRedeemForTargetNet(
   client: SuiGrpcClient,
@@ -261,40 +173,26 @@ async function agentRedeemForTargetNet(
 }
 ```
 
-The closed-form approximation is occasionally off-by-one due to per-step floors inside `scallop_finish_redeem`; the iterative helper bumps `N` upward by 1 sCoin until forward simulation confirms `>= desiredNet`. Re-snapshot the reserve and vault state *just after* the `accrue_interest_for_market` command and just before signing — utilization-driven `denom` shifts every block, and stale snapshots can leave the bot 1-2 underlying short.
-
-### Don't Full-Drain a Lending Entry
-
-**Agents must NOT pass `scoinAmount = MAX_U64` to `scallop_start_redeem`.** Scallop's upstream `protocol::redeem::redeem` uses the same single floor-div formula as cdpm's `compute_expected_underlying_scallop`, so in the common case the redeemed amount equals `expected_underlying` exactly — but full drain still leaves no margin if Scallop ever changes the rounding, and the same defensive cap applies for parity with Kai (where dust is real). The PM-state-machine side has another reason: leaving a small wrapper residual lets the owner's close-PM flow handle the final cleanup uniformly across both protocols.
-
-Cap at `wrapperRaw − LENDING_SAFE_MARGIN_WRAPPER_RAW` (recommended client-side default `100n` sCoin raw) via the same `capRedeemBurnRaw` helper shown in [`cdpm-agent-sdk/reference/kai-lending.md`](./kai-lending.md#dont-full-drain-a-lending-entry) — it is protocol-agnostic. The residual sCoin is reclaimed by the owner's close-PM flow. See [`cdpm-calculation-skill/reference/scallop-lending-math.md` §9.1](../../cdpm-calculation-skill/reference/scallop-lending-math.md#91-floor-div-dust-on-chain-tolerance-and-the-lending_safe_margin_wrapper_raw-floor) for the math.
-
-**Dust topup not needed.** Scallop's `redeem::redeem` shares cdpm's exact floor-div formula on the same in-PTB balance sheet, so `redeemed == expected` exactly in the common case. cdpm's `scallop_finish_redeem` additionally tolerates up to `REDEEM_DUST_TOLERANCE_RAW = 4` raw on-chain as forward-compatibility against a future Scallop rounding change — defense-in-depth, not currently exercised. No `coin::join` topup is required on the Scallop path; the same is true on the Kai path (handled in [`kai-lending.md` "Floor-div dust"](./kai-lending.md)).
+Re-snapshot the reserve and vault state just before signing — utilization-driven `denom` shifts every block, and stale snapshots can leave the bot 1-2 underlying short.
 
 ---
 
-## When to Call `scallop_start_supply` vs Leave Funds Idle
+## When to Call `scallop_supply` vs Leave Funds Idle
 
 Yield-vs-gas tradeoff:
 
-- **Supply when** the idle balance is large enough that the projected interest over the expected idle window exceeds the round-trip gas (4 commands per direction, ~6 commands total counting the matching redeem). For Sui mainnet this is usually a few hundred USDC at 5%+ supply APY held for >12 hours.
+- **Supply when** the idle balance is large enough that the projected interest over the expected idle window exceeds the round-trip gas (one `tx.moveCall` per direction). For Sui mainnet this is usually a few hundred USDC at 5%+ supply APY held for >12 hours.
 - **Stay idle when** the position is about to be rebalanced (next add/remove liquidity is queued in <1 hour) — the round-trip yield will not cover the supply+redeem gas.
-- **Always supply** when `pm.balance[T]` accumulates accidentally from `protocol_transfer_fee_to_balance` and is not earmarked for an immediate use; even a few hours of yield are pure upside vs holding.
-
-Agents that auto-supply should batch the accrual prefix + supply into **one** PTB to reduce gas overhead vs sending the accrual as a standalone tx.
+- **Always supply** when `pm.balance[T]` accumulates from `agent_transfer_fee_to_balance` and is not earmarked for an immediate use; even a few hours of yield are pure upside vs holding.
 
 ---
 
-## Pre-Flight: `accrue_interest_for_market` Snapshot Timing
+## Constraints
 
-cdpm's `compute_expected_scoin` / `compute_expected_underlying_scallop` are pure functions of `balance_sheet`. The protocol-tier and agent-tier off-chain SDKs both compute predictions from a snapshot of `Market` taken via `client.getObject`. If the snapshot was taken several blocks ago, the on-chain `balance_sheet` will have moved (interest accrued, utilization shifted) and the off-chain prediction will be off.
-
-The fix is **two-step**:
-
-1. PTB command 1 is always `accrue_interest_for_market` — this guarantees the on-chain `balance_sheet` matches the timestamp embedded in `clock` at execution time.
-2. Off-chain, take the `Market` snapshot **after** the simulated accrue_interest (e.g. by `dryRunTransactionBlock` of just the accrue_interest command) and use it for sizing the next supply/redeem.
-
-Skipping step 2 is fine for small amounts (a 1-2 unit shortfall is easily absorbed). For redeems aiming for `desiredNet >= 100 USDC`, always size after a fresh accrual snapshot.
+- **One vault per underlying T**: `pm.lending` keys on `type_name<T>`. The sCoin type is structurally pinned to `MarketCoin<T>` by the type system, so a fake-sCoin variant cannot be supplied.
+- **Yield fee applies to agents**: `scallop_redeem` computes `fee_amount = floor(max(0, redeemed − principal_portion) × fee_house.fee_rate / 10_000)` regardless of caller. Agent redeems pay the same yield fee as owner / protocol redeems.
+- **No wrapper-extract escape**: cdpm exposes no function that hands raw `Coin<MarketCoin<T>>` out of `pm.lending`. The only exit path is `scallop_redeem`. If Scallop's `mint::mint` or `redeem::redeem` aborts (paused market, Version mismatch), the cdpm move call aborts atomically and `pm.lending` stays intact. Recovery is to retry once Scallop ships an SDK update against the new Version.
+- **Trust boundary**: Scallop's UpgradeCap is held by Scallop's admin. A malicious Scallop upgrade could in principle reduce yield or break the redeem path, but cannot withdraw cdpm-held `Balance<MarketCoin<T>>` because cdpm pins the sCoin type structurally.
 
 ---
 
@@ -302,17 +200,12 @@ Skipping step 2 is fine for small amounts (a 1-2 unit shortfall is easily absorb
 
 | Code | Constant | Trigger | Recovery |
 |------|----------|---------|----------|
-| 1001 | `ENotOwner` | Agent attempted an owner-only function (e.g. `user_get_position` / `user_get_and_return_position`). | Escalate to owner. |
-| 1002 | `ENotAllow` | Agent address removed from `pm.agents` between scheduling and signing. | Re-check `pm.agents` before retry. |
-| 1005 | `ENoSuchVault` | `scallop_start_redeem` for a `T` that has never been supplied (or was fully drained). | Snapshot `pm.lending` before sizing. |
-| 1006 | `EReserveEmpty` | Scallop reserve degenerate — zero supply or zero `cash+debt−revenue`. | Run the accrue prefix and re-check; if still degenerate, this market is unusable. |
-| 1007 | `EZeroExpected` | Amount too small — `coin_amount × supply < denom` (supply) or `scoin_amount × denom < supply` (redeem). | Increase amount, or wait for the reserve to grow. |
-| 1008 | `EWrongPm` | Hot-potato ticket consumed against a different PM. | Re-check the `pmId` you signed against. |
-| 1009 | `EAmountShortfall` | Most common: agent passed `scoinAmount = MAX_U64` (full drain) — `protocol::redeem::redeem` floor-div dust trips the assert. Other: missing `accrue_interest_for_market` as command 0, or reserve state shifted between snapshot and signing. | Cap burn at `wrapperRaw − LENDING_SAFE_MARGIN_WRAPPER_RAW` (leave residual for owner close-PM); ALSO always run `accrue_interest_for_market` as PTB command 0; re-snapshot reserve just before sizing. |
-| 1011 | `EStaleScallopState` | `scallop_start_*` reached cdpm without `accrue_interest_for_market` earlier in the same PTB second. | Make `accrue_interest::accrue_interest_for_market(version, market, clock)` PTB command 0 of every Scallop batch — cdpm enforces this. |
-| 1012 | `EWrongMarket` | `scallop_finish_*` received a `&Market` whose id ≠ ticket.market_id. | Reuse the same `tx.object(SCALLOP_MARKET_ID)` handle across `start_*` and `finish_*`. |
+| 1001 | `ENotOwner` | Agent attempted an owner-only function (e.g. `user_get_position`). | Escalate to owner. |
+| 1002 | `ENotAllow` | Agent address not in `pm.agents`. | Re-check `pm.agents` before retry. |
+| 1005 | `ENoSuchVault` | `scallop_redeem` for a `T` that has never been supplied (or was fully drained). | Snapshot `pm.lending` before sizing. |
+| 1006 | `ENoSuchBalance` | `scallop_supply` for a `T` that has no entry in `pm.balance`. | Verify `pm.balance` has the underlying before signing. |
 
-External aborts (from Scallop itself, not cdpm): `protocol::version` mismatch after a Scallop upgrade, or a `protocol::market` pause. When these hit, the cdpm hot-potato ticket is never consumed (the abort happens inside the inner Scallop move-call before `scallop_finish_*` runs), so the PM state is intact. Pause Scallop ops on this market until upstream is healthy; once Scallop ships an SDK update against the new Version, retry the normal `scallop_start_redeem` → `redeem::redeem` → `scallop_finish_redeem` flow. cdpm offers no in-protocol bypass — there is no wrapper-extract escape for either owner or agent.
+External aborts (from Scallop itself, not cdpm): `protocol::version` mismatch after a Scallop upgrade, or a `protocol::market` pause. Because `scallop_supply` / `scallop_redeem` are atomic single `tx.moveCall`s, any internal abort rolls back the whole transaction and `pm.lending` plus `pm.balance` stay intact. Pause Scallop ops on this market until upstream is healthy; once Scallop ships an SDK update against the new Version, retry the normal flow.
 
 ---
 
@@ -322,15 +215,14 @@ Both integrations can hold the same underlying `T` simultaneously (the bag keys 
 
 | Factor | Prefer Scallop | Prefer Kai |
 |--------|----------------|------------|
-| Pre-flight gas | Adds 1 command (accrue_interest, **mandatory** — cdpm enforces freshness) | No accrual prefix |
-| Redeem complexity | 1 inner call (`redeem::redeem`) | N+2 inner calls (strategy walk + `redeem_withdraw_ticket`) |
+| Move call shape | One `tx.moveCall` per direction | One `tx.moveCall` per direction |
 | Yield curve | Money-market APY (utilization-driven) | Aggregated strategies (often higher net of fees) |
 | Withdrawal liquidity | Limited by `cash` (instant if available) | Limited by `total_available_balance` minus locked strategy capital |
-| Failure surface | Scallop pause / version bump / `EStaleScallopState` if accrue is skipped | Kai admin disabling withdrawals, strategy losses, rate limits |
+| Failure surface | Scallop pause / version bump | Kai admin disabling withdrawals, strategy losses, rate limits |
 
-Default heuristic: if Kai has a `Vault<T, YT>` available for the underlying, prefer Kai for **long-idle balance** (>1 day expected hold) because the strategy diversification usually pays off. Prefer Scallop for **short-idle balance** (<1 day) because the redeem path is shorter. For mid-sized rebalances, split 50/50 across both — the bag-key disambiguation makes coexistence cost nothing.
+Default heuristic: if Kai has a `Vault<T, YT>` available for the underlying, prefer Kai for **long-idle balance** (>1 day expected hold) because the strategy diversification usually pays off. Prefer Scallop for **short-idle balance** (<1 day). For mid-sized rebalances, split 50/50 across both — the bag-key disambiguation makes coexistence cost nothing.
 
-Cross-reference: the agent-flavored Kai page is [`kai-lending.md`](./kai-lending.md). The yield-fee deduction is identical across both; the same `fee_house.fee_rate` knob covers both integrations.
+The yield-fee deduction is identical across both; the same `fee_house.fee_rate` knob covers both integrations. Cross-reference: the agent-flavored Kai page is [`kai-lending.md`](./kai-lending.md).
 
 ---
 
@@ -342,19 +234,19 @@ Agents should subscribe to the Scallop-lending events alongside Kai's:
 interface ScallopSupplied {
   pm_id: string;
   coin_type: string;
-  deposit_amount: u64;
-  market_coin_minted: u64;
+  deposit_amount: string;
+  market_coin_minted: string;
 }
 
 interface ScallopRedeemed {
   pm_id: string;
   coin_type: string;
-  market_coin_redeemed: u64;
-  redeemed_amount: u64;
-  principal_portion: u64;
-  interest: u64;
-  fee_amount: u64;
+  market_coin_redeemed: string;
+  redeemed_amount: string;
+  principal_portion: string;
+  interest: string;
+  fee_amount: string;
 }
 ```
 
-cdpm emits no extraction event for Scallop lending — there is no wrapper-extract function. The only exit-related event on the Scallop side is `ScallopRedeemed`, emitted by `scallop_finish_redeem` once the underlying lands in `pm.balance`.
+The only exit-related event on the Scallop side is `ScallopRedeemed`, emitted by `scallop_redeem` once the underlying lands in `pm.balance`. cdpm emits no separate extraction event — there is no extraction function.

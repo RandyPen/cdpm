@@ -7,10 +7,8 @@
 - [3. Canonical Pattern](#3-canonical-pattern)
 - [4. Worked Examples](#4-worked-examples)
 - [5. Caveats](#5-caveats)
-- [5.1 Caller-Specific Full-Drain Patterns](#51-caller-specific-full-drain-patterns)
-- [6. When to Reach for Approach A Instead](#6-when-to-reach-for-approach-a-instead)
-- [7. SDK File Reference](#7-sdk-file-reference)
-- [8. Cross-Reference](#8-cross-reference)
+- [6. SDK File Reference](#6-sdk-file-reference)
+- [7. Cross-Reference](#7-cross-reference)
 
 ## 1. Interop Fact: One Mysten `Transaction` Backs All Three
 
@@ -18,11 +16,11 @@ Both SDKs are built on top of Mysten's `Transaction` from `@mysten/sui/transacti
 
 | Side | Entry point | Behavior |
 |------|-------------|----------|
-| Scallop | `scallopBuilder.createTxBlock(tx?: Transaction)` | If `tx` is a Mysten `Transaction`, it is *adopted* via `instanceof Transaction ? new SuiKitTxBlock(initTxBlock) : ...` (`sui-scallop-sdk/src/builders/coreBuilder.ts:483-488`). The returned `ScallopTxBlock` is a `Proxy` over `SuiKitTxBlock`, whose `.txBlock` field IS the same Mysten `Transaction` you handed in. |
+| Scallop | `scallopBuilder.createTxBlock(tx?: Transaction)` | If `tx` is a Mysten `Transaction`, it is adopted via `instanceof Transaction ? new SuiKitTxBlock(initTxBlock) : ...` (`sui-scallop-sdk/src/builders/coreBuilder.ts:483-488`). The returned `ScallopTxBlock` is a `Proxy` over `SuiKitTxBlock`, whose `.txBlock` field IS the same Mysten `Transaction` you handed in. |
 | Kai | `vault.deposit(tx, balance)` / `vault.withdraw(tx, balance, strategies)` | `tx` is typed as Mysten `Transaction` directly (`kai-ts-sdk/src/vault/vault.ts:177,222`). Returns tx-result `Balance` arguments. |
 | cdpm | raw `tx.moveCall({ target: \`${CDPM_PACKAGE}::cdpm::*\`, ... })` | cdpm has no published TS bindings; calls go straight on the Mysten `Transaction`. |
 
-Because all three accept the same `Transaction` instance, you can interleave their move-calls in one PTB and submit it once. **This is mandatory**, not just an optimization: the cdpm hot-potato ticket has no `store`/`key`/`drop` and cannot survive across transactions. Two-transaction designs are categorically incompatible with cdpm's surface.
+Because all three accept the same `Transaction` instance, you can interleave their move-calls in one PTB and submit it once. The four cdpm lending entries — `scallop_supply`, `scallop_redeem`, `kai_supply`, `kai_redeem` — are each a single `tx.moveCall` that composes the full lending leg internally, so the cdpm side contributes one move-call per lending action regardless of how many upstream calls it wraps.
 
 ---
 
@@ -30,18 +28,12 @@ Because all three accept the same `Transaction` instance, you can interleave the
 
 | Approach | Description | Atomicity | Gas | Upgrade resilience | Type safety | Dependency surface | Viable? |
 |----------|-------------|-----------|-----|---------------------|-------------|--------------------|---------|
-| **A. All raw `tx.moveCall`** | Hardcode `SCALLOP_VERSION_ID`, `SCALLOP_MARKET_ID`, `KAI_SAV_PACKAGE`, type tags; call `protocol::mint::mint` / `kai_sav::vault::deposit` directly. | ✓ | 1 PTB | ✗ — every Scallop/Kai upgrade requires a cdpm-side constant edit | Weak (string targets) | None | ✓ |
-| **B. Mysten-rooted shared `Transaction`** *(recommended)* | `new Transaction()`; pass to `scallopBuilder.createTxBlock(tx)` *only if* the PTB needs Scallop; pass to `kaiVault.deposit/withdraw(tx, …)` *only if* it needs Kai; cdpm calls remain raw on `tx`. | ✓ | 1 PTB | ✓ — SDK absorbs inner-protocol upgrades | Medium (SDK methods typed; cdpm raw) | Both SDKs | ✓ |
-| **C. Scallop-rooted** | `builder.createTxBlock()` (no tx arg) makes a fresh wrapper; reach the underlying Mysten `Transaction` via `scallopTx.txBlock` and pass that to Kai/cdpm. | ✓ | 1 PTB | ✓ | Medium | Both SDKs (Scallop init mandatory even when only Kai is touched) | ✓ but unnecessarily couples to Scallop lifecycle |
-| **D. Two separate PTBs** | Send one tx to redeem from venue A, second tx to supply to venue B. | ✗ — cdpm ticket cannot cross tx boundaries | 2 PTB | ✓ | High | Both SDKs | ✗ violates cdpm hot-potato invariant |
-| **E. Pure SDK end-to-end** | Use only `*Quick` (Scallop) / `vault.depositFromWallet` (Kai). | n/a | n/a | n/a | n/a | n/a | ✗ cdpm has no TS bindings; the cdpm calls must still be raw `moveCall` |
+| **A. All raw `tx.moveCall`** | Hardcode `SCALLOP_VERSION_ID`, `SCALLOP_MARKET_ID`, `KAI_VAULT_ID`, type tags; call `cdpm::scallop_supply` / `cdpm::kai_redeem` etc. directly. | ✓ | 1 PTB | Requires a cdpm-side constant edit whenever Scallop / Kai bump their object ids | Weak (string targets) | None | ✓ |
+| **B. Mysten-rooted shared `Transaction`** *(recommended for off-cdpm composition)* | `new Transaction()`; pass to `scallopBuilder.createTxBlock(tx)` only if the PTB also needs Scallop SDK helpers outside the cdpm lending entries; pass to `kaiVault.deposit/withdraw(tx, …)` only for off-cdpm Kai composition; cdpm lending calls remain raw on `tx`. | ✓ | 1 PTB | SDK absorbs inner-protocol upgrades for any non-cdpm calls | Medium (SDK methods typed; cdpm raw) | Both SDKs | ✓ |
+| **C. Scallop-rooted** | `builder.createTxBlock()` (no tx arg) makes a fresh wrapper; reach the underlying Mysten `Transaction` via `scallopTx.txBlock` and pass that to Kai/cdpm. | ✓ | 1 PTB | Same as B | Medium | Both SDKs | ✓ but unnecessarily couples to Scallop lifecycle |
+| **D. Pure SDK end-to-end** | Use only `*Quick` (Scallop) / `vault.depositFromWallet` (Kai). | n/a | n/a | n/a | n/a | n/a | cdpm has no TS bindings; the cdpm calls must still be raw `moveCall` |
 
-**A vs B vs C is the real choice** (D and E are categorically out).
-
-- **A vs B**: identical at runtime; B wins on upgrade resilience and call-site readability. Scallop and Kai both ship frequent upgrades — Scallop has migrated `MarketCoin` / sCoin types and bumped market-package ids; Kai adds strategies and vault entries. With A you chase those changes manually in cdpm; with B the SDK absorbs them.
-- **B vs C**: identical at runtime (same `Transaction` instance underneath). B is more decoupled — only construct a Scallop builder when the flow actually touches Scallop. C forces every caller to pay the Scallop init round-trip even for Kai-only flows.
-
-**Recommendation: B — Mysten-rooted shared Transaction.**
+A and B are both fine. A is simpler when the only non-cdpm calls are inner protocol moves cdpm already wraps (e.g. `scallop_supply` internally invokes `mint::mint`, so a PTB that just supplies needs no Scallop SDK builder at all). B is worth it when the same PTB also performs *non-cdpm* Scallop or Kai actions — e.g. routing a wallet swap through Scallop in addition to a cdpm `kai_redeem`.
 
 ---
 
@@ -49,7 +41,7 @@ Because all three accept the same `Transaction` instance, you can interleave the
 
 ### 3.0 Install the SDKs
 
-Both SDKs are published to npm. Install alongside Mysten's `@mysten/sui` (required by both; pin to a single major across the dep tree — see §10 for the `instanceof Transaction` pitfall):
+Both SDKs are published to npm. Install alongside Mysten's `@mysten/sui` (required by both; pin to a single major across the dep tree — see §5 for the `instanceof Transaction` pitfall):
 
 ```bash
 # bun
@@ -81,15 +73,12 @@ const query   = await scallop.createScallopQuery();
 const tx = new Transaction();
 tx.setSender(senderAddress);                       // required before any *Quick method
 
-// Mount Scallop side onto `tx` — only when the PTB needs Scallop.
+// Mount Scallop side onto `tx` — only when the PTB needs Scallop SDK helpers
+// outside cdpm's wrapped calls (e.g. a wallet-side swap).
 const scallopTx = builder.createTxBlock(tx);       // adopts tx; same instance underneath
 
-// Kai side takes plain Mysten Transaction directly.
+// Kai vault entry for off-cdpm composition.
 const kaiVault  = VAULTS.suiUSDT;
-
-// All cdpm calls are raw moveCall on `tx`.
-// All Scallop inner calls go via scallopTx.deposit / scallopTx.withdraw.
-// All Kai inner calls go via kaiVault.deposit(tx, …) / kaiVault.withdraw(tx, …).
 
 await client.signAndExecuteTransaction({ signer, transaction: tx });
 //                                                    ^^^ — NOT scallopTx
@@ -101,60 +90,26 @@ await client.signAndExecuteTransaction({ signer, transaction: tx });
 
 ## 4. Worked Examples
 
-> **REQUIRED for every Scallop example below.** Every PTB that calls
-> `cdpm::scallop_start_supply` or `cdpm::scallop_start_redeem` MUST begin with
-> `protocol::accrue_interest::accrue_interest_for_market(version, market, clock)`
-> as **command 0**. cdpm asserts `EStaleScallopState (1011)` at the boundary.
-> `scallopTx.deposit` / `depositQuick` do NOT inject this call
-> (`sui-scallop-sdk/src/builders/coreBuilder.ts:139-148, 335-358`). The Kai
-> examples have no analogous pre-step — Kai's `total_available_balance` is
-> already auto-accruing within the same PTB clock — but they DO need to re-pass
-> `&Vault` to `kai_finish_*` (`EWrongVault = 1013`).
-
 ### 4.1 Single-Protocol Supply (Picker → Scallop)
 
-The Scallop start-supply requires both `&Clock` and a fresh accrual; cdpm enforces this with `EStaleScallopState (1011)`. `scallopTx.deposit` only emits `mint::mint` (see `sui-scallop-sdk/src/builders/coreBuilder.ts:139-148`) — neither `deposit` nor `depositQuick` injects an accrue call — so you must call `accrue_interest_for_market` explicitly as command 0. The `scallop_finish_supply` re-takes `&Market` (canonical id binding — `EWrongMarket = 1012`).
+A Scallop supply is one `tx.moveCall`. `scallop_supply` pulls the underlying out of `pm.balance`, calls `protocol::mint::mint` (which runs Scallop's internal `accrue_interest_for_market` as its first step), and joins the resulting `Balance<MarketCoin<T>>` into `pm.lending` under bag key `type_name<T>`.
 
 ```typescript
 import { Transaction } from '@mysten/sui/transactions';
 
 const tx = new Transaction();
 tx.setSender(senderAddress);
-const scallopTx = builder.createTxBlock(tx);
 
-// REQUIRED PTB[0] — cdpm asserts EStaleScallopState (1011) without this.
-// NOT injected by scallopTx.deposit / depositQuick.
 tx.moveCall({
-  target: `${SCALLOP_PROTOCOL}::accrue_interest::accrue_interest_for_market`,
-  arguments: [
-    tx.object(SCALLOP_VERSION_ID),
-    tx.object(SCALLOP_MARKET_ID),
-    tx.object('0x6'),
-  ],
-});
-
-const [coinT, ticket] = tx.moveCall({
-  target: `${CDPM_PACKAGE}::cdpm::scallop_start_supply`,
+  target: `${CDPM_PACKAGE}::cdpm::scallop_supply`,
   typeArguments: [underlyingCoinType],
   arguments: [
     tx.object(ACCESS_LIST_ID),
     tx.object(pmId),
+    tx.object(SCALLOP_VERSION_ID),
     tx.object(SCALLOP_MARKET_ID),
-    tx.object('0x6'),
     tx.pure.u64(amount),
-  ],
-});
-
-const coinMarket = scallopTx.deposit(coinT, 'usdc');   // wraps protocol::mint::mint
-
-tx.moveCall({
-  target: `${CDPM_PACKAGE}::cdpm::scallop_finish_supply`,
-  typeArguments: [underlyingCoinType],
-  arguments: [
-    tx.object(pmId),
-    tx.object(SCALLOP_MARKET_ID),
-    ticket,
-    coinMarket,
+    tx.object('0x6'),
   ],
 });
 
@@ -163,14 +118,14 @@ await client.signAndExecuteTransaction({ signer, transaction: tx });
 
 ### 4.2 Single-Protocol Supply (Picker → Kai)
 
-No Scallop builder needed — Kai composes onto `tx` directly:
+A Kai supply is one `tx.moveCall`. `kai_supply` pulls the underlying out of `pm.balance`, calls `kai_vault::deposit`, and joins the resulting `Balance<YT>` into `pm.lending` under bag key `type_name<YT>`.
 
 ```typescript
 const tx = new Transaction();
 tx.setSender(senderAddress);
 
-const [coinT, ticket] = tx.moveCall({
-  target: `${CDPM_PACKAGE}::cdpm::kai_start_supply`,
+tx.moveCall({
+  target: `${CDPM_PACKAGE}::cdpm::kai_supply`,
   typeArguments: [T, YT],
   arguments: [
     tx.object(ACCESS_LIST_ID),
@@ -181,100 +136,42 @@ const [coinT, ticket] = tx.moveCall({
   ],
 });
 
-const balanceT  = tx.moveCall({
-  target: '0x2::coin::into_balance', typeArguments: [T], arguments: [coinT],
-});
-const balanceYT = kaiVault.deposit(tx, balanceT);
-const coinYT    = tx.moveCall({
-  target: '0x2::coin::from_balance', typeArguments: [YT], arguments: [balanceYT],
-});
-
-// kai_finish_supply re-takes &Vault to assert canonical id (EWrongVault=1013).
-tx.moveCall({
-  target: `${CDPM_PACKAGE}::cdpm::kai_finish_supply`,
-  typeArguments: [T, YT],
-  arguments: [
-    tx.object(pmId),
-    tx.object(KAI_VAULT_ID),
-    ticket,
-    coinYT,
-  ],
-});
-
 await client.signAndExecuteTransaction({ signer, transaction: tx });
 ```
 
 ### 4.3 Atomic Rebalance: Scallop → Kai (one PTB)
 
-The whole point of sharing a `Transaction`: redeem from Scallop and supply to Kai in one shot. Either both legs commit or neither does — atomic by Move/PTB semantics.
+Redeem from Scallop and supply to Kai in one shot. Either both legs commit or neither does — atomic by Move / PTB semantics.
 
 ```typescript
 const tx = new Transaction();
 tx.setSender(senderAddress);
-const scallopTx = builder.createTxBlock(tx);
-
-// REQUIRED PTB[0] — cdpm asserts EStaleScallopState (1011) without this.
-// NOT injected by scallopTx.deposit / depositQuick.
-tx.moveCall({
-  target: `${SCALLOP_PROTOCOL}::accrue_interest::accrue_interest_for_market`,
-  arguments: [
-    tx.object(SCALLOP_VERSION_ID),
-    tx.object(SCALLOP_MARKET_ID),
-    tx.object('0x6'),
-  ],
-});
 
 // === Leg 1: redeem from Scallop. Net underlying lands in pm.balance[T] ===
-const [coinMarket, redeemTicket] = tx.moveCall({
-  target: `${CDPM_PACKAGE}::cdpm::scallop_start_redeem`,
-  typeArguments: [T],
-  arguments: [
-    tx.object(ACCESS_LIST_ID), tx.object(pmId),
-    tx.object(SCALLOP_MARKET_ID),
-    tx.object('0x6'),
-    tx.pure.u64(scoinAmount),                      // sized via §7 inverse helpers
-  ],
-});
-const coinT = scallopTx.withdraw(coinMarket, 'usdc');     // tx-result Coin<T>
 tx.moveCall({
-  target: `${CDPM_PACKAGE}::cdpm::scallop_finish_redeem`,
+  target: `${CDPM_PACKAGE}::cdpm::scallop_redeem`,
   typeArguments: [T],
   arguments: [
+    tx.object(ACCESS_LIST_ID),
     tx.object(pmId),
-    tx.object(SCALLOP_MARKET_ID),
     tx.object(FEE_HOUSE_ID),
-    redeemTicket,
-    coinT,
+    tx.object(SCALLOP_VERSION_ID),
+    tx.object(SCALLOP_MARKET_ID),
+    tx.pure.u64(scoinAmount),    // sized via predictScallopRedeem (scallop-lending-math.md §7)
+    tx.object('0x6'),
   ],
 });
-//   pm.balance[T] is now incremented by the post-fee underlying.
 
 // === Leg 2: supply that same underlying into Kai ===
-const [coinT2, supplyTicket] = tx.moveCall({
-  target: `${CDPM_PACKAGE}::cdpm::kai_start_supply`,
-  typeArguments: [T, YT],
-  arguments: [
-    tx.object(ACCESS_LIST_ID), tx.object(pmId),
-    tx.object(KAI_VAULT_ID),
-    tx.pure.u64(supplyAmount),                     // typically the redeemed-and-fee'd amount
-    tx.object('0x6'),
-  ],
-});
-const balanceT  = tx.moveCall({
-  target: '0x2::coin::into_balance', typeArguments: [T], arguments: [coinT2],
-});
-const balanceYT = kaiVault.deposit(tx, balanceT);
-const coinYT    = tx.moveCall({
-  target: '0x2::coin::from_balance', typeArguments: [YT], arguments: [balanceYT],
-});
 tx.moveCall({
-  target: `${CDPM_PACKAGE}::cdpm::kai_finish_supply`,
+  target: `${CDPM_PACKAGE}::cdpm::kai_supply`,
   typeArguments: [T, YT],
   arguments: [
+    tx.object(ACCESS_LIST_ID),
     tx.object(pmId),
     tx.object(KAI_VAULT_ID),
-    supplyTicket,
-    coinYT,
+    tx.pure.u64(supplyAmount),
+    tx.object('0x6'),
   ],
 });
 
@@ -283,88 +180,139 @@ await client.signAndExecuteTransaction({ signer, transaction: tx });
 
 Properties:
 
-- **Atomicity**: any abort along the chain (e.g., Scallop pause, Kai TVL cap, prediction shortfall) reverts the whole PTB. The redeem leg's `scallop_finish_redeem` already settled `pm.balance[T]` mid-PTB, but PTB rollback puts everything back as if the tx never ran.
-- **Sizing the Kai supply leg**: the simplest design uses the predicted `toBalance` from `predictRedeem` (Scallop §6) as `supplyAmount`. Two effects can leave the live redeem 1-2 underlying above the prediction: per-step floor rounding inside `compute_expected_underlying_scallop` (at most 1 unit, see Scallop §7.2) and `balance_sheet` advance between off-chain prediction and on-chain execution (the pre-flight `accrue_interest_for_market` minimizes but does not eliminate this — see Scallop §8). The residual stays in `pm.balance[T]` and is not catastrophic. Three options for handling the residual:
-  1. **`MAX_U64` drain sentinel (recommended for atomic rebalances).** Pass `tx.pure.u64(MAX_U64)` as `kai_start_supply`'s `amount`. `withdraw_from_balance<T>` (`cdpm.move:1271-1286`) clamps to the live bag value and removes the entry; the post-clamp `coin.value()` feeds `compute_expected_yt`, so the only abort path is `EZeroExpected (1007)` if the entry is empty / dust. No dev-inspect round trip needed and the supply leg absorbs the full Scallop residual atomically. (`scallop_start_supply` accepts the same sentinel for §4.4's mirror direction.)
-  2. **Dev-inspect the residual.** Dev-inspect `pm.balance[T]` after a simulated redeem and feed that exact figure into `kai_start_supply`'s `amount`. Useful when you want a numeric assertion in the off-chain sanity check before signing.
-  3. **Accept the small idle leak** and re-park on the next rebalance cycle.
+- **Atomicity**: any abort along the chain (e.g. Scallop pause, Kai TVL cap) reverts the whole PTB. The redeem leg's effect on `pm.balance[T]` is fully rolled back together with the supply leg.
+- **Sizing the Kai supply leg.** Use `predictScallopRedeem` (from `scallop-lending-math.md` §3) to estimate the post-fee underlying that will land in `pm.balance[T]`, then size `kai_supply`'s `amount` against that prediction minus a small margin. Concrete options:
+  1. **Conservative size.** Set `supplyAmount = floor(predicted.toBalance) − margin` (a few raw is plenty). The residual stays in `pm.balance[T]` and supplies on the next rebalance cycle.
+  2. **`MAX_U64` drain sentinel.** Pass `tx.pure.u64(MAX_U64)` as `kai_supply`'s `amount`. `withdraw_from_balance<T>` inside cdpm clamps to the live bag value and removes the entry, so the post-redeem balance — whatever it actually came out to — flows into `kai_supply` in full. No dev-inspect round trip needed.
+  3. **Dev-inspect the residual.** Dev-inspect `pm.balance[T]` after a simulated redeem and feed that exact figure into `kai_supply`'s `amount`. Useful when you want a numeric assertion in the off-chain sanity check before signing.
 - **Yield-fee**: paid once on the Scallop side at redeem; the supply leg incurs no fee (cdpm fees only on redeem). Net: one fee per round trip.
 
 ### 4.4 Atomic Rebalance: Kai → Scallop
 
-Mirror of §4.3 — start with `kai_start_redeem` + `vault.withdraw(tx, balanceYT, kaiVault.getStrategies())`, end with `scallop_start_supply` + `scallopTx.deposit(coinT, 'usdc')`. Strategy-walk caveats from `kai-lending-math.md` §10.5 still apply (registered walkers run unconditionally).
+Mirror of §4.3 — redeem from Kai, then supply to Scallop.
 
 ```typescript
 const tx = new Transaction();
 tx.setSender(senderAddress);
-const scallopTx = builder.createTxBlock(tx);
-
-// REQUIRED PTB[0] for the supply leg — cdpm asserts EStaleScallopState (1011) without this.
-// NOT injected by scallopTx.deposit / depositQuick.
-tx.moveCall({
-  target: `${SCALLOP_PROTOCOL}::accrue_interest::accrue_interest_for_market`,
-  arguments: [
-    tx.object(SCALLOP_VERSION_ID),
-    tx.object(SCALLOP_MARKET_ID),
-    tx.object('0x6'),
-  ],
-});
 
 // === Leg 1: redeem from Kai. Net underlying lands in pm.balance[T] ===
-const [coinYT, redeemTicket] = tx.moveCall({
-  target: `${CDPM_PACKAGE}::cdpm::kai_start_redeem`,
-  typeArguments: [T, YT],
-  arguments: [
-    tx.object(ACCESS_LIST_ID), tx.object(pmId),
-    tx.object(KAI_VAULT_ID),
-    tx.pure.u64(ytAmount),                         // sized via Kai §7 inverse helpers
-    tx.object('0x6'),
-  ],
-});
-const balanceYT = tx.moveCall({
-  target: '0x2::coin::into_balance', typeArguments: [YT], arguments: [coinYT],
-});
-const balanceT  = kaiVault.withdraw(tx, balanceYT, kaiVault.getStrategies());
-const coinT     = tx.moveCall({
-  target: '0x2::coin::from_balance', typeArguments: [T], arguments: [balanceT],
-});
 tx.moveCall({
-  target: `${CDPM_PACKAGE}::cdpm::kai_finish_redeem`,
-  typeArguments: [T, YT],
+  target: `${CDPM_PACKAGE}::cdpm::kai_redeem`,
+  typeArguments: [T, ST, YT],
   arguments: [
+    tx.object(ACCESS_LIST_ID),
     tx.object(pmId),
-    tx.object(KAI_VAULT_ID),
     tx.object(FEE_HOUSE_ID),
-    redeemTicket,
-    coinT,
+    tx.object(KAI_VAULT_ID),
+    tx.object(KAI_STRATEGY_ID),
+    tx.object(KAI_SUPPLY_POOL_ID),
+    tx.pure.u64(ytAmount),       // sized via predictKaiWithdraw (kai-lending-math.md §7)
+    tx.object('0x6'),
   ],
 });
 
 // === Leg 2: supply that same underlying into Scallop ===
-const [coinT2, supplyTicket] = tx.moveCall({
-  target: `${CDPM_PACKAGE}::cdpm::scallop_start_supply`,
-  typeArguments: [T],
-  arguments: [
-    tx.object(ACCESS_LIST_ID), tx.object(pmId),
-    tx.object(SCALLOP_MARKET_ID),
-    tx.object('0x6'),
-    tx.pure.u64(supplyAmount),
-  ],
-});
-const coinMarket = scallopTx.deposit(coinT2, 'usdc');
 tx.moveCall({
-  target: `${CDPM_PACKAGE}::cdpm::scallop_finish_supply`,
+  target: `${CDPM_PACKAGE}::cdpm::scallop_supply`,
   typeArguments: [T],
   arguments: [
+    tx.object(ACCESS_LIST_ID),
     tx.object(pmId),
+    tx.object(SCALLOP_VERSION_ID),
     tx.object(SCALLOP_MARKET_ID),
-    supplyTicket,
-    coinMarket,
+    tx.pure.u64(supplyAmount),
+    tx.object('0x6'),
   ],
 });
 
 await client.signAndExecuteTransaction({ signer, transaction: tx });
 ```
+
+The same three sizing options from §4.3 apply: size against `predictKaiWithdraw(...).toBalance − margin`, use `MAX_U64` to drain `pm.balance[T]`, or dev-inspect.
+
+### 4.5 Redeem → Cetus Add-Liquidity (Composition with Dust Prediction)
+
+A common pattern: redeem from a lending venue, then deploy the freed underlying into a Cetus DLMM position via `protocol_add_liquidity` or `agent_add_liquidity`. The redeem result lands in `pm.balance[T]`; the add-liquidity call pulls back out of `pm.balance` to fund the liquidity bins.
+
+The risk: `predictScallopRedeem` and `predictKaiWithdraw` floor the predicted underlying. The realized `redeemed_amount` can be a few raw lower (Kai dust budget ≈ 2 raw × strategies drawn; Scallop typically exact). If the add-liquidity leg requests more than what actually lands, `withdraw_from_balance<T>` inside cdpm hits the underlying `0x2::balance::split` ENotEnough abort.
+
+Mitigation pattern (Kai → add-liquidity):
+
+```typescript
+// 1. Off-chain: predict the underlying that will land in pm.balance[T].
+const predicted = predictKaiRedeem(vaultSnapshot, pmSnapshot, ytAmount, feeRateBp);
+
+// 2. Clamp the deploy amount to a guaranteed lower bound.
+const REDEEM_REALIZED_SAFETY_MARGIN_RAW = 3n;   // env-tunable; covers single-strategy dust
+const realized = predicted.toBalance > REDEEM_REALIZED_SAFETY_MARGIN_RAW
+  ? predicted.toBalance - REDEEM_REALIZED_SAFETY_MARGIN_RAW
+  : 0n;
+const deployT = available + realized;            // available = pre-existing pm.balance[T]
+
+// 3. PTB: kai_redeem, then add-liquidity sized against `deployT`.
+tx.moveCall({
+  target: `${CDPM_PACKAGE}::cdpm::kai_redeem`,
+  typeArguments: [T, ST, YT],
+  arguments: [
+    tx.object(ACCESS_LIST_ID), tx.object(pmId), tx.object(FEE_HOUSE_ID),
+    tx.object(KAI_VAULT_ID), tx.object(KAI_STRATEGY_ID), tx.object(KAI_SUPPLY_POOL_ID),
+    tx.pure.u64(ytAmount), tx.object('0x6'),
+  ],
+});
+tx.moveCall({
+  target: `${CDPM_PACKAGE}::cdpm::protocol_add_liquidity`,
+  typeArguments: [CoinTypeA, CoinTypeB],
+  arguments: [
+    tx.object(ACCESS_LIST_ID), tx.object(pmId), tx.object(POOL_ID),
+    tx.pure.u64(deployTSplitA),   // <= deployT for the T side
+    tx.pure.u64(otherSideAmount),
+    /* bins, amounts_a, amounts_b */
+    tx.object(CETUS_GLOBAL_CONFIG_ID), tx.object(CETUS_VERSIONED_ID), tx.object('0x6'),
+  ],
+});
+```
+
+The same shape works with Scallop (`predictScallopRedeem` for `predicted.toBalance`). For Scallop, the realized amount typically matches the prediction exactly (single floor-div shared with upstream), so a 1-raw margin is usually enough. For Kai, size the margin against the number of strategies in the vault: ≤2-strategy vaults need ≤2 raw of margin; a 3-raw default is comfortable across all current mainnet SAVs.
+
+### 4.6 Harvest → Supply (Composition)
+
+`protocol_collect_fee` and `agent_collect_fee` route the Cetus-side gross collected fees through `take_fee` (which skims the `fee_house.fee_rate` cut into `FeeHouse`) and the residual into `pm.fee`. Moving that residual into a lending supply takes a `protocol_transfer_fee_to_balance` (or `agent_transfer_fee_to_balance`) intermediate move-call, then `scallop_supply` / `kai_supply` pulls it out of `pm.balance`:
+
+```typescript
+// 1. Harvest Cetus fees — the protocol cut goes to FeeHouse, the rest to pm.fee.
+tx.moveCall({
+  target: `${CDPM_PACKAGE}::cdpm::protocol_collect_fee`,
+  typeArguments: [CoinTypeA, CoinTypeB],
+  arguments: [
+    tx.object(ACCESS_LIST_ID), tx.object(FEE_HOUSE_ID),
+    tx.object(pmId), tx.object(POOL_ID),
+    tx.object(CETUS_GLOBAL_CONFIG_ID), tx.object(CETUS_VERSIONED_ID),
+  ],
+});
+
+// 2. Pull the user portion of the T-side fee out of pm.fee into pm.balance.
+tx.moveCall({
+  target: `${CDPM_PACKAGE}::cdpm::protocol_transfer_fee_to_balance`,
+  typeArguments: [T],
+  arguments: [
+    tx.object(ACCESS_LIST_ID), tx.object(pmId),
+    tx.pure.u64(MAX_U64),     // drain the pm.fee[T] entry
+  ],
+});
+
+// 3. Supply that amount into Kai (or Scallop).
+tx.moveCall({
+  target: `${CDPM_PACKAGE}::cdpm::kai_supply`,
+  typeArguments: [T, YT],
+  arguments: [
+    tx.object(ACCESS_LIST_ID), tx.object(pmId), tx.object(KAI_VAULT_ID),
+    tx.pure.u64(MAX_U64),     // drain the pm.balance[T] entry just credited
+    tx.object('0x6'),
+  ],
+});
+```
+
+Note that `protocol_collect_fee` already takes its protocol cut; `kai_supply` and `scallop_supply` do not charge a deposit-side fee. The only fee in the round trip is the protocol cut at harvest.
 
 ---
 
@@ -385,78 +333,15 @@ await client.signAndExecuteTransaction({ signer, transaction: tx });
 
    Verify with `npm ls @mysten/sui` (or `pnpm why @mysten/sui`) that only one copy resolves.
 
-4. **Don't pass `*Quick` outputs into cdpm hot-potato finishes.** `*Quick` methods (`depositQuick`, `withdrawQuick`) source coins from the **wallet**, not from cdpm. They are useful for direct wallet-to-Scallop operations *outside* cdpm (e.g., a user with sCoin already in their wallet supplying or redeeming standalone), but they have no role inside a cdpm hot-potato flow. Feeding their output into `scallop_finish_*` produces one of two failure modes — neither silent: (a) if the `*Quick` output is below the ticket's `expected_*` value the PTB aborts at `EAmountShortfall (1009)`; (b) if it meets the threshold the PTB succeeds, but the bag's stored `principal` (which `scallop_start_supply` recorded from cdpm's own `coinT` source) no longer matches the underlying actually delivered to Scallop, breaking cdpm's principal accounting on the next redeem. Always source the inner-protocol coin from the cdpm `*_start_*` tx-result, never from a `*Quick` builder.
+4. **`*Quick` SDK helpers source from the wallet.** `depositQuick` / `withdrawQuick` build coins from the signer's wallet, not from `pm.balance`. They have no role inside a cdpm lending leg — `scallop_supply` / `kai_supply` already pull from `pm.balance` and `scallop_redeem` / `kai_redeem` already credit to `pm.balance`. Use `*Quick` only for direct wallet-to-Scallop operations *outside* cdpm.
 
-6. **Reuse the same Market / Vault object handle across `start_*` and `finish_*`.** `scallop_start_supply` / `scallop_start_redeem` record `market_id = object::id(market)` on the ticket; `scallop_finish_*` re-takes `&Market` and asserts the id matches (`EWrongMarket = 1012`). The Kai mirror records `vault_id` and asserts on finish (`EWrongVault = 1013`). In practice this is automatic — keep the same `tx.object(SCALLOP_MARKET_ID)` / `tx.object(KAI_VAULT_ID)` reference visible to both calls.
+5. **Re-snapshot inputs before signing.** Both protocols' state (`balance_sheet` for Scallop, `total_available_balance` for Kai) move every block. The picker (`scallop-lending-math.md` §10.4) and the sizing helpers (`§7` in either lending-math file) rely on snapshots; for a rebalance PTB that does both a redeem and a supply, take a single snapshot just before signing and reuse it across both legs to keep the predictions internally consistent.
 
-7. **Scallop pre-accrual is mandatory, not advisory.** `scallop_start_*` reads `borrow_dynamics::last_updated_by_type(market.borrow_dynamics(), type<T>)` and asserts equality with `clock::timestamp_ms(clock) / 1000`. Omitting `accrue_interest::accrue_interest_for_market(version, market, clock)` as command 0 aborts at the cdpm boundary with `EStaleScallopState (1011)` before any balance is touched. `scallopTx.deposit` / `scallopTx.withdraw` wrap the inner Scallop accrue; if you compose using raw move-calls only, add the accrue command explicitly. Kai has no analogous freshness check — `total_available_balance(vault, clock)` is race-free.
-
-5. **Re-snapshot inputs before signing.** Both protocols' state (`balance_sheet` for Scallop, `total_available_balance` for Kai) move every block. The picker (`scallop-lending-math.md` §10.4) and the sizing helpers (§7 in either file) rely on snapshots; for a rebalance PTB that does both a redeem and a supply, take a *single* snapshot just before signing and reuse it across both legs to keep the predictions internally consistent.
+6. **Dust margins on redeem → add-liquidity.** When composing `*_redeem` with a downstream `*_add_liquidity` in the same PTB, clamp the deploy size to `floor(predicted.toBalance) − margin` rather than `predicted.toBalance` itself. Kai single-strategy SAVs need ≤2 raw of margin; 3 raw is a safe default. Scallop typically realizes the prediction exactly; 1 raw of margin is sufficient. See `kai-lending-math.md` §9.1 and `scallop-lending-math.md` §9.1.
 
 ---
 
-## 5.1 Caller-Specific Full-Drain Patterns
-
-`*_finish_redeem` enforces `redeemed_amount + REDEEM_DUST_TOLERANCE_RAW >= expected_underlying` (cdpm `EAmountShortfall = 1009`; `REDEEM_DUST_TOLERANCE_RAW = 4`). For **Kai**, the upstream `kai_leverage_supply_pool::withdraw → vault::redeem_withdraw_ticket` chain floors twice per strategy, so dust ≈ 2 raw × (strategies drawn) — single-strategy mainnet SAVs ⟹ ≤2 raw, well within the on-chain tolerance. For **Scallop**, the upstream `protocol::redeem::redeem` uses the same single floor-div formula as cdpm's `compute_expected_underlying_scallop`, so the redeemed amount equals `expected_underlying` exactly in the common case. See [`kai-lending-math.md` §9.1](./kai-lending-math.md#91-floor-div-dust-on-chain-tolerance-and-deploy-side-floor) and [`scallop-lending-math.md` §9.1](./scallop-lending-math.md#91-floor-div-dust-on-chain-tolerance-and-the-lending_safe_margin_wrapper_raw-floor) for the math.
-
-**No `coin::join` topup is required** anywhere — cdpm absorbs floor-div dust on-chain. Capping the burn still matters as a *separate* concern (leaves a residual entry; avoids removing the bag key on partial drains). Caller-shape choices:
-
-| | User close-PM | Protocol (worker) | Agent |
-|---|---|---|---|
-| Signer | PM owner wallet | `AccessList.allow` keypair | Address in `pm.agents` |
-| Goal | Truly empty `pm.lending` (so `user_close_pm` passes `ELendingNotEmpty 1004`) | Free up underlying for an `add_liquidity` on the next bin tick | Same as protocol |
-| Burn amount | `u64::MAX` (drain) | `min(neededWrapper, wrapperRaw − SAFE_MARGIN)` | Same as protocol |
-| Dust handling | Handled on-chain by `REDEEM_DUST_TOLERANCE_RAW`. No topup needed. | Same. | Same. |
-
-Recommended client-side default constants:
-
-```ts
-// raw units of the wrapper token (YT for Kai, sCoin for Scallop). Leaves a
-// residual entry on partial drains so the bag key survives.
-const LENDING_SAFE_MARGIN_WRAPPER_RAW = 100n;
-// sentinel for "drain everything" — pulls min(arg, available) inside cdpm
-const REDEEM_ALL_U64 = 0xffffffffffffffffn;
-```
-
-**Optional fallback (only if dust ever exceeds 4 raw).** A future ≥3-strategy vault could surface dust > 4 raw; in that rare case, merge a small `Coin<T>` topup of `observedDust − 4` raw between `*_start_redeem` and `*_finish_redeem` via `0x2::coin::join`. Preferred over raising the on-chain constant (which would weaken the high-value-asset margin — see [`kai-lending-math.md` §9.1](./kai-lending-math.md#91-floor-div-dust-on-chain-tolerance-and-deploy-side-floor)).
-
-PTB shape (Kai, user vs protocol — both topup-free):
-
-```ts
-// USER close-PM (full drain)
-const startRet = tx.moveCall({ target: `${cdpm}::cdpm::kai_start_redeem`,
-  arguments: [..., tx.pure.u64(REDEEM_ALL_U64), ...] });
-// ... vault::withdraw / supply_pool::withdraw / redeem_withdraw_ticket / from_balance → coinT
-tx.moveCall({ target: `${cdpm}::cdpm::kai_finish_redeem`,
-  arguments: [..., coinT, ...] });        // assert auto-tolerates ≤4 raw dust
-
-// PROTOCOL / AGENT partial (cap-the-burn)
-const safe = wrapperRaw - LENDING_SAFE_MARGIN_WRAPPER_RAW;
-const burn = exact >= safe ? safe : exact;
-tx.moveCall({ target: `${cdpm}::cdpm::kai_start_redeem`,
-  arguments: [..., tx.pure.u64(burn), ...] });
-// ... same chain ...
-tx.moveCall({ target: `${cdpm}::cdpm::kai_finish_redeem`,
-  arguments: [..., coinT, ...] });
-```
-
-Scallop has the same shape; replace `kai_*` with `scallop_*` and the in-between chain with `protocol::redeem::redeem`. The Scallop branch additionally requires `accrue_interest_for_market` as PTB command 0 (`EStaleScallopState 1011`) — that is independent of full-drain handling and applies to both partial and full redeems.
-
----
-
-## 6. When to Reach for Approach A Instead
-
-Approach B (recommended) is the default. Approach A (all raw `tx.moveCall`) is still appropriate in three cases:
-
-- **Audit/review surface minimization.** A code reviewer reading the cdpm app expects Move-call shapes that mirror the contract's Move source. The SDK builders abstract this. For a security-conscious team, the explicit raw form is easier to verify.
-- **Avoiding the dependency footprint.** If the cdpm app is a library or a tightly size-constrained build target (e.g., extension or wallet plugin), pulling in two SDKs may be unwelcome. The hosted REST address bundle (`https://sui.apis.scallop.io/addresses/{addressId}`) plus hand-rolled cdpm/Scallop/Kai move-calls keeps deps to zero.
-- **CI-detectable upgrade signals.** With raw `tx.moveCall` and pinned `SCALLOP_VERSION_ID`, an upgrade by Scallop *will* break the cdpm app's tests — which is sometimes desired (you want to know about the upgrade and audit it before rolling forward). With the SDK, upgrades absorb silently into a published SDK version bump; you opt in to upgrades by bumping the SDK, not by editing constants.
-
-For most teams, B is correct. The operational PTB recipes in `cdpm-user-sdk/reference/*.md`, `cdpm-agent-sdk/reference/*.md`, and `cdpm-protocol-sdk/reference/*.md` currently demonstrate **A** for clarity; both shapes are valid and either can be used at the call site.
-
----
-
-## 7. SDK File Reference
+## 6. SDK File Reference
 
 For readers who want to verify the interop claims against the SDK source:
 
@@ -470,10 +355,10 @@ For readers who want to verify the interop claims against the SDK source:
 
 ---
 
-## 8. Cross-Reference
+## 7. Cross-Reference
 
 - Scallop-side rate query and granular builders: [`scallop-lending-math.md` §10](./scallop-lending-math.md#10-reading-live-supply-apy-off-chain-scallop-vs-kai-picker)
-- Kai-side rate query and granular builders: [`kai-lending-math.md` §10](./kai-lending-math.md#10-reading-live-vault-apy-off-chain-supply-side-half-of-the-picker)
+- Kai-side rate query: [`kai-lending-math.md` §10](./kai-lending-math.md#10-reading-live-vault-apy-off-chain-supply-side-half-of-the-picker)
 - Cross-protocol supply picker (`pickSupplyVenue`): [`scallop-lending-math.md` §10.4](./scallop-lending-math.md#104-decision-recipe--scallop-vs-kai-supply-picker)
-- Inverse-sizing helpers (which feed the redeem leg of §4.3): `scallop-lending-math.md` §7, `kai-lending-math.md` §7.
-- Operational raw-`tx.moveCall` recipes (Approach A): `cdpm-user-sdk/reference/{scallop,kai}-lending.md`, `cdpm-agent-sdk/reference/{scallop,kai}-lending.md`, `cdpm-protocol-sdk/reference/{scallop,kai}-lending.md`.
+- Inverse-sizing helpers (which feed the redeem leg of §4.3 / §4.4): `scallop-lending-math.md` §7, `kai-lending-math.md` §7.
+- Operational raw-`tx.moveCall` recipes: `cdpm-user-sdk/reference/{scallop,kai}-lending.md`, `cdpm-agent-sdk/reference/{scallop,kai}-lending.md`, `cdpm-protocol-sdk/reference/{scallop,kai}-lending.md`.

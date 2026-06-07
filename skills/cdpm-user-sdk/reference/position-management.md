@@ -258,6 +258,41 @@ async function getAndReturnPosition(
 }
 ```
 
+## Wrap an Existing Position into a New PM
+
+`user_deposit_position` wraps a `Position` object the caller already owns
+(e.g. one extracted earlier via `user_get_and_return_position`, or one
+obtained directly from a Cetus DLMM call) into a fresh `PositionManager`. The owner is set to `ctx.sender()`, the `position`
+field is filled with the supplied `Position`, and all three bags
+(`balance`, `fee`, `lending`) start empty.
+
+```move
+public fun user_deposit_position(record: &mut Record, position: Position, ctx: &mut TxContext);
+```
+
+```typescript
+async function depositPosition(
+  client: SuiGrpcClient,
+  signer: any,
+  recordId: string,
+  positionId: string,        // Position object owned by caller
+) {
+  const tx = new Transaction();
+
+  tx.moveCall({
+    target: `${CDPM_PACKAGE}::cdpm::user_deposit_position`,
+    arguments: [
+      tx.object(recordId),     // mut: PM ID is added to record.record table
+      tx.object(positionId),   // owned by sender; consumed
+    ],
+  });
+
+  return await client.signAndExecuteTransaction({ signer, transaction: tx });
+}
+```
+
+Emits `PositionManagerCreated { pm_id, owner, pool_id, lower_bin_id, upper_bin_id, liquidity_shares }`.
+
 ## Balance Management
 
 ### Deposit to Balance

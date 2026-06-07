@@ -3,10 +3,10 @@
 ## Contents
 
 - [1. Vault Snapshot](#1-vault-snapshot)
-- [2. `compute_expected_yt` (used by `kai_start_supply`)](#2-compute_expected_yt-used-by-kai_start_supply)
-- [3. `compute_expected_underlying_kai` (used by `kai_start_redeem`)](#3-compute_expected_underlying_kai-used-by-kai_start_redeem)
+- [2. `predictKaiDeposit` (off-chain twin of `kai_vault::deposit`)](#2-predictkaideposit-off-chain-twin-of-kai_vaultdeposit)
+- [3. `predictKaiWithdraw` (off-chain twin of `kai_vault::withdraw`)](#3-predictkaiwithdraw-off-chain-twin-of-kai_vaultwithdraw)
 - [4. Principal Amortization (`pull_from_kai_lending`)](#4-principal-amortization-pull_from_kai_lending)
-- [5. Yield Fee Inside `kai_finish_redeem`](#5-yield-fee-inside-kai_finish_redeem)
+- [5. Yield Fee Inside `kai_redeem`](#5-yield-fee-inside-kai_redeem)
 - [6. End-to-End Prediction Helper](#6-end-to-end-prediction-helper)
 - [7. Inverse Direction — Sizing Redemptions](#7-inverse-direction-sizing-redemptions)
 - [8. Reading Vault State Off-Chain](#8-reading-vault-state-off-chain)
@@ -16,7 +16,7 @@
 
 ## 1. Vault Snapshot
 
-cdpm reads two `u64` values from `kai_sav::vault::Vault<T, YT>` for sizing:
+The off-chain twins of `kai_vault::deposit` / `kai_vault::withdraw` read two `u64` values from `kai_sav::vault::Vault<T, YT>` for sizing:
 
 | Symbol | Source | Meaning |
 |--------|--------|---------|
@@ -25,7 +25,7 @@ cdpm reads two `u64` values from `kai_sav::vault::Vault<T, YT>` for sizing:
 
 Per-YT redemption value: `p = total_available / yt_supply`.
 
-> **No pre-flight accrual command.** Unlike Scallop, Kai's `total_available_balance(clock)` already folds in time-locked profit via `tlb::max_withdrawable`. Reading the vault at clock `t` predicts exactly what `vault::deposit` / `vault::withdraw` will see at the same clock, with no separate accrual step. (cdpm does **not** wrap a `vault::accrue` call — Kai's vault accrues lazily inside `total_available_balance`.)
+> **Self-accruing snapshot.** Kai's `total_available_balance(clock)` folds in time-locked profit via `tlb::max_withdrawable`. Reading the vault at clock `t` predicts exactly what `vault::deposit` / `vault::withdraw` will see at the same clock; no separate accrual command is needed.
 
 cdpm also tracks per-PM Kai vault state inside `pm.lending` under bag key `type_name<YT>`:
 
@@ -38,29 +38,18 @@ cdpm also tracks per-PM Kai vault state inside `pm.lending` under bag key `type_
 
 ---
 
-## 2. `compute_expected_yt` (used by `kai_start_supply`)
+## 2. `predictKaiDeposit` (off-chain twin of `kai_vault::deposit`)
 
-```move
-fun compute_expected_yt<T, YT>(
-    vault: &kai_vault::Vault<T, YT>,
-    clock: &Clock,
-    t_amount: u64,
-): u64 {
-    let total = total_available_balance(vault, clock);
-    let yt_supply = total_yt_supply(vault);
-    if (total == 0) {
-        // bootstrap: 1:1 YT per underlying (matches vault.move:606-608)
-        t_amount
-    } else {
-        floor(yt_supply × t_amount / total)
-    }
-}
+```
+expected_yt =
+  total_available == 0 ? t_amount
+                       : floor(yt_supply × t_amount / total_available)
 ```
 
 TypeScript twin:
 
 ```typescript
-function computeExpectedYt(
+function predictKaiDeposit(
   totalAvailable: bigint,
   ytSupply: bigint,
   tAmount: bigint,
@@ -74,43 +63,36 @@ function computeExpectedYt(
 
 Edge cases:
 
-- **Bootstrap** (`total == 0`): cdpm returns `t_amount` directly. Kai's `vault::deposit` does the same when `total_available_balance == 0`.
-- **Degenerate** (`total > 0` and `yt_supply == 0`): cdpm returns `0`, and `kai_start_supply` aborts with `EZeroExpected (1007)`. This state should not occur on a healthy Kai vault — Kai's deposit auto-mints performance fees so `yt_supply == 0` only at `total == 0`. cdpm's conservative behavior protects against an unforeseen state mutation.
-- `EZeroExpected (1007)` also fires when `t_amount × yt_supply < total_available` (very small deposit relative to vault size).
+- **Bootstrap** (`total_available == 0`): Kai's `vault::deposit` returns `t_amount` YT directly (1:1).
+- **Degenerate** (`total_available > 0` and `yt_supply == 0`): the production Kai vault auto-mints performance fees on every accrual, so `yt_supply == 0` only at `total_available == 0`. If this state still appears, treat the prediction as `0` and increase the deposit input rather than rely on the bootstrap branch.
+- When `t_amount × yt_supply < total_available`, the floor returns `0`. `kai_supply` still runs and joins a zero `Balance<YT>` into `pm.lending`. Off-chain sizing should increase the input.
 
 ---
 
-## 3. `compute_expected_underlying_kai` (used by `kai_start_redeem`)
+## 3. `predictKaiWithdraw` (off-chain twin of `kai_vault::withdraw`)
 
-```move
-fun compute_expected_underlying_kai<T, YT>(
-    vault: &kai_vault::Vault<T, YT>,
-    clock: &Clock,
-    yt_amount: u64,
-): u64 {
-    let total = total_available_balance(vault, clock);
-    let yt_supply = total_yt_supply(vault);
-    assert!(yt_supply > 0, EReserveEmpty);
-    floor(yt_amount × total / yt_supply)
-}
+```
+expected_underlying = floor(yt_amount × total_available / yt_supply)
 ```
 
-This is the inverse of `compute_expected_yt`.
+This is the inverse of `predictKaiDeposit`.
 
 ```typescript
-function computeExpectedUnderlyingKai(
+function predictKaiWithdraw(
   totalAvailable: bigint,
   ytSupply: bigint,
   ytAmount: bigint,
 ): bigint {
-  if (ytSupply === 0n) throw new Error('EReserveEmpty (1006)');
+  if (ytSupply === 0n) {
+    throw new Error('Kai vault YT supply is zero');
+  }
   return (ytAmount * totalAvailable) / ytSupply; // floor division
 }
 ```
 
-> **Asymmetry note.** Kai's *real* `vault::withdraw` uses `muldiv_round_up` to compute the underlying owed to the redeemer, biasing in favor of remaining YT holders. cdpm's prediction floors. As long as the live `vault::withdraw` returns at least the floored value (which it does — `ceil >= floor`), `kai_finish_redeem` passes the `redeemed_amount >= expected_underlying` check.
+> **Asymmetry note.** Kai's `vault::withdraw` uses `muldiv_round_up` internally to compute the underlying owed to the redeemer, biasing in favor of remaining YT holders. The off-chain predictor floors. The live `vault::withdraw` therefore returns `>= expected_underlying`, so treating `predictKaiWithdraw` as a lower bound is safe.
 
-`EZeroExpected (1007)` fires when the result is `0` (asserted-positive check inside `kai_start_redeem`).
+When the result is `0`, the redeem call still runs and credits `0` underlying to `pm.balance[T]` (less the yield fee, which is also `0` since there is no interest).
 
 ---
 
@@ -153,20 +135,20 @@ This formula is structurally identical to Scallop's `pull_from_scallop_lending`;
 
 ---
 
-## 5. Yield Fee Inside `kai_finish_redeem`
+## 5. Yield Fee Inside `kai_redeem`
 
 ```
-redeemed_amount   = underlying.value()                  // input Coin<T>
+redeemed_amount   = balance::value(&underlying)            // result of redeem_withdraw_ticket
 interest          = max(0, redeemed_amount − principal_portion)
 fee_amount        = floor(interest × fee_house.fee_rate / 10_000)
 to_pm_balance     = redeemed_amount − fee_amount
 ```
 
-`fee_house.fee_rate` is in basis points (`FEE_DENOMINATOR = 10_000`), capped at `MAX_FEE_RATE = 3000` (30%) by `admin_set_fee`. Default is `2000` (20%). The same `fee_house` is shared with Scallop redeems — there is **no** separate Kai fee rate.
+`fee_house.fee_rate` is in basis points (`FEE_DENOMINATOR = 10_000`), capped at `MAX_FEE_RATE = 5000` (50%) by `admin_set_fee`. Default is `2000` (20%). The same `fee_house` is shared with Scallop redeems — there is **no** separate Kai fee rate.
 
 ```typescript
 const FEE_DENOMINATOR = 10_000n;
-const MAX_FEE_RATE = 3_000n;
+const MAX_FEE_RATE = 5_000n;
 
 function applyKaiYieldFee(
   redeemedAmount: bigint,
@@ -190,7 +172,7 @@ Important properties:
 
 - If `redeemed_amount <= principal_portion` (loss / rounding-down case), `interest = 0` and `fee_amount = 0` — the principal is **never** taxed.
 - `fee_amount` only accrues to `fee_house.fee` when `> 0`.
-- The same fee path runs for owner / agent / protocol callers — yield fee is universal.
+- The same fee path runs for owner / agent / protocol callers — the yield fee is universal.
 
 ---
 
@@ -221,7 +203,7 @@ function predictKaiRedeem(
   feeAmount: bigint;
   toBalance: bigint;
 } {
-  const expectedUnderlying = computeExpectedUnderlyingKai(
+  const expectedUnderlying = predictKaiWithdraw(
     vault.totalAvailable, vault.ytSupply, wantYt,
   );
   const pp = kaiPrincipalPortion(pm.principalInPm, pm.ytInPm, wantYt);
@@ -236,30 +218,30 @@ function predictKaiRedeem(
 }
 ```
 
-The live Kai redeem may pay slightly more than `expectedUnderlying` (Kai's `vault::withdraw` uses `muldiv_round_up`, cdpm floors). Use `expectedUnderlying` as the conservative lower bound for your strategy logic. The same applies to `toBalance`: it is a lower bound on what actually lands in `pm.balance[T]` after `kai_finish_redeem`.
+The live Kai redeem may pay slightly more than `expectedUnderlying` (Kai's `vault::withdraw` uses `muldiv_round_up`, the off-chain twin floors). Use `expectedUnderlying` as the conservative lower bound for strategy logic. The same applies to `toBalance`: it is a lower bound on what actually lands in `pm.balance[T]` after `kai_redeem`.
 
 ### 6.1 Forward direction — "I burn N YT, what do I net?"
 
-Already covered by `predictKaiRedeem(vault, pm, N, feeRateBp).toBalance`. This answers *"what underlying lands in `pm.balance[T]`?"*. See section 3 for the raw `compute_expected_underlying_kai` formula and section 5 for the yield-fee deduction.
+Already covered by `predictKaiRedeem(vault, pm, N, feeRateBp).toBalance`. This answers *"what underlying lands in `pm.balance[T]`?"*. See section 3 for the raw `predictKaiWithdraw` formula and section 5 for the yield-fee deduction.
 
 ---
 
 ## 7. Inverse Direction — Sizing Redemptions
 
-The forward formulas in sections 2-6 answer "given an `N` YT to burn, what comes back?". The inverse — "I need at least `K` underlying, what `N` do I feed `kai_start_redeem`?" — is what bots and rebalancing strategies actually need.
+The forward formulas in sections 2-6 answer "given an `N` YT to burn, what comes back?". The inverse — "I need at least `K` underlying, what `N` do I feed `kai_redeem`?" — is what bots and rebalancing strategies actually need.
 
 ### 7.1 Inverse: YT to burn for target underlying (pre-fee)
 
-`compute_expected_underlying_kai` is `floor(N × total / yt_supply)`. To guarantee the on-chain output is `>= K`, invert with **ceiling** division:
+`predictKaiWithdraw` is `floor(N × total / yt_supply)`. To guarantee the predicted output is `>= K`, invert with **ceiling** division:
 
 ```
 yt_to_burn = ceil(K × yt_supply / total_available)
            = (K × yt_supply + total_available − 1) / total_available
 ```
 
-Use ceiling because cdpm's prediction floors. (Kai's live `muldiv_round_up` adds further headroom in your favor, but cdpm's floor is what gates the `redeemed_amount >= expected_underlying` check, so ceiling on the inverse is the right protection.)
+Use ceiling because the off-chain predictor floors. (Kai's live `muldiv_round_up` adds further headroom in your favor, but the floor is what the predictor produces, so ceiling on the inverse is the right protection.)
 
-If the resulting `yt_to_burn` exceeds `pm.ytInPm`, the user wants more underlying than the PM-vault contains. Either lower the target or `MAX_U64`-redeem the whole entry and accept whatever drains.
+If the resulting `yt_to_burn` exceeds `pm.ytInPm`, the user wants more underlying than the PM-vault contains. Either lower the target or pass `MAX_U64` to drain the whole entry and accept whatever the redeem pays out.
 
 ```typescript
 const MAX_U64 = (1n << 64n) - 1n;
@@ -270,12 +252,11 @@ function ceilDiv(a: bigint, b: bigint): bigint {
 }
 
 /**
- * Inverse of `compute_expected_underlying_kai`. Returns the smallest `N` such that
+ * Inverse of `predictKaiWithdraw`. Returns the smallest `N` such that
  * `floor(N × total / yt_supply) >= desiredUnderlying`.
  *
- * Throws `EReserveEmpty (1006)` when `yt_supply == 0`.
  * Returns `MAX_U64` when the PM-vault entry cannot satisfy the target — caller
- * should either drain (`MAX_U64`-redeem) or downsize the request.
+ * should either drain (pass `MAX_U64` as `yt_amount`) or downsize the request.
  */
 function ytToBurnForTargetUnderlying(
   vault: KaiVaultSnapshot,
@@ -283,7 +264,7 @@ function ytToBurnForTargetUnderlying(
   ytInPm: bigint,
 ): bigint {
   if (desiredUnderlying <= 0n) return 0n;
-  if (vault.ytSupply === 0n) throw new Error('EReserveEmpty (1006)');
+  if (vault.ytSupply === 0n) throw new Error('Kai vault YT supply is zero');
   if (vault.totalAvailable === 0n) return MAX_U64;
 
   const n = ceilDiv(desiredUnderlying * vault.ytSupply, vault.totalAvailable);
@@ -291,7 +272,7 @@ function ytToBurnForTargetUnderlying(
 }
 ```
 
-The `MAX_U64` sentinel: callers can pass that straight into `kai_start_redeem`'s `yt_amount`; `pull_from_kai_lending` clamps to the PM-vault entry's `yt_in_pm` and removes the bag entry, returning whatever the live `vault::withdraw` pays out after the strategy walk.
+The `MAX_U64` sentinel: callers can pass that straight into `kai_redeem`'s `yt_amount`; `pull_from_kai_lending` clamps to the PM-vault entry's `yt_in_pm` and removes the bag entry, returning whatever the live `vault::withdraw` pays out after the strategy walk.
 
 ### 7.2 Inverse: YT to burn for target **net** underlying (after yield-fee)
 
@@ -322,7 +303,7 @@ So:
 The closed form is an *approximation* because each on-chain step floors independently:
 
 1. `principal_portion = floor(principal_in_pm × N / yt_in_pm)` discards up to `1` unit of principal.
-2. `expected_underlying = floor(N × total / yt_supply)` discards up to `1` unit of underlying (cdpm side; Kai's live `muldiv_round_up` adds 1 unit of headroom on top).
+2. `expected_underlying = floor(N × total / yt_supply)` discards up to `1` unit of underlying (twin side; Kai's live `muldiv_round_up` adds 1 unit of headroom on top).
 3. `fee_amount = floor(interest × r_bp / 10000)` discards up to `1` unit of fee.
 
 Each floor pushes `net` slightly *higher* than the closed-form predicts (less fee paid, less interest counted), which is safe — the closed form is a conservative *lower bound* on `net`, so the resulting `N` is occasionally 1 unit larger than the true minimum. That is acceptable; it never under-funds. Use the iterative refinement helper below if you want the exact minimum `N`.
@@ -344,7 +325,7 @@ function ytToBurnForTargetNetClosedForm(
   feeRateBp: bigint,
 ): bigint {
   if (desiredNet <= 0n) return 0n;
-  if (vault.ytSupply === 0n) throw new Error('EReserveEmpty (1006)');
+  if (vault.ytSupply === 0n) throw new Error('Kai vault YT supply is zero');
   if (pm.ytInPm === 0n) return MAX_U64;
   if (vault.totalAvailable === 0n) return MAX_U64;
 
@@ -410,8 +391,8 @@ function ytToBurnForTargetNet(
 - The closed-form denominator `((10000 − r) × total × yt_in_pm + r × yt_supply × principal_in_pm)` can be very large under realistic mainnet values; `bigint` handles it without overflow but be aware that intermediate products are `O(u64⁴)`.
 - The split between "interest exists" and "no interest" is a strict `>` on the cross-multiplied comparison. Equality (`p == π`) is degenerate — typically only at vault initialization before any yield has accrued, where there is also no interest to fee.
 - **Strategy losses.** If a strategy emits `StrategyLossEvent` between snapshot and signing, `total_available_balance` shrinks and `p` drops. The closed form may then over-predict net; the iterative helper bumps `N` upward to compensate. If `total_available` drops far enough that `p <= π`, the closed form switches branches automatically (no fee).
-- **Bootstrap branch.** When `total_available == 0` cdpm's `compute_expected_yt` returns `t_amount` directly (1:1). The redeem inverse cannot be in this state — `compute_expected_underlying_kai` requires `yt_supply > 0`, and if `yt_supply > 0` and `total_available == 0` then per-YT value is `0` and any redeem nets `0` underlying. This helper returns `MAX_U64` in that branch, signaling "drain; expect zero net".
-- **Admin guardrails.** Kai's `set_withdrawals_disabled` / `tvl_cap` / rate limiter are enforced inside `vault::withdraw`. The cdpm-side prediction does **not** see those flags; if they trigger, the inner `vault::withdraw` aborts and the cdpm hot-potato ticket is never consumed. The PM is safe; the protocol bot retries when the limiter clears.
+- **Bootstrap branch.** When `total_available == 0`, `predictKaiDeposit` returns `t_amount` directly (1:1). The redeem inverse cannot be in this state — `predictKaiWithdraw` requires `yt_supply > 0`, and if `yt_supply > 0` and `total_available == 0` then per-YT value is `0` and any redeem nets `0` underlying. This helper returns `MAX_U64` in that branch, signaling "drain; expect zero net".
+- **Admin guardrails.** Kai's `set_withdrawals_disabled` / `tvl_cap` / rate limiter are enforced inside `vault::withdraw`. The off-chain predictor does not see those flags; if they trigger, the inner `vault::withdraw` aborts and the whole `kai_redeem` PTB reverts. The PM is safe; the protocol bot retries when the limiter clears.
 
 ### 7.3 Worked Example
 
@@ -425,27 +406,27 @@ Implied per-YT values: `p = 1100/1050 ≈ 1.0476`, `π = 950/1000 = 0.95`. Since
 2. Closed-form `N ≈ ceil(100 / 1.0281) = 98` YT.
 3. Forward simulation with `N = 98`:
    - `principal_portion = floor(950 × 98 / 1000) = floor(93.1) = 93`
-   - `expected_underlying = floor(98 × 1100 / 1050) = floor(102.67) = 102` (Kai's live `muldiv_round_up` would give `103`, but cdpm uses the floor)
+   - `expected_underlying = floor(98 × 1100 / 1050) = floor(102.67) = 102` (Kai's live `muldiv_round_up` would give `103`, but the off-chain twin floors)
    - `interest = 102 − 93 = 9`
    - `fee = floor(9 × 2000 / 10000) = floor(1.8) = 1`
-   - `net = 102 − 1 = 101`  →  `101 >= 100`  ✓
+   - `net = 102 − 1 = 101`  →  `101 >= 100`  
 
-The forward sim confirms the closed form. The bot feeds `kai_start_redeem` with `yt_amount = 98`, the bot pays `1` underlying yield fee, and `pm.balance[T]` increases by `101` (or `102` if Kai's `muldiv_round_up` gives an extra unit).
+The forward sim confirms the closed form. The bot feeds `kai_redeem` with `yt_amount = 98`, the bot pays `1` underlying yield fee, and `pm.balance[T]` increases by `101` (or `102` if Kai's `muldiv_round_up` gives an extra unit).
 
-If `desiredNet` had been `103`, the closed-form would have returned `N = 101`, and forward sim would have yielded `net = 103` (or `104`) — the iterative refinement helper would not have needed to bump.
+If `desiredNet` had been `103`, the closed-form would have returned `N = 101`, and forward sim would have yielded `net = 103` — the iterative refinement helper would not have needed to bump.
 
 ---
 
 ## 8. Reading Vault State Off-Chain
 
-The simplest approach is a dry-run of the same view path cdpm uses:
+The simplest approach is a dry-run of the same view path the off-chain twins use:
 
 ```
 1. kai_sav::vault::total_available_balance(vault, clock)  → u64
 2. kai_sav::vault::total_yt_supply(vault)                  → u64
 ```
 
-Both are public view functions on `Vault<T, YT>`. A dry-run gRPC `dev_inspect` against the same vault and clock object that your live PTB will use produces snapshots that exactly match the on-chain values cdpm sees.
+Both are public view functions on `Vault<T, YT>`. A `dev_inspect` against the same vault and clock object that your live PTB will use produces snapshots that match the on-chain values `kai_supply` / `kai_redeem` consume.
 
 For sizing, also read the per-PM Kai vault entry by querying `pm.lending` (a `Bag`) under bag key `type_name<YT>`:
 
@@ -458,47 +439,31 @@ For sizing, also read the per-PM Kai vault entry by querying `pm.lending` (a `Ba
 
 When sizing inputs:
 
-- For `kai_start_supply<T, YT>`: `t_amount × yt_supply >= total_available` to avoid `EZeroExpected`. In practice deposit at least a few hundred MIST equivalents.
-- For `kai_start_redeem<T, YT>`: `yt_amount × total_available >= yt_supply` for the same reason. The inverse helpers in section 7 already enforce ceiling rounding, so they cannot produce `N = 0` for any positive target.
-- Build in headroom against `EAmountShortfall` by re-snapshotting the vault and PM-vault entry *immediately* before signing. Kai's `total_available_balance` ticks every block as time-locked profit unlocks; a stale snapshot can predict a slightly higher `expected_underlying` than the live vault delivers.
+- For `kai_supply<T, YT>`: `t_amount × yt_supply >= total_available` to keep the predicted `expected_yt > 0`. In practice deposit at least a few hundred MIST equivalents.
+- For `kai_redeem<T, ST, YT>`: `yt_amount × total_available >= yt_supply` for the same reason. The inverse helpers in section 7 already enforce ceiling rounding, so they cannot produce `N = 0` for any positive target.
+- Re-snapshot the vault and PM-vault entry immediately before signing. Kai's `total_available_balance` ticks every block as time-locked profit unlocks; a stale snapshot can leave the realized redeem a few raw below the predicted `toBalance`.
 - For batched protocol bots: snapshot once per batch, not once per PM. As long as the batch fits in one block, all redeems see the same `total_available_balance`. Across blocks, re-snapshot.
-- **Strategy walks add a soft latency budget.** Each strategy walker is a move-call that runs the strategy module's settlement logic. Large vaults with many strategies make the redeem PTB longer (and gas-hungrier) than the equivalent Scallop redeem. Build the PTB length into your gas budget.
+- **Strategy walks add a soft latency budget.** `kai_redeem` composes `vault::withdraw → klsp::withdraw → vault::redeem_withdraw_ticket` inside a single move-call; the inner chain is generic over the kai_leverage_supply_pool strategy `<T, ST, YT>` that every production Kai vault uses. Large vaults still pay gas proportional to the strategy chain's settlement work — factor it into your gas budget.
 
-### 9.1 Floor-div dust, on-chain tolerance, and deploy-side floor
+### 9.1 Floor-div dust on the redeem path
 
-`kai_finish_redeem` records `expected_underlying = floor(yt_burned × total_available / yt_supply)` at start time (§3) — **one** floor. The Kai withdrawal path floors *again* downstream:
+`kai_redeem` runs the full redemption as a single move-call: it pulls YT from `pm.lending`, drives the Kai withdrawal chain, deducts the yield fee from `interest`, and credits the residual to `pm.balance[T]`. The redeemed amount is whatever the chain actually returns; there is no off-chain prediction enforced at the cdpm boundary. A floor-div mismatch between off-chain twin and live chain can therefore only leave the realized `pm.balance[T]` increment 1-2 raw below the predicted `toBalance` — it cannot abort the transaction.
 
-- `vault::withdraw` (`kai_sav/vault.move:678`) computes the *same* `muldiv` target, then the final priority loop (`vault.move:767-785`) reclaims the proportional-split residual — **vault-level allocation is exact**.
-- The shortfall lives in `redeem_withdraw_ticket:817`: each strategy's `withdrawn_balance` ≤ its `to_withdraw` because `kai_leverage_supply_pool::withdraw` (`kai_sav/kai_leverage_supply_pool.move:286-301`) floors **twice** per strategy (`muldiv(shares, to_withdraw, nominal)` then `redeem_lossy`). Overshoots are skimmed to profit and capped at `to_withdraw`, so the result is always ≤ requested.
+The dust budget:
 
-⟹ **dust ≈ 2 raw × (strategies actually drawn from)**. Free-balance-served redeems contribute ~0. All current mainnet SAVs are single-strategy ⟹ **≤2 raw**. Constant in principal, not proportional. Withdraw-then-redeposit cannot raise it: dust never accumulates across calls (fresh ticket each redeem), and growing `free_balance` only makes later redeems more free-balance-served ⟹ *less* dust.
+- `vault::withdraw` computes the same `muldiv` target as the predictor, then the final priority loop reclaims the proportional-split residual — vault-level allocation is exact.
+- The shortfall lives in `redeem_withdraw_ticket`: each strategy's `withdrawn_balance` ≤ its `to_withdraw` because `kai_leverage_supply_pool::withdraw` floors twice per strategy (`muldiv(shares, to_withdraw, nominal)` then `redeem_lossy`). Overshoots are skimmed to profit and capped at `to_withdraw`, so the result is always ≤ requested.
 
-**Interaction with the protocol fee.** `*_finish_redeem` computes `interest = redeemed_amount − principal_portion` and splits `fee = floor(interest × fee_rate / 10000)` off the *redeemed coin* into `FeeHouse` (`cdpm.move:1534-1545` / `1717-1728`) **after** the assert passes. The assert compares the *gross* `redeemed_amount`, so the dust analysis and the `TOL = 4` choice are independent of the fee. Net user receipt is still `redeemed − fee`; size for *net* targets via the `*ForTargetNet` helpers in §7. Under the relaxed assert a skim of `S ≤ TOL` raw by an authorized agent yields: agent +`S`, PM −`S × (1 − fee_rate)`, FeeHouse −`S × fee_rate` — attacker profit is unchanged, the fee acts as a partial absorber of the user's loss, all sub-cent dust either way.
+⟹ **dust ≈ 2 raw × (strategies actually drawn from)**. Free-balance-served redeems contribute ~0. Single-strategy mainnet SAVs ⟹ ≤2 raw. Constant in principal, not proportional. Withdraw-then-redeposit does not accumulate it.
 
-**On-chain mitigation (current).** The cdpm contract absorbs this dust via a module constant:
+This matters most when composing the redeem with a downstream `add_liquidity` in the same PTB. Two patterns:
 
-```move
-// sources/cdpm.move
-const REDEEM_DUST_TOLERANCE_RAW: u64 = 4;
-// kai_finish_redeem / scallop_finish_redeem:
-if (expected_underlying > redeemed_amount) {
-    assert!(expected_underlying - redeemed_amount <= REDEEM_DUST_TOLERANCE_RAW, EAmountShortfall);
-};
-```
+1. **Treat `predictKaiWithdraw` as a strict upper bound.** Size the downstream `add_liquidity` against `floor(predicted) − safety_margin` (a few raw is plenty) rather than `predicted` itself. cdpm's worker uses `REDEEM_REALIZED_SAFETY_MARGIN_RAW = 3` (env-tunable); the unrealized few raw stay in the bag and deploy next cycle.
+2. **Cap the burn on partial drains.** Pass `yt_amount = min(needed, ytInPm − LENDING_SAFE_MARGIN_WRAPPER_RAW)` (recommended default 100 YT raw). This leaves a residual entry in `pm.lending` so the bag key survives — useful when a later top-up will re-credit principal into the same entry.
 
-`4` covers single-strategy dust (≤2) with 2-raw margin. The relaxed `>=` lets an authorized agent skim at most 4 raw per redeem, gas-gated: the attack profitability condition reduces to the price ratio `R = P_token_per_raw / P_SUI_per_MIST` — proportional market moves leave the margin invariant. For the worst case (xBTC, ~$0.001/raw) skim ≈ 0.67× per-tx gas at today's BTC/SUI ratio ⟹ net-negative.
-
-> **Historical note.** Earlier guidance required a mandatory `coin::join` dust topup on every redeem — the topup ran into `pm.balance[T]`, donating dust per call. The on-chain tolerance replaces it for the ≤2-strategy case (today, all mainnet vaults). The topup is no longer required.
-
-**Optional fallback — `coin::join` topup** (only needed for a *future* multi-strategy vault whose dust exceeds 4 raw, i.e. ≥3 strategies drawn). Emit `0x2::coin::join(coinT, topup)` between `kai_start_redeem` and `kai_finish_redeem`, where `topup ≥ observedDust − REDEEM_DUST_TOLERANCE_RAW` raw of `Coin<T>`. Preferred over raising the global constant (which would weaken the xBTC margin). Source: caller wallet (agents/bots) or any of `pm.balance[T]` / `pm.fee[T]` / wallet (owner close-PM). The topup folds into `redeemed_amount` ⟹ `interest = redeemed − principal` includes it ⟹ service fee is taken on the inflated interest, **not bypassed**.
-
-**Cap-the-burn (still useful for ≠1009 reasons).** Capping `yt_amount` at `min(neededWrapper, wrapperRaw − SAFE_MARGIN)` leaves a residual in `pm.lending` (avoids the full-drain cliff and a removed bag entry) — independent of the dust concern, which is now handled on-chain.
-
-```ts
-// Client-side constant (not from the cdpm contract). Pick once per project.
+```typescript
 const LENDING_SAFE_MARGIN_WRAPPER_RAW = 100n;
 
-// Returns null when the entry is too small to redeem safely — leave it for owner close-PM.
 function capRedeemBurnRaw(exact: bigint, wrapperRaw: bigint): bigint | null {
   if (wrapperRaw <= LENDING_SAFE_MARGIN_WRAPPER_RAW) return null;
   const safeMax = wrapperRaw - LENDING_SAFE_MARGIN_WRAPPER_RAW;
@@ -506,34 +471,34 @@ function capRedeemBurnRaw(exact: bigint, wrapperRaw: bigint): bigint | null {
 }
 ```
 
-**Deploy-side realized floor (unchanged, separate concern).** When the SAME PTB also deploys the redeemed underlying (redeem → `add_liquidity`), size the deploy to a guaranteed LOWER bound of the conversion, not to the requested `want`:
+**Deploy-side realized floor (redeem → add-liquidity in the same PTB).** Size the deploy to a guaranteed LOWER bound of the conversion, not to the requested `want`:
 
 ```
-wrapperSplit = totalWrapper × share          // share = want / heldUnderlying = want / r ; the YT/sCoin to burn
-realized     = floor(amountRaw × r) − M      // guaranteed-minimum underlying the burn surfaces (M = small floor margin, ~3 raw)
+wrapperSplit = totalWrapper × share          // share = want / heldUnderlying ; the YT to burn
+realized     = floor(amountRaw × r) − M      // M = small floor margin, e.g. 3 raw
 deployTotal ≤ available + realized           // clamp the add to this, NOT available + want
 ```
 
-The on-chain `REDEEM_DUST_TOLERANCE_RAW` clears the cdpm-boundary `1009` but the actual coin still lands `floor(amountRaw × r) − walkDust` short. Clamping the deploy to `realized = floor(amountRaw × r) − M` (a strict lower bound) is what prevents the downstream `0x2::balance::split` ENotEnough (Move abort 2) at `add_liquidity`. cdpm's worker uses `REDEEM_REALIZED_SAFETY_MARGIN_RAW = 3` (env-tunable); the unrealized few raw stay in the bag and deploy next cycle.
+Clamping the deploy to `realized = floor(amountRaw × r) − M` (a strict lower bound) prevents the downstream `0x2::balance::split` ENotEnough abort at `add_liquidity`.
 
 Cross-references:
 
-- `cdpm-protocol-sdk/reference/kai-lending.md` — protocol PTB template (no full drain)
+- `cdpm-protocol-sdk/reference/kai-lending.md` — protocol PTB template
 - `cdpm-agent-sdk/reference/kai-lending.md` — agent PTB template
-- `cdpm-user-sdk/reference/kai-lending.md` — close-PM top-up PTB template
-- `cdpm-calculation-skill/reference/cross-protocol-ptb.md` §3 — side-by-side comparison
+- `cdpm-user-sdk/reference/kai-lending.md` — owner / close-PM PTB template
+- `cdpm-calculation-skill/reference/cross-protocol-ptb.md` §3 — cross-protocol composition
 
 ---
 
 ## 10. Reading Live Vault APY Off-Chain (Supply-Side Half of the Picker)
 
-The pair `(total_available, yt_supply)` from §1 encodes the *current* per-YT price; what it does **not** give you directly is the *rate* at which `total_available` is unlocking — i.e. the supply APY a sleeping `pm.balance[T]` would earn if you parked it via `kai_start_supply<T, YT>`. Kai's vault holds time-locked profit (`tlb::max_withdrawable`) and aggregates strategy NAV, so the live yield depends on how fast the time-locked balance unlocks. Kai publishes both the snapshot and the derived APY via [`@kunalabs-io/kai`](https://github.com/kunalabs-io/kai-ts-sdk).
+The pair `(total_available, yt_supply)` from §1 encodes the *current* per-YT price; what it does **not** give you directly is the *rate* at which `total_available` is unlocking — i.e. the supply APY a sleeping `pm.balance[T]` would earn if you parked it via `kai_supply<T, YT>`. Kai's vault holds time-locked profit (`tlb::max_withdrawable`) and aggregates strategy NAV, so the live yield depends on how fast the time-locked balance unlocks. Kai publishes both the snapshot and the derived APY via [`@kunalabs-io/kai`](https://github.com/kunalabs-io/kai-ts-sdk).
 
 This page covers the Kai-side rate-query API. The cross-protocol "Scallop or Kai?" picker that consumes both this and the Scallop-side query lives in [`scallop-lending-math.md` §10.4](./scallop-lending-math.md#104-decision-recipe--scallop-vs-kai-supply-picker) — Kai-only callers can use the snippet in §10.4 below.
 
 ### 10.1 SDK Setup
 
-Install (alongside `@mysten/sui` — pin the same major across the dep tree, see `cross-protocol-ptb.md` §10 for the `instanceof Transaction` pitfall):
+Install (alongside `@mysten/sui` — pin the same major across the dep tree, see `cross-protocol-ptb.md` for the `instanceof Transaction` pitfall):
 
 ```bash
 bun add @kunalabs-io/kai @mysten/sui
@@ -557,7 +522,7 @@ const client = new SuiClient({ url: 'https://fullnode.mainnet.sui.io' });
 Two practical caveats:
 
 1. **Mainnet only.** Every vault id in `VAULTS` is hard-coded to mainnet objects (`kai-ts-sdk/src/vault/vault.ts:441-533`). There is no testnet / devnet map. cdpm + Kai integration testing has to run against mainnet, fork a mainnet snapshot locally, or stub the Kai layer.
-2. **`paused_*` keys exist.** The map includes `paused_suiUSDT` and `paused_USDC` alongside the active `suiUSDT` and `USDC`. These are deprecated vaults retained for redeem-only flows; **do not pick `paused_*` as a supply destination** in the picker — `kai_start_supply` will succeed but the vault no longer accrues. Filter them out at the call site:
+2. **`paused_*` keys exist.** The map includes `paused_suiUSDT` and `paused_USDC` alongside the active `suiUSDT` and `USDC`. These are deprecated vaults retained for redeem-only flows; **do not pick `paused_*` as a supply destination** in the picker — `kai_supply` will succeed but the vault no longer accrues. Filter them out at the call site:
 
    ```typescript
    const activeKaiKeys = Object.keys(VAULTS).filter(k => !k.startsWith('paused_'));
@@ -595,7 +560,7 @@ apr                = unlockPerSecondNet × 60 × 60 × 24 × 365 / tvl
 apy                = Math.exp(apr) − 1                       // 1-year continuous compounding
 ```
 
-The SDK calls `calcContinuousApy(apr, 365)` (`kai-ts-sdk/src/vault/util.ts:103`) which internally computes `time = days / 365` and then `Math.exp(apr × time) − 1`. Because `days` is hardcoded to `365`, `time = 1` and the formula collapses to `Math.exp(apr) − 1`. Earlier revisions of this doc framed it as `exp(apr × t)` with `t = days/365`; that was technically true of the helper but misleading because the helper is always called with `days = 365`.
+The SDK calls `calcContinuousApy(apr, 365)` (`kai-ts-sdk/src/vault/util.ts:103`) which internally computes `time = days / 365` and then `Math.exp(apr × time) − 1`. Because `days` is hardcoded to `365`, `time = 1` and the formula collapses to `Math.exp(apr) − 1`.
 
 Two important properties:
 
@@ -615,74 +580,19 @@ const supplyKai = apy >= minApy;
 
 — there's no need for a separate function wrapping that call. The picker's `pickSupplyVenue` in §10.4 of the Scallop math doc handles the `kaiVaultKey: null` degenerate case symmetrically when Scallop is the sole option.
 
-### 10.5 PTB-Builder Hooks — SDK Composables Inside cdpm's Hot-Potato
-
-Kai's SDK exposes granular move-call builders that fit cdpm's PTB shape directly — unlike Scallop's wallet-rooted `*Quick` helpers, Kai's `vault.deposit` / `vault.withdraw` accept any `TransactionObjectInput` (a tx-result `Balance` works, an existing balance object id works) and return another tx-result `Balance`, so they slot in between cdpm's start/finish ticket pair without touching the wallet:
-
-```typescript
-// Inside a cdpm Kai supply PTB:
-const vault     = VAULTS.suiUSDT;                        // pick the active (non-paused) entry
-const balanceT  = tx.moveCall({                          // cdpm::kai_start_supply gave us coin_t
-  target: '0x2::coin::into_balance', typeArguments: [vault.T.coinType], arguments: [coinT],
-});
-const balanceYT = vault.deposit(tx, balanceT);           // ← SDK helper, replaces manual vault::deposit move-call
-```
-
-The withdraw side is the bigger win. The user-sdk recipe currently has a 30-line `strategyWalkers` ceremony plus `vault::redeem_withdraw_ticket` settlement; the SDK collapses both into one call:
-
-```typescript
-const balanceT = vault.withdraw(tx, balanceYT, vault.getStrategies());
-// The SDK emits, in order:
-//   1. kai_sav::vault::withdraw(vault, balanceYT, clock)             → withdraw_ticket
-//   2. for each strategy in vault.getStrategies():
-//      <strategy_module>::strategy_withdraw_for_vault(...withdraw_ticket...)
-//   3. kai_sav::vault::redeem_withdraw_ticket(vault, withdraw_ticket) → Balance<T>
-```
-
-#### How `vault.getStrategies()` actually works
-
-`vault.getStrategies()` is **not** a chain reader. It is a constructor-injected, zero-argument synchronous function defined per-`VaultInfo` (`kai-ts-sdk/src/vault/vault.ts:496` etc.) that returns a static descriptor list of the strategies registered for this vault. It does not call `vault.fetch`; it does not inspect `to_withdraw`; it does not filter inactive strategies. The walker emission inside `vault.withdraw` is **unconditional** — every registered strategy module runs its `strategy_withdraw_for_vault` move-call, and the strategy itself decides at execution time whether there is anything to withdraw (often a no-op when `to_withdraw == 0`).
-
-This shape has two consequences for cdpm integrators:
-
-1. The walker list is fixed at SDK-build time. When Kai adds a new strategy to a live vault, the SDK has to publish a new version that registers the corresponding walker; until then, `vault.withdraw` will silently miss the new strategy and `vault::redeem_withdraw_ticket` will abort. Pin the SDK version in lockstep with Kai upgrades.
-2. There is no per-redeem optimization to skip idle strategies. The PTB always pays gas for every walker. For most vaults this is 1-2 strategies, so the overhead is bounded; for vaults that grow to many strategies, expect the redeem-PTB gas to scale with the registered count.
-
-For cdpm-flow PTBs, prefer:
-
-| Step | Manual recipe (in `cdpm-user-sdk/reference/kai-lending.md`) | SDK alternative |
-|------|---|---|
-| Supply: turn `coin_t` into `Balance<T>` then deposit | `0x2::coin::into_balance` + manual `kai_sav::vault::deposit` move-call | `vault.deposit(tx, balanceT)` |
-| Redeem: walk every strategy, settle ticket | manual loop over `strategyWalkers` + `vault::redeem_withdraw_ticket` move-call | `vault.withdraw(tx, balanceYT, vault.getStrategies())` |
-| Sized redeem: "I want at least `K` underlying" | §7 closed-form / iterative refinement → `kai_start_redeem` with computed YT | `vault.withdrawTAmt(tx, tAmt, balanceYT, vault.getStrategies())` — burns just-enough YT and walks strategies in one call |
-
-The cdpm-side calls (`kai_start_supply` / `kai_finish_supply` / `kai_start_redeem` / `kai_finish_redeem`) remain raw `tx.moveCall` against `${CDPM_PACKAGE}::cdpm::*` — only the inner Kai vault commands change.
-
-#### `vault.withdrawTAmt` as a §7-replacement
-
-`vault.withdrawTAmt(tx, tAmt, balanceYT, strategies)` (`kai-ts-sdk/src/vault/vault.ts:253-274`) burns *just enough* YT to release `tAmt` underlying — Kai's vault contract does the inverse-sizing on-chain, so callers don't need the §7 closed-form `ytToBurnForTargetUnderlying` for that case. Combined with cdpm's `kai_start_redeem(MAX_U64)` sentinel, you can chain:
-
-1. `cdpm::kai_start_redeem<T, YT>(access, pm, vault, MAX_U64, clock)` → `(coin_yt, ticket)` — drains the bag entry's full YT into a tx-result coin.
-2. `vault.withdrawTAmt(tx, tAmt, coin_yt.into_balance(), vault.getStrategies())` → `Balance<T>` of size `>= tAmt`, **plus** Kai returns the unused YT directly to the wallet.
-3. `cdpm::kai_finish_redeem<T, YT>(pm, vault, fee_house, ticket, balance_t.into_coin())` — `finish_*` re-takes `&Vault<T,YT>` and asserts `object::id(vault) == ticket.vault_id` (`EWrongVault = 1013`).
-
-Caveat: `withdrawTAmt` consumes only `tAmt`-worth of YT from the input `Balance<YT>` via `balance::split`; **the leftover stays in the input balance argument**, not in `pm.lending` and not auto-transferred to the sender. Because `Balance<YT>` has no `drop`, the PTB must explicitly consume the residual or the whole transaction aborts on hot-potato. The cdpm-incompatible failure modes are then: (a) destroy the leftover via `balance::destroy_zero` only if it is provably zero, otherwise abort; (b) wrap into a `Coin<YT>` and `transferObjects` to the sender wallet, which leaves YT outside `pm.lending` (inconsistent with cdpm's principal accounting); (c) fold it back via a fresh `kai_start_supply`/`kai_finish_supply` round inside the same PTB. Use `withdrawTAmt` only when you (i) intend to drain the entry anyway (`tAmt` ≈ full vault entry value, leftover is dust or zero) or (ii) accept option (c)'s extra hot-potato round-trip. For partial-redeem flows that must preserve `pm.lending` accounting cheaply, stick with §7's closed-form `ytToBurnForTargetNet` and `vault.withdraw`.
-
-> **Cross-protocol composition.** When the same PTB needs both Kai and Scallop legs (e.g. an atomic Kai → Scallop rebalance, or any flow where the picker's choice should not gate atomicity at the tx layer), see the dedicated guide at [`cross-protocol-ptb.md`](./cross-protocol-ptb.md). It documents the canonical Mysten-rooted shared-`Transaction` pattern, the multi-approach comparison, five integration caveats (signing target, `setSender`, `@mysten/sui` dependency pinning, no `*Quick` outputs into cdpm finishes, re-snapshot before signing), and worked rebalance examples.
-
-### 10.6 Wallet-Level vs Vault-Level Stats
+### 10.5 Wallet-Level vs Vault-Level Stats
 
 `getWalletVaultInfo(client, walletAddress, vaultData)` returns the YT balance + equity for a given address. **It is not directly useful for a `pm.balance[T]` decision** — the YT lives inside `pm.lending[type_name<YT>]`, not in the owner / agent / protocol wallet. To compute per-PM stats, use the bag-key path described in §1 + §8, then multiply `yt_in_pm × p` (where `p = total_available / yt_supply` from `getVaultStats`).
 
-Wallet-level YT (`getWalletVaultInfo`) is only relevant for addresses that hold YT independently of cdpm — e.g. a user who supplied to Kai directly outside any PositionManager. cdpm itself exposes no wrapper-extract function, so no cdpm flow ever lands raw `Coin<YT>` in the owner / agent / protocol wallet.
+Wallet-level YT (`getWalletVaultInfo`) is only relevant for addresses that hold YT independently of cdpm — e.g. a user who supplied to Kai directly outside any PositionManager. cdpm itself exposes no wrapper-extract function, so no cdpm flow lands raw `Coin<YT>` in the owner / agent / protocol wallet.
 
-### 10.7 Error / Staleness Notes
+### 10.6 Error / Staleness Notes
 
 - `vault.fetch` and `getVaultStats` are pure reads — no on-chain accrual command needed. Kai's `total_available_balance(clock)` self-accrues via `tlb::max_withdrawable` (cf. §1).
 - The SDK reads `clock` via the `SuiClient` automatically. If you batch many `fetch` calls inside a tight loop, the clock used for APR derivation is the per-call timestamp; APR can drift micro-seconds across the batch. For cross-vault picking this is irrelevant; for tight A/B comparison, snapshot once and pass the same `clock` ms across helpers.
-- Strategy losses (`StrategyLossEvent`) shrink `total_available` and thus `apr` between snapshot and signing. The cdpm-side `EAmountShortfall (1009)` defense already protects against this; treat a sudden APR drop on a vault as a hint that one of its strategies just took a loss.
+- Strategy losses (`StrategyLossEvent`) shrink `total_available` between snapshot and signing. Treat a sudden APR drop on a vault as a hint that one of its strategies just took a loss; rely on `predictKaiWithdraw` as a lower bound rather than an exact predictor in volatile windows.
 - **No hosted REST endpoint.** Unlike Scallop (`https://sui.apis.scallop.io/...`), Kai does not publish a hosted APY API; the SDK is the only documented surface. Read-only consumers either depend on `@kunalabs-io/kai` or call the on-chain `total_available_balance` / `total_yt_supply` view functions directly via `dev_inspect`.
-- **Reusable off-chain twins.** The SDK exposes `calcTotalAvailableBalance`, `calcYtToTAmount`, `calcTToYtAmount`, `calcYtConversionRate` (`kai-ts-sdk/src/vault/util.ts:42-55,147-212`) — pure functions that mirror the cdpm Move math in §2 and §3 (using `muldiv` floor matching cdpm). Prefer these to a hand-rolled twin: when Kai changes the per-vault math, the SDK absorbs the change and your sizing helpers stay correct.
+- **Reusable off-chain twins.** The SDK exposes `calcTotalAvailableBalance`, `calcYtToTAmount`, `calcTToYtAmount`, `calcYtConversionRate` (`kai-ts-sdk/src/vault/util.ts:42-55,147-212`) — pure functions that mirror the Kai math in §2 and §3 (using `muldiv` floor matching the off-chain twins). Prefer these to a hand-rolled twin: when Kai changes the per-vault math, the SDK absorbs the change and your sizing helpers stay correct.
 - **Batched fetch.** `getVaultDataBatch(client, vaultIds)` (`util.ts:255-284`) issues one `multiGetObjects` call for many vaults — useful when the picker needs Kai snapshots across multiple `T` simultaneously.
 
 ---

@@ -3,10 +3,10 @@
 ## Contents
 
 - [1. Reserve Snapshot](#1-reserve-snapshot)
-- [2. `compute_expected_scoin` (used by `scallop_start_supply`)](#2-compute_expected_scoin-used-by-scallop_start_supply)
-- [3. `compute_expected_underlying_scallop` (used by `scallop_start_redeem`)](#3-compute_expected_underlying_scallop-used-by-scallop_start_redeem)
+- [2. `predictScallopMint` (off-chain twin of `protocol::mint::mint`)](#2-predictscallopmint-off-chain-twin-of-protocolmintmint)
+- [3. `predictScallopRedeem` (off-chain twin of `protocol::redeem::redeem`)](#3-predictscallopredeem-off-chain-twin-of-protocolredeemredeem)
 - [4. Principal Amortization (`pull_from_scallop_lending`)](#4-principal-amortization-pull_from_scallop_lending)
-- [5. Yield Fee Inside `scallop_finish_redeem`](#5-yield-fee-inside-scallop_finish_redeem)
+- [5. Yield Fee Inside `scallop_redeem`](#5-yield-fee-inside-scallop_redeem)
 - [6. End-to-End Prediction Helper](#6-end-to-end-prediction-helper)
 - [7. Inverse Direction — Sizing Redemptions](#7-inverse-direction-sizing-redemptions)
 - [8. Reading Reserve State Off-Chain](#8-reading-reserve-state-off-chain)
@@ -15,7 +15,7 @@
 
 ## 1. Reserve Snapshot
 
-cdpm reads four `u64` values from Scallop's `protocol::reserve::balance_sheet` for the underlying type `T`:
+The off-chain twins of `protocol::mint::mint` / `protocol::redeem::redeem` read four `u64` values from Scallop's `protocol::reserve::balance_sheet` for the underlying type `T`:
 
 | Symbol | Source | Meaning |
 |--------|--------|---------|
@@ -30,28 +30,24 @@ The "lendable underlying" denominator that defines the sCoin↔underlying ratio 
 denom_underlying = cash + debt − revenue
 ```
 
-cdpm asserts `cash + debt >= revenue` and `denom_underlying > 0`, otherwise it aborts with `EReserveEmpty (1006)`.
+A healthy reserve has `cash + debt >= revenue` and `denom_underlying > 0`. When either fails, Scallop's upstream `mint` / `redeem` is the authoritative source of behavior; the off-chain predictor should treat the state as unsizable and either widen its slippage budget or skip the action.
 
-> **Pre-flight requirement (enforced).** The live PTB **must** run `protocol::accrue_interest::accrue_interest_for_market(version, market, clock)` as its first command. cdpm now enforces this: `scallop_start_supply` / `scallop_start_redeem` take `&Clock` and assert `borrow_dynamics::last_updated_by_type(market.borrow_dynamics(), type<T>) == clock::timestamp_ms(clock) / 1000`. Omitting the pre-step aborts at the cdpm boundary with `EStaleScallopState (1011)` before any balance is touched. Off-chain dry runs and gRPC reads that do not simulate this command will also see a stale `balance_sheet` whose `denom_underlying` is smaller than reality and *over-predict* the sCoin mint / underlying redeem.
+> **Pre-flight accrual.** `protocol::mint::mint` and `protocol::redeem::redeem` call `accrue_interest_for_market` as their first step, so the on-chain `balance_sheet` they consume is fresh relative to the PTB clock by construction. Off-chain dry runs and gRPC reads that read `balance_sheet` without first simulating an accrue see a stale snapshot whose `denom_underlying` is smaller than reality and **over-predict** the sCoin mint / underlying redeem. To match what `scallop_supply` / `scallop_redeem` will see on-chain, run a `protocol::accrue_interest::accrue_interest_for_market(version, market, clock)` dry-run command before reading `balance_sheet`, or use the dev-inspect simulation pattern in §8.
 
 ---
 
-## 2. `compute_expected_scoin` (used by `scallop_start_supply`)
+## 2. `predictScallopMint` (off-chain twin of `protocol::mint::mint`)
 
-```move
-fun compute_expected_scoin<T>(market: &Market, coin_amount: u64): u64 {
-    if (supply == 0) {
-        coin_amount
-    } else {
-        floor(coin_amount × supply / (cash + debt − revenue))
-    }
-}
+```
+expected_scoin =
+  supply == 0 ? coin_amount
+              : floor(coin_amount × supply / (cash + debt − revenue))
 ```
 
 TypeScript twin:
 
 ```typescript
-function computeExpectedScoin(
+function predictScallopMint(
   cash: bigint,
   debt: bigint,
   revenue: bigint,
@@ -61,46 +57,52 @@ function computeExpectedScoin(
   if (supply === 0n) {
     return coinAmount; // bootstrap: 1:1 sCoin per underlying
   }
+  if (cash + debt < revenue) {
+    throw new Error('Scallop reserve revenue exceeds cash + debt');
+  }
   const denom = cash + debt - revenue;
-  if (denom === 0n) throw new Error('EReserveEmpty (1006)');
-  if (cash + debt < revenue) throw new Error('EReserveEmpty (1006)');
+  if (denom === 0n) {
+    throw new Error('Scallop reserve lendable denominator is zero');
+  }
   return (coinAmount * supply) / denom; // floor division
 }
 ```
 
 Edge cases:
 
-- `EReserveEmpty (1006)` when `cash + debt < revenue` (impossible-but-asserted) or `denom == 0`.
-- `EZeroExpected (1007)` when the result is `0` and the contract checks `expected_scoin > 0` after computing — happens when `coin_amount × supply < denom`.
+- **Bootstrap** (`supply == 0`): Scallop's `mint` returns `coin_amount` directly (1:1).
+- **Degenerate** (`coin_amount × supply < denom`): the floor returns `0`. `scallop_supply` still runs — the `Balance<MarketCoin<T>>` joined into `pm.lending` is zero, and the `ScallopSupplied` event records `market_coin_minted: 0`. Off-chain sizing should increase the input rather than rely on this.
 
 ---
 
-## 3. `compute_expected_underlying_scallop` (used by `scallop_start_redeem`)
+## 3. `predictScallopRedeem` (off-chain twin of `protocol::redeem::redeem`)
 
-```move
-fun compute_expected_underlying_scallop<T>(market: &Market, scoin_amount: u64): u64 {
-    floor(scoin_amount × (cash + debt − revenue) / supply)
-}
+```
+expected_underlying = floor(scoin_amount × (cash + debt − revenue) / supply)
 ```
 
-This is the inverse of `compute_expected_scoin` and shares the same `EReserveEmpty (1006)` guards plus `assert!(supply > 0, ...)`.
+This is the inverse of `predictScallopMint`.
 
 ```typescript
-function computeExpectedUnderlying(
+function predictScallopRedeem(
   cash: bigint,
   debt: bigint,
   revenue: bigint,
   supply: bigint,
   scoinAmount: bigint,
 ): bigint {
-  if (supply === 0n) throw new Error('EReserveEmpty (1006)');
-  if (cash + debt < revenue) throw new Error('EReserveEmpty (1006)');
-  const numer_extra = cash + debt - revenue;
-  return (scoinAmount * numer_extra) / supply; // floor division
+  if (supply === 0n) {
+    throw new Error('Scallop reserve sCoin supply is zero');
+  }
+  if (cash + debt < revenue) {
+    throw new Error('Scallop reserve revenue exceeds cash + debt');
+  }
+  const denom = cash + debt - revenue;
+  return (scoinAmount * denom) / supply; // floor division
 }
 ```
 
-`EZeroExpected (1007)` when the result is `0` (the asserted-positive check happens inside `scallop_start_redeem`).
+When the result is `0`, the redeem call still runs and credits `0` underlying to `pm.balance[T]` (less the yield fee, which is also `0` since there is no interest).
 
 ---
 
@@ -120,7 +122,7 @@ else:
     vault.scoin      -= want_amount
 ```
 
-TypeScript twin (matches `test_only_principal_portion`):
+TypeScript twin (matches the on-chain `pull_from_scallop_lending` formula):
 
 ```typescript
 function principalPortion(
@@ -133,32 +135,34 @@ function principalPortion(
 }
 ```
 
-Properties worth noting:
+Properties:
 
-- Floor-division can leave 1 unit of principal "stuck" in the vault after a partial redeem; this is benign — it gets swept on a later full drain.
-- `principal_portion ≤ pTotal` always.
-- The function is monotonically non-decreasing in `wantAmount` (random-tested in `tests/`).
+- Floor-division can leave 1 unit of principal "stuck" in the vault after a partial redeem; benign — swept on a later full drain.
+- `principal_portion <= P_total` always.
+- Monotonically non-decreasing in `wantAmount`.
+
+This formula is structurally identical to Kai's `pull_from_kai_lending`; the only difference is the bag key and the type of the inner balance (`Balance<MarketCoin<T>>` vs `Balance<YT>`).
 
 ---
 
-## 5. Yield Fee Inside `scallop_finish_redeem`
+## 5. Yield Fee Inside `scallop_redeem`
 
 The interest portion is whatever Scallop returned beyond the principal slice; the yield fee is taken from the interest only:
 
 ```
-redeemed_amount  = underlying.value()                  // input Coin<T>
+redeemed_amount  = balance::value(&underlying)            // result of redeem::redeem
 interest         = max(0, redeemed_amount − principal_portion)
 fee_amount       = floor(interest × fee_house.fee_rate / 10_000)
 to_pm_balance    = redeemed_amount − fee_amount
 ```
 
-`fee_house.fee_rate` is in basis points (`FEE_DENOMINATOR = 10_000`) and capped at `MAX_FEE_RATE = 3000` (30%) by `admin_set_fee`. The default is `2000` (20%).
+`fee_house.fee_rate` is in basis points (`FEE_DENOMINATOR = 10_000`) and capped at `MAX_FEE_RATE = 5000` (50%) by `admin_set_fee`. The default is `2000` (20%).
 
 TypeScript twin:
 
 ```typescript
 const FEE_DENOMINATOR = 10_000n;
-const MAX_FEE_RATE = 3_000n;
+const MAX_FEE_RATE = 5_000n;
 
 function applyYieldFee(
   redeemedAmount: bigint,
@@ -182,7 +186,7 @@ Important properties:
 
 - If `redeemed_amount <= principal_portion` (loss / rounding-down case), `interest = 0` and `fee_amount = 0` — the principal is **never** taxed.
 - `fee_amount` only accrues to `fee_house.fee` when `> 0`.
-- The same fee path runs for owner / agent / protocol callers — yield fee is universal.
+- The same fee path runs for owner / agent / protocol callers — the yield fee is universal.
 
 ---
 
@@ -215,7 +219,7 @@ function predictRedeem(
   feeAmount: bigint;
   toBalance: bigint;
 } {
-  const expectedUnderlying = computeExpectedUnderlying(
+  const expectedUnderlying = predictScallopRedeem(
     reserve.cash, reserve.debt, reserve.revenue, reserve.supply, wantScoin,
   );
   const pp = principalPortion(vault.principalTotal, vault.scoinTotal, wantScoin);
@@ -230,21 +234,21 @@ function predictRedeem(
 }
 ```
 
-Live Scallop redeem may pay slightly more than `expectedUnderlying` (the contract only asserts `>=`); use `expectedUnderlying` as the conservative lower bound for your strategy logic. The same applies to `toBalance`: it is a lower bound on what actually lands in `pm.balance[T]` after `scallop_finish_redeem`.
+`expectedUnderlying` is the off-chain prediction of what `redeem::redeem` will return; `toBalance` is the predicted increment to `pm.balance[T]` after the yield-fee carve-out. Both can drift by ±1 raw against the live execution because the off-chain `balance_sheet` snapshot is read before the PTB clock and Scallop's auto-accrual inside `redeem::redeem` advances `denom` by a few units.
 
 ### 6.1 Forward direction — "I burn N sCoin, what do I net?"
 
-Already covered by `predictRedeem(reserve, vault, N, feeRateBp).toBalance`. This is the answer to *"what underlying lands in `pm.balance[T]`?"*. See section 3 for the raw `compute_expected_underlying_scallop` formula and section 5 for the yield-fee deduction.
+Already covered by `predictRedeem(reserve, vault, N, feeRateBp).toBalance`. This is the answer to *"what underlying lands in `pm.balance[T]`?"*. See section 3 for the raw `predictScallopRedeem` formula and section 5 for the yield-fee deduction.
 
 ---
 
 ## 7. Inverse Direction — Sizing Redemptions
 
-The forward formulas in sections 2-6 answer "given an `N` sCoin to burn, what comes back?". The inverse — "I need at least `K` underlying, what `N` do I feed `scallop_start_redeem`?" — is what bots and rebalancing strategies actually need at call sites.
+The forward formulas in sections 2-6 answer "given an `N` sCoin to burn, what comes back?". The inverse — "I need at least `K` underlying, what `N` do I feed `scallop_redeem`?" — is what bots and rebalancing strategies actually need at call sites.
 
 ### 7.1 Inverse: sCoin to burn for target underlying (pre-fee)
 
-`compute_expected_underlying_scallop` is `floor(N × denom / supply)`. To guarantee the on-chain output is `>= K`, invert with **ceiling** division:
+`predictScallopRedeem` is `floor(N × denom / supply)`. To guarantee the on-chain output is `>= K`, invert with **ceiling** division:
 
 ```
 scoin_to_burn = ceil(K × supply / denom)
@@ -253,7 +257,7 @@ scoin_to_burn = ceil(K × supply / denom)
 
 Use ceiling because Scallop's redeem floors the underlying output. If you ask for `floor(K × supply / denom)` sCoin you may receive 1 unit fewer than `K`. Ceiling rounds up so you receive `>= K` (possibly 1 unit more, never 1 unit less).
 
-If the resulting `scoin_to_burn` exceeds `vault.scoinTotal`, the user wants more underlying than the vault contains. Either lower the target or `MAX_U64`-redeem the whole vault and accept whatever drains.
+If the resulting `scoin_to_burn` exceeds `vault.scoinTotal`, the user wants more underlying than the vault contains. Either lower the target or pass `MAX_U64` to drain the whole vault entry and accept whatever the redeem pays out.
 
 ```typescript
 const MAX_U64 = (1n << 64n) - 1n;
@@ -264,12 +268,11 @@ function ceilDiv(a: bigint, b: bigint): bigint {
 }
 
 /**
- * Inverse of `compute_expected_underlying_scallop`. Returns the smallest `N` such that
+ * Inverse of `predictScallopRedeem`. Returns the smallest `N` such that
  * `floor(N × denom / supply) >= desiredUnderlying`.
  *
- * Throws `EReserveEmpty (1006)` when `denom == 0` or `cash + debt < revenue`.
  * Returns `MAX_U64` when the vault cannot satisfy the target — caller should
- * either drain (`MAX_U64`-redeem) or downsize the request.
+ * either drain (pass `MAX_U64` as `scoin_amount`) or downsize the request.
  */
 function scoinToBurnForTargetUnderlying(
   reserve: ReserveSnapshot,
@@ -277,19 +280,19 @@ function scoinToBurnForTargetUnderlying(
   vaultScoinTotal: bigint,
 ): bigint {
   if (desiredUnderlying <= 0n) return 0n;
-  if (reserve.supply === 0n) throw new Error('EReserveEmpty (1006)');
+  if (reserve.supply === 0n) throw new Error('Scallop reserve sCoin supply is zero');
   if (reserve.cash + reserve.debt < reserve.revenue) {
-    throw new Error('EReserveEmpty (1006)');
+    throw new Error('Scallop reserve revenue exceeds cash + debt');
   }
   const denom = reserve.cash + reserve.debt - reserve.revenue;
-  if (denom === 0n) throw new Error('EReserveEmpty (1006)');
+  if (denom === 0n) throw new Error('Scallop reserve lendable denominator is zero');
 
   const n = ceilDiv(desiredUnderlying * reserve.supply, denom);
   return n > vaultScoinTotal ? MAX_U64 : n;
 }
 ```
 
-Note the `MAX_U64` sentinel: callers can pass that straight into `scallop_start_redeem`'s `market_coin_amount`; `pull_from_scallop_lending` clamps to the vault's `scoinTotal` and removes the vault entry, returning whatever the live reserve pays out.
+The `MAX_U64` sentinel: callers can pass that straight into `scallop_redeem`'s `scoin_amount`; `pull_from_scallop_lending` clamps to the vault's `scoinTotal` and removes the vault entry, returning whatever the live reserve pays out.
 
 ### 7.2 Inverse: sCoin to burn for target **net** underlying (after yield-fee)
 
@@ -342,13 +345,13 @@ function scoinToBurnForTargetNetClosedForm(
   feeRateBp: bigint,
 ): bigint {
   if (desiredNet <= 0n) return 0n;
-  if (reserve.supply === 0n) throw new Error('EReserveEmpty (1006)');
+  if (reserve.supply === 0n) throw new Error('Scallop reserve sCoin supply is zero');
   if (reserve.cash + reserve.debt < reserve.revenue) {
-    throw new Error('EReserveEmpty (1006)');
+    throw new Error('Scallop reserve revenue exceeds cash + debt');
   }
   if (vault.scoinTotal === 0n) return MAX_U64;
   const denom = reserve.cash + reserve.debt - reserve.revenue;
-  if (denom === 0n) throw new Error('EReserveEmpty (1006)');
+  if (denom === 0n) throw new Error('Scallop reserve lendable denominator is zero');
 
   // p = denom / supply, π = P_vault / S_vault. Compare without dividing.
   // p > π  ⇔  denom × S_vault > supply × P_vault
@@ -407,7 +410,6 @@ function scoinToBurnForTargetNet(
     if (sim.toBalance >= desiredNet) return n;
     n += 1n;
   }
-  // Fell through the budget — vault probably cannot satisfy the request.
   return n > vault.scoinTotal ? MAX_U64 : n;
 }
 ```
@@ -416,7 +418,7 @@ function scoinToBurnForTargetNet(
 
 - The closed-form denominator `((10000 − r) × denom × S + r × supply × P)` can be very large under realistic mainnet values; `bigint` handles it without overflow but be aware that intermediate products are `O(u64⁴)`.
 - The split between "interest exists" and "no interest" is a strict `>` on the cross-multiplied comparison. Equality (`p == π`) is degenerate — typically only at vault initialization before any yield has accrued, where there is also no interest to fee.
-- In a *socialized loss* scenario where Scallop's reserve underflows and `denom < principal_per_scoin × supply / S_vault`, the per-scoin underlying drops below the per-scoin principal. The closed form correctly falls into the `interestExists = false` branch (no fee), but the redeemed amount is also less than the principal slice. Net is just `expected_underlying`; the fee path stays `0`. cdpm itself does not surface a special error for this — `scallop_finish_redeem` simply skips the fee branch and forwards the full underlying.
+- In a *socialized loss* scenario where Scallop's reserve underflows and `denom < principal_per_scoin × supply / S_vault`, the per-scoin underlying drops below the per-scoin principal. The closed form correctly falls into the `interestExists = false` branch (no fee), but the redeemed amount is also less than the principal slice. Net is just `expected_underlying`; the fee path stays `0`. `scallop_redeem` simply skips the fee branch and forwards the full underlying.
 
 ### 7.3 Worked Example
 
@@ -433,9 +435,9 @@ Implied per-sCoin values: `p = 1100/1050 ≈ 1.0476`, `π = 950/1000 = 0.95`. Si
    - `expected_underlying = floor(98 × 1100 / 1050) = floor(102.67) = 102`
    - `interest = 102 − 93 = 9`
    - `fee = floor(9 × 2000 / 10000) = floor(1.8) = 1`
-   - `net = 102 − 1 = 101`  →  `101 >= 100`  ✓
+   - `net = 102 − 1 = 101`  →  `101 >= 100`  
 
-The forward sim confirms the closed form. The user feeds `scallop_start_redeem` with `market_coin_amount = 98`, the bot pays `1` underlying yield fee, and `pm.balance[T]` increases by `101`.
+The forward sim confirms the closed form. The user feeds `scallop_redeem` with `scoin_amount = 98`, the bot pays `1` underlying yield fee, and `pm.balance[T]` increases by `101`.
 
 If `desiredNet` had been `103`, the closed-form would have returned `N = 101`, and forward sim would have yielded `net = 103` exactly — the iterative refinement helper would not have needed to bump.
 
@@ -443,7 +445,7 @@ If `desiredNet` had been `103`, the closed-form would have returned `N = 101`, a
 
 ## 8. Reading Reserve State Off-Chain
 
-The simplest approach is a dry-run of the same accrue-then-read PTB:
+The simplest approach is a dry-run of the same accrue-then-read PTB Scallop performs internally during `mint` / `redeem`:
 
 ```
 1. protocol::accrue_interest::accrue_interest_for_market(version, market, clock)
@@ -453,7 +455,7 @@ The simplest approach is a dry-run of the same accrue-then-read PTB:
 5. protocol::reserve::balance_sheet(sheet) → (cash, debt, revenue, supply)
 ```
 
-Because cdpm imports the same view path (`protocol::reserve` + `x::wit_table`), any consistency you achieve in your dry run mirrors what `scallop_start_supply` / `scallop_start_redeem` will see if your real PTB also runs `accrue_interest_for_market` first.
+Because `scallop_supply` / `scallop_redeem` call `mint::mint` / `redeem::redeem`, which themselves run `accrue_interest_for_market` as the first step, the on-chain `balance_sheet` consumed by the move-call is fresh. To make your off-chain prediction match, simulate the accrue command first.
 
 ---
 
@@ -461,40 +463,45 @@ Because cdpm imports the same view path (`protocol::reserve` + `x::wit_table`), 
 
 When sizing inputs:
 
-- For `scallop_start_supply<T>`: `coin_amount × supply >= denom_underlying` to avoid `EZeroExpected`. In practice deposit at least a few hundred MIST equivalents.
-- For `scallop_start_redeem<T>`: `scoin_amount × denom_underlying >= supply` for the same reason. The inverse helpers in section 7 already enforce ceiling rounding, so they cannot produce `N = 0` for any positive target.
-- For both, build in headroom against `EAmountShortfall` by either calling `accrue_interest_for_market` immediately before, or shaving a small slippage off `expected_*` and verifying live values match before signing.
-- When using `scoinToBurnForTargetNet` for a rebalancing bot: re-snapshot `reserve` and `vault` *after* the accrual command and before signing — sizing on stale snapshots can leave you 1-2 underlying short on the very next block.
+- For `scallop_supply<T>`: `coin_amount × supply >= denom_underlying` to keep the predicted `expected_scoin > 0`. In practice deposit at least a few hundred MIST equivalents.
+- For `scallop_redeem<T>`: `scoin_amount × denom_underlying >= supply` for the same reason on the inverse direction. The inverse helpers in section 7 already enforce ceiling rounding, so they cannot produce `N = 0` for any positive target.
+- When using `scoinToBurnForTargetNet` for a rebalancing bot: re-snapshot `reserve` and `vault` immediately before signing — sizing on stale snapshots can leave you 1-2 underlying short on the very next block.
 
-### 9.1 Floor-div dust, on-chain tolerance, and the `LENDING_SAFE_MARGIN_WRAPPER_RAW` floor
+### 9.1 Floor-div dust on the redeem path
 
-Same overall caller pattern as the Kai counterpart — see [`kai-lending-math.md` §9.1](./kai-lending-math.md#91-floor-div-dust-on-chain-tolerance-and-deploy-side-floor). The **math is different**, though: Scallop's `protocol::redeem::redeem` computes the underlying with the *same* single u128 floor-div formula cdpm uses in `compute_expected_underlying_scallop` (`scoin × (cash + debt − revenue) / supply`). Both reads see the *same* balance sheet within a single PTB (the `accrue_interest_for_market` command 0 makes `last_updated == now`, so neither cdpm nor the upstream re-accrues). Result: `redeemed_amount == expected_underlying` **exactly** in the common case — no observed dust.
+`scallop_redeem` runs the full redemption as a single move-call: it pulls sCoin from `pm.lending`, calls `protocol::redeem::redeem`, deducts the yield fee from `interest`, and credits the residual to `pm.balance[T]`. The redeemed amount is whatever `redeem::redeem` actually returns; there is no off-chain prediction enforced at the cdpm boundary, so a floor-div mismatch between off-chain twin and live reserve cannot abort the transaction. It can only leave the realized `pm.balance[T]` increment 1-2 raw below the predicted `toBalance`.
 
-The cdpm `*_finish_redeem` asserts both share the same on-chain dust tolerance (`REDEEM_DUST_TOLERANCE_RAW = 4`, see [`kai-lending-math.md` §9.1](./kai-lending-math.md#91-floor-div-dust-on-chain-tolerance-and-deploy-side-floor) for the analysis). For Scallop the tolerance is pure defense-in-depth against a future Scallop rounding change — today the gap is ~0.
+This matters most when composing the redeem with a downstream `add_liquidity` in the same PTB. Two patterns:
 
-The cap pattern is still applied as parity with Kai's recipe (so the same orchestrator helper handles both protocols) and to leave a residual entry behind on partial drains. Recommended client-side approach:
+1. **Treat `predictScallopRedeem` as a strict upper bound.** Size the downstream `add_liquidity` against `floor(predicted) − safety_margin` (a few raw is plenty) rather than `predicted` itself. If the live redeem comes in one raw short, the smaller add still passes; if it comes in one raw over, the residual stays in `pm.balance[T]` and deploys next cycle.
+2. **Cap the burn on partial drains.** Pass `scoin_amount = min(needed, scoinTotal − LENDING_SAFE_MARGIN_WRAPPER_RAW)` (recommended default 100 sCoin raw). This leaves a residual entry in `pm.lending` so the bag key survives — useful when a later top-up will re-credit principal into the same entry.
 
-- **Protocol / agent** callers cap `scoinAmount` at `min(neededWrapper, entry.wrapperRaw − LENDING_SAFE_MARGIN_WRAPPER_RAW)` (recommended default `100n` sCoin raw). Never pass `u64::MAX`. Use a pure helper — see the `capRedeemBurnRaw` example in [`kai-lending-math.md` §9.1](./kai-lending-math.md#91-floor-div-dust-on-chain-tolerance-and-deploy-side-floor); the helper is protocol-agnostic. **No `coin::join` topup is required** on either protocol — cdpm absorbs floor-div dust on-chain via `REDEEM_DUST_TOLERANCE_RAW`.
-- **User close-PM** can drop the previously-mandatory topup as well. A topup is only needed as an *optional fallback* if a future protocol-side change introduces dust >4 raw — merge `observedDust − 4` raw of `Coin<T>` between `start_redeem` and `finish_redeem`. The three-tier source priority (`pm.balance[T]` → `pm.fee[T]` → wallet) and the fee-on-inflated-interest accounting still apply if used.
+```typescript
+const LENDING_SAFE_MARGIN_WRAPPER_RAW = 100n;
+
+function capRedeemBurnRaw(exact: bigint, scoinTotal: bigint): bigint | null {
+  if (scoinTotal <= LENDING_SAFE_MARGIN_WRAPPER_RAW) return null;
+  const safeMax = scoinTotal - LENDING_SAFE_MARGIN_WRAPPER_RAW;
+  return exact >= safeMax ? safeMax : exact;
+}
+```
 
 Cross-references:
 
-- `cdpm-protocol-sdk/reference/scallop-lending.md` — protocol PTB template (no full drain)
+- `cdpm-protocol-sdk/reference/scallop-lending.md` — protocol PTB template
 - `cdpm-agent-sdk/reference/scallop-lending.md` — agent PTB template
-- `cdpm-user-sdk/reference/scallop-lending.md` — close-PM top-up PTB template
-- `cdpm-calculation-skill/reference/cross-protocol-ptb.md` §3 — side-by-side comparison
-
-Note: this is **separate** from the Scallop-specific `EStaleScallopState (1011)` accrue requirement above. The two preconditions are independent and both must hold.
+- `cdpm-user-sdk/reference/scallop-lending.md` — owner / close-PM PTB template
+- `cdpm-calculation-skill/reference/cross-protocol-ptb.md` §3 — cross-protocol composition
 
 ---
 
 ## 10. Reading Live Supply APY Off-Chain (Scallop vs Kai Picker)
 
-The dominant cdpm use case for live rates is **"where do I park `pm.balance[T]` — Scallop or Kai?"**. cdpm holds the same underlying `T` in both vaults under different bag keys, so the decision is purely yield-driven: query both protocols' live supply APY, subtract the cdpm yield-fee, pick the higher. Scallop publishes its supply APY via [`@scallop-io/sui-scallop-sdk`](https://github.com/scallop-io/sui-scallop-sdk); the Kai twin lives in [`kai-lending-math.md` §10](./kai-lending-math.md). Borrow-side rates (`borrowApy`, kink fields, `maxBorrowApy`, etc.) are **not** part of the cdpm supply path — they are exposed by the same SDK but have no bearing on the parking decision.
+The dominant cdpm use case for live rates is **"where do I park `pm.balance[T]` — Scallop or Kai?"**. cdpm holds the same underlying `T` in both vaults under different bag keys, so the decision is purely yield-driven: query both protocols' live supply APY, subtract the cdpm yield-fee, pick the higher. Scallop publishes its supply APY via [`@scallop-io/sui-scallop-sdk`](https://github.com/scallop-io/sui-scallop-sdk); the Kai twin lives in [`kai-lending-math.md` §10](./kai-lending-math.md). Borrow-side rates (`borrowApy`, kink fields, `maxBorrowApy`, etc.) are not part of the cdpm supply path — they are exposed by the same SDK but have no bearing on the parking decision.
 
 ### 10.1 SDK Setup
 
-Install (alongside `@mysten/sui` — pin the same major across the dep tree, see `cross-protocol-ptb.md` §10 for the `instanceof Transaction` pitfall):
+Install (alongside `@mysten/sui` — pin the same major across the dep tree, see `cross-protocol-ptb.md` for the `instanceof Transaction` pitfall):
 
 ```bash
 bun add @scallop-io/sui-scallop-sdk @mysten/sui
@@ -551,19 +558,19 @@ The fields that matter for the parking decision:
 | `supplyApr` | `number` | Simple annualized rate, before compounding. Use when comparing to a quote already framed as APR. |
 | `utilizationRate` | `number` | `borrowAmount / supplyAmount`. Higher utilization = higher live `supplyApy`, but also tighter `cash` reserves (slower redeems if `cash` runs low). Sanity-check that utilization is well below 1.0 before parking large amounts. |
 | `conversionRate` | `number` | Live underlying-per-sCoin (`supplyAmount / marketCoinSupplyAmount`). Cross-check against your `predictRedeem` output before broadcasting. |
-| `growthInterest` | `number` | **Cumulative** interest factor since the on-chain `lastUpdated` — `currentBorrowIndex / borrowIndex − 1`. NOT a per-second rate; it's the multiplicative growth that has accrued but not yet been written to `balance_sheet`. Useful for verifying `accrue_interest_for_market` is needed before sizing. |
-| `supplyAmount`, `borrowAmount`, `reserveAmount` | `number` | **Raw `u64` totals** (cash + debt − reserve etc., undivided by decimals). |
-| `supplyCoin`, `borrowCoin`, `reserveCoin` | `number` | **Decimaled** equivalents (`raw / 10^coinDecimal`). Use these for human-readable display; use the raw forms for ratio math against on-chain values. |
+| `growthInterest` | `number` | Cumulative interest factor since the on-chain `lastUpdated` — `currentBorrowIndex / borrowIndex − 1`. NOT a per-second rate; it's the multiplicative growth that has accrued but not yet been written to `balance_sheet`. Useful for verifying the off-chain dry-run accrual makes sense before sizing. |
+| `supplyAmount`, `borrowAmount`, `reserveAmount` | `number` | Raw `u64` totals (cash + debt − reserve etc., undivided by decimals). |
+| `supplyCoin`, `borrowCoin`, `reserveCoin` | `number` | Decimaled equivalents (`raw / 10^coinDecimal`). Use these for human-readable display; use the raw forms for ratio math against on-chain values. |
 | `marketCoinSupplyAmount` | `number` | sCoin supply, raw `u64` (same as `supply` in §1). |
 | `coinType` | `string` | Move type tag for `T`. Thread back into the cdpm PTB without hardcoding. |
 | `marketCoinType`, `sCoinType` | `string` | Move type tags for `MarketCoin<T>` (legacy) and the new sCoin (preferred). |
 | `coinDecimal`, `coinPrice` | `number` | Decimals (used by the SDK for the raw↔decimaled split above) and live USD price. `coinPrice` is `0` when the price feed is stale. |
 | `isIsolated` | `boolean` | Isolated markets have stricter caps and (sometimes) different rate curves. Worth surfacing in any UI that lets users pick a market. |
-| `maxSupplyCoin` | `number` | Per-market supply cap, decimaled. If your `idleAmount` plus `supplyCoin` would breach this, `scallop_start_supply` will be rejected on-chain — short-circuit before submitting. |
+| `maxSupplyCoin` | `number` | Per-market supply cap, decimaled. If your `idleAmount` plus `supplyCoin` would breach this, `scallop_supply` will be rejected on-chain — short-circuit before submitting. |
 
 `MarketPool` also exposes borrow-side fields (`borrowApy`, `baseBorrowApy`, `borrowApyOnMidKink`, `borrowApyOnHighKink`, `maxBorrowApy`, `borrowFee`, `borrowWeight`, etc.). These describe Scallop's borrow market and are unrelated to cdpm's supply-only integration; do not pull them into supply-decision code paths — they will only confuse the picker.
 
-> **Note on units.** Earlier revisions of this doc inverted the `supplyAmount` / `supplyCoin` decimal split. The correct semantics (verified in `sui-scallop-sdk/src/utils/query.ts:118-163`) is: `supplyAmount` / `borrowAmount` / `reserveAmount` are raw `u64`; `supplyCoin` / `borrowCoin` / `reserveCoin` apply `BigNumber.shiftedBy(-coinDecimal)`.
+> **Note on units.** `supplyAmount` / `borrowAmount` / `reserveAmount` are raw `u64`; `supplyCoin` / `borrowCoin` / `reserveCoin` apply `BigNumber.shiftedBy(-coinDecimal)` (verified in `sui-scallop-sdk/src/utils/query.ts:118-163`).
 
 ### 10.4 Decision Recipe — Scallop vs Kai Supply Picker
 
@@ -632,7 +639,7 @@ async function pickSupplyVenue(
 
 Notes on the picker:
 
-- **Fee cancels.** cdpm's yield-fee is taken on redeem from the interest portion regardless of venue (`scallop_finish_redeem` and `kai_finish_redeem` share `fee_house.fee_rate`). When comparing two `supplyApy` numbers under the same fee, the `(1 − r)` factor is symmetric and drops out — compare raw APY directly.
+- **Fee cancels.** cdpm's yield-fee is taken on redeem from the interest portion regardless of venue (`scallop_redeem` and `kai_redeem` share `fee_house.fee_rate`). When comparing two `supplyApy` numbers under the same fee, the `(1 − r)` factor is symmetric and drops out — compare raw APY directly.
 - **`Promise.all`.** Both reads are independent gRPC calls; doing them in parallel halves the picker's wall-clock latency, which matters for rebalance bots that re-pick every block.
 - **Utilization tripwire.** If `scallopPool.utilizationRate > 0.9` (or whatever your chain-condition threshold is), `cash` is thin and a same-block redeem may not have liquidity. Either downgrade Scallop's effective rank (subtract a liquidity-risk premium from `scallopApy`), or just skip Scallop for now. Kai has no equivalent metric — its `total_available_balance` already nets out the strategy locks.
 - **No Kai vault available.** When `kaiVaultKey` is `null`, the picker degenerates to "Scallop or idle" cleanly. The reverse — a Kai vault exists but no Scallop market — is rare for major underlyings; if it happens, drop Scallop from the call and use `getVaultStats` alone.
@@ -640,85 +647,9 @@ Notes on the picker:
 
 Heuristic numbers to keep in mind: at 5% APY, a 100 MIST gas round-trip pays for itself within ~12 hours on any idle balance ≥ 22 MIST × coin-decimal multiplier. For typical mainnet USDC parking (6 decimals, 100k+ MIST balances), the picker should almost always return a non-`idle` venue — the only reason to gate is when both venues are paying near zero (Scallop with very low utilization + Kai near `finalUnlockTsSec`).
 
-### 10.5 PTB-Builder Hooks — SDK Composables Inside cdpm's Hot-Potato
+### 10.5 Using the SDK Strictly for Address Resolution
 
-Scallop's SDK exposes **two layers** of builders:
-
-| Layer | Methods | Coin source | Composable with cdpm? |
-|---|---|---|---|
-| High-level (wallet-rooted) | `scallopTxBlock.depositQuick(amount, coinName)`, `withdrawQuick(amount, coinName)`, `borrowQuick`, `repayQuick`, etc. | **Wallet.** Each `*Quick` runs `coinWithBalance` against `tx.gas` / wallet coins internally. | **No.** cdpm's `scallop_start_supply` returns the tx-result `Coin<T>` — there is no wallet coin to pull from. |
-| Granular (tx-result-rooted) | `scallopTxBlock.deposit(coin, poolCoinName)` → `Coin<MarketCoin<T>>`, `scallopTxBlock.withdraw(marketCoin, poolCoinName)` → `Coin<T>`, plus `addCollateral / takeCollateral / borrow / repay` siblings (see `sui-scallop-sdk/src/builders/coreBuilder.ts:139-180`). | **Tx-result coin** passed directly. | **Yes.** Slots into cdpm's PTB between `scallop_start_supply` and `scallop_finish_supply`. |
-
-The granular `deposit` / `withdraw` builders wrap `protocol::mint::mint<T>` / `protocol::redeem::redeem<T>`. Important detail: Scallop's `mint` and `redeem` Move modules **call `accrue_all_interests` internally** (see `sui-lending-protocol/.../market.move` `handle_redeem` at line 296 and `handle_mint` at line 307), so an explicit `protocol::accrue_interest::accrue_interest_for_market` command before them is redundant for the move-call itself. cdpm still benefits from running it as command 1 so that the off-chain sizing helpers in §7 / §10 match the on-chain `balance_sheet` snapshot the cdpm `scallop_start_*` ticket records — the accrue command is about *off-chain prediction freshness*, not about Scallop's mint/redeem correctness.
-
-**Updated cdpm Scallop supply PTB using the SDK granular builder:**
-
-```typescript
-import { Scallop } from '@scallop-io/sui-scallop-sdk';
-
-const builder = await scallop.createScallopBuilder();
-const txBlock = builder.createTxBlock();
-txBlock.setSender(senderAddress);
-
-// 1. REQUIRED PTB[0] — cdpm asserts EStaleScallopState (1011) without this.
-//    NOT injected by scallopTx.deposit / depositQuick.
-txBlock.moveCall({
-  target: `${SCALLOP_PROTOCOL}::accrue_interest::accrue_interest_for_market`,
-  arguments: [
-    txBlock.object(SCALLOP_VERSION_ID),
-    txBlock.object(SCALLOP_MARKET_ID),
-    txBlock.object('0x6'),
-  ],
-});
-
-// 2. cdpm hot-potato start — takes &Clock for the freshness floor (EStaleScallopState=1011).
-const [coinT, ticket] = txBlock.moveCall({
-  target: `${CDPM_PACKAGE}::cdpm::scallop_start_supply`,
-  typeArguments: [underlyingCoinType],
-  arguments: [
-    txBlock.object(CDPM_MAINNET.ACCESS_LIST_ID),
-    txBlock.object(pmId),
-    txBlock.object(SCALLOP_MARKET_ID),
-    txBlock.object('0x6'),
-    txBlock.pure.u64(amount),
-  ],
-});
-
-// 3. Replace the manual `protocol::mint::mint` move-call with the SDK helper.
-const coinMarket = txBlock.deposit(coinT, 'usdc');     // → tx-result Coin<MarketCoin<T>>
-
-// 4. cdpm hot-potato finish — re-takes &Market (EWrongMarket=1012).
-txBlock.moveCall({
-  target: `${CDPM_PACKAGE}::cdpm::scallop_finish_supply`,
-  typeArguments: [underlyingCoinType],
-  arguments: [
-    txBlock.object(pmId),
-    txBlock.object(SCALLOP_MARKET_ID),
-    ticket,
-    coinMarket,
-  ],
-});
-
-await suiClient.signAndExecuteTransaction({ signer, transaction: txBlock });
-```
-
-Redeem mirrors this — replace the `protocol::redeem::redeem` move-call with `txBlock.withdraw(coinMarket, 'usdc')`. The cdpm `scallop_start_redeem` / `scallop_finish_redeem` calls remain raw `tx.moveCall` against `${CDPM_PACKAGE}::cdpm::*` — only the inner Scallop command changes.
-
-**Why prefer the granular builder over raw `tx.moveCall`?**
-
-1. **Address resolution comes for free.** `txBlock.deposit('usdc')` resolves `SCALLOP_VERSION_ID`, `SCALLOP_MARKET_ID`, the `Coin<T>` type tag, and the witness types from the SDK's address bundle — no per-protocol-upgrade constant edits.
-2. **Type-tag plumbing is implicit.** The SDK reads `MarketPool.coinType` / `MarketPool.marketCoinType` from the same bundle, so a coin-name change on the Scallop side doesn't require a cdpm code-side edit.
-3. **One package upgrade away.** When Scallop pushes a `mint` / `redeem` signature change, the SDK absorbs it; raw `tx.moveCall` recipes would silently break on the next upgrade.
-
-The wallet-rooted `*Quick` methods are useful for direct wallet-to-Scallop flows *outside* cdpm (e.g. a user redeeming sCoin they hold independently of any PositionManager). They have no role inside a cdpm hot-potato flow — cdpm exposes no wrapper-extract function, so no cdpm path ever lands raw sCoin in the owner / agent / protocol wallet.
-
-For now the operational PTB recipes in [`cdpm-user-sdk/reference/scallop-lending.md`](../../cdpm-user-sdk/reference/scallop-lending.md) (and the agent / protocol counterparts) still show the raw `tx.moveCall` shape for clarity. Both shapes are correct; pick whichever fits your call-site abstraction.
-
-> **Cross-protocol composition.** When the same PTB needs both Scallop and Kai legs (e.g. an atomic Scallop ↔ Kai rebalance, or any flow where the picker's choice should not gate atomicity at the tx layer), see the dedicated guide at [`cross-protocol-ptb.md`](./cross-protocol-ptb.md). It documents the canonical Mysten-rooted shared-`Transaction` pattern, the multi-approach comparison, five integration caveats (signing target, `setSender`, `@mysten/sui` dependency pinning, no `*Quick` outputs into cdpm finishes, re-snapshot before signing), and worked rebalance examples.
-
-### 10.6 Using the SDK Strictly for Address Resolution
-
-Even when you build cdpm PTBs manually (without the granular builders in §10.5), the SDK is the cleanest source of Scallop package / object ids. The actual API lives on `scallop.client.address` — `scallop.getAddresses()` does NOT exist:
+Even when you build cdpm PTBs manually, the SDK is the cleanest source of Scallop package / object ids. The API lives on `scallop.client.address`:
 
 ```typescript
 // Singleton getter — string-or-undefined, validated against AddressStringPath.
@@ -732,11 +663,11 @@ const bundle = scallop.client.address.getAddresses();
 
 The path keys are typed via `AddressStringPath` (`sui-scallop-sdk/src/types/address.ts:175-178`); typos return `undefined` at runtime rather than throwing, so wrap reads in an assertion if a missing key would silently break your PTB.
 
-Reading these once at boot and reusing them across all cdpm Scallop PTBs survives Scallop upgrades that bump the package id but keep the move-call shapes intact — without it, every Scallop upgrade requires a cdpm-side constant edit.
+Reading these once at boot and reusing them across all cdpm Scallop PTBs survives Scallop upgrades that bump the package id but keep the move-call shapes intact.
 
-### 10.7 Error / Staleness Notes
+### 10.6 Error / Staleness Notes
 
-- The SDK caches address-bundle reads. To force-refresh, call `await scallop.client.address.read(addressId)` (it re-fetches `https://sui.apis.scallop.io/addresses/{addressId}` and repopulates the bundle). There is no `scallop.fetchAddresses()` shortcut.
-- `queryMarket` / `getMarketPool` already trigger an off-chain recompute that mimics `accrue_interest_for_market`, so the returned `supplyApy` is fresh as of the SDK call. The on-chain `balance_sheet`, however, is **only** fresh after a real PTB runs `accrue_interest_for_market` — your sizing helpers (§7) still need that command first.
+- The SDK caches address-bundle reads. To force-refresh, call `await scallop.client.address.read(addressId)` (it re-fetches `https://sui.apis.scallop.io/addresses/{addressId}` and repopulates the bundle).
+- `queryMarket` / `getMarketPool` already trigger an off-chain recompute that mimics `accrue_interest_for_market`, so the returned `supplyApy` is fresh as of the SDK call. The on-chain `balance_sheet` is only fresh after the move-call's own internal accrual; treat the SDK number as decision-grade.
 - If you compare `pool.conversionRate × supply` against your `predictRedeem.expectedUnderlying`, expect tiny discrepancies — the SDK uses floats internally; cdpm and the on-chain reserve do u128 ceil/floor. Treat the SDK numbers as decision-grade, not settlement-grade.
-- For pure read-only consumers (e.g., a dashboard that only displays APY), fetching `https://sui.apis.scallop.io/addresses/{addressId}` directly avoids pulling in the full SDK; pair it with a hand-rolled `getMarketPool` over the resolved object ids if dependency size matters.
+- For pure read-only consumers (e.g. a dashboard that only displays APY), fetching `https://sui.apis.scallop.io/addresses/{addressId}` directly avoids pulling in the full SDK; pair it with a hand-rolled `getMarketPool` over the resolved object ids if dependency size matters.

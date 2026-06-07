@@ -5,9 +5,11 @@
 - [Helper: Get Pool ID from PositionManager](#helper-get-pool-id-from-positionmanager)
 - [Add Liquidity (Protocol)](#add-liquidity-protocol)
 - [Remove Liquidity (Protocol)](#remove-liquidity-protocol)
-- [Transfer Fee to Balance (Protocol)](#transfer-fee-to-balance-protocol)
 - [Collect Fees (Protocol)](#collect-fees-protocol)
-- [Scallop Lending (Supply / Redeem)](#scallop-lending-supply-redeem)
+- [Collect Reward (Protocol)](#collect-reward-protocol)
+- [Transfer Fee to Balance (Protocol)](#transfer-fee-to-balance-protocol)
+- [Scallop Lending (Supply / Redeem)](#scallop-lending-supply--redeem)
+- [Kai SAV Lending (Supply / Redeem)](#kai-sav-lending-supply--redeem)
 
 ## Helper: Get Pool ID from PositionManager
 
@@ -20,7 +22,7 @@ async function getPoolIdFromPositionManager(
     id: pmId,
     include: { content: true },
   });
-  
+
   // Read pool_id from PositionManager's position field
   return pm?.content?.fields?.position?.fields?.pool_id || null;
 }
@@ -28,21 +30,44 @@ async function getPoolIdFromPositionManager(
 
 ## Add Liquidity (Protocol)
 
+Pulls `amount_a` of `CoinTypeA` and `amount_b` of `CoinTypeB` from `pm.balance`, calls `pool::add_liquidity` plus `pool::repay_add_liquidity`, and returns the unused remainder to `pm.balance`. Caller must be in `AccessList.allow` and `pm.agents` must be empty.
+
+Signature:
+
+```move
+public fun protocol_add_liquidity<CoinTypeA, CoinTypeB>(
+    access: &AccessList,
+    pm: &mut PositionManager,
+    pool: &mut Pool<CoinTypeA, CoinTypeB>,
+    amount_a: u64,
+    amount_b: u64,
+    bins: vector<u32>,
+    amounts_a: vector<u64>,
+    amounts_b: vector<u64>,
+    config: &GlobalConfig,
+    versioned: &Versioned,
+    clk: &Clock,
+    ctx: &mut TxContext,
+);
+```
+
 ```typescript
 async function protocolAddLiquidity(
   client: SuiGrpcClient,
-  signer: any,  // Must be in AccessList
+  signer: any,            // Must be in AccessList.allow
   accessListId: string,
   pmId: string,
-  poolId: string,  // Can be fetched from PositionManager
+  poolId: string,
+  coinTypeA: string,
+  coinTypeB: string,
   amountA: bigint,
   amountB: bigint,
   bins: number[],
   amountsA: bigint[],
-  amountsB: bigint[]
+  amountsB: bigint[],
 ) {
   const tx = new Transaction();
-  
+
   tx.moveCall({
     target: `${CDPM_PACKAGE}::cdpm::protocol_add_liquidity`,
     typeArguments: [coinTypeA, coinTypeB],
@@ -55,55 +80,49 @@ async function protocolAddLiquidity(
       tx.pure.vector('u32', bins),
       tx.pure.vector('u64', amountsA),
       tx.pure.vector('u64', amountsB),
-      tx.object(globalConfigId),
-      tx.object(versionedId),
-      tx.object(clockId),
+      tx.object(CETUS_GLOBAL_CONFIG_ID),
+      tx.object(CETUS_VERSIONED_ID),
+      tx.object('0x6'),
     ],
   });
-  
-  return await client.signAndExecuteTransaction({ signer, transaction: tx });
-}
 
-// Example: Auto-fetch pool_id from PositionManager
-async function protocolAddLiquidityAuto(
-  client: SuiGrpcClient,
-  signer: any,
-  accessListId: string,
-  pmId: string,
-  amountA: bigint,
-  amountB: bigint,
-  bins: number[],
-  amountsA: bigint[],
-  amountsB: bigint[]
-) {
-  // Read pool_id from PositionManager's position field
-  const poolId = await getPoolIdFromPositionManager(client, pmId);
-  if (!poolId) {
-    throw new Error('PositionManager has no associated pool');
-  }
-  
-  return protocolAddLiquidity(
-    client, signer, accessListId, pmId, poolId,
-    amountA, amountB, bins, amountsA, amountsB
-  );
+  return await client.signAndExecuteTransaction({ signer, transaction: tx });
 }
 ```
 
+Emits `ProtocolLiquidityAdded { pm_id, pool_id, bins, amount_a, amount_b }` where the amounts are the values actually consumed by the pool (post-clamp).
+
 ## Remove Liquidity (Protocol)
 
-> Signature keeps `clk: &Clock` because it is forwarded to `pool::remove_liquidity` in the Cetus DLMM SDK.
+Removes liquidity from the underlying Cetus position and routes the resulting `Coin<A>` / `Coin<B>` to `pm.balance`. Use `protocol_transfer_fee_to_balance` afterwards to surface accumulated fees, or pair with `protocol_collect_fee` first.
 
-Removed assets are returned to the PositionManager's internal balance bag (not to the caller). Use `protocol_transfer_fee_to_balance` or other balance helpers to move funds afterward.
+Signature:
+
+```move
+public fun protocol_remove_liquidity<CoinTypeA, CoinTypeB>(
+    access: &AccessList,
+    pm: &mut PositionManager,
+    pool: &mut Pool<CoinTypeA, CoinTypeB>,
+    bins: vector<u32>,
+    liquidity_shares: vector<u128>,
+    config: &GlobalConfig,
+    versioned: &Versioned,
+    clk: &Clock,
+    ctx: &mut TxContext,
+);
+```
 
 ```typescript
 async function protocolRemoveLiquidity(
   client: SuiGrpcClient,
-  signer: any,  // Must be in AccessList
+  signer: any,
   accessListId: string,
   pmId: string,
-  poolId: string,  // Can be fetched from PositionManager
+  poolId: string,
+  coinTypeA: string,
+  coinTypeB: string,
   bins: number[],
-  liquidityShares: bigint[]
+  liquidityShares: bigint[],
 ) {
   const tx = new Transaction();
 
@@ -116,9 +135,9 @@ async function protocolRemoveLiquidity(
       tx.object(poolId),
       tx.pure.vector('u32', bins),
       tx.pure.vector('u128', liquidityShares),
-      tx.object(globalConfigId),
-      tx.object(versionedId),
-      tx.object(clockId),
+      tx.object(CETUS_GLOBAL_CONFIG_ID),
+      tx.object(CETUS_VERSIONED_ID),
+      tx.object('0x6'),
     ],
   });
 
@@ -126,22 +145,134 @@ async function protocolRemoveLiquidity(
 }
 ```
 
+Emits `ProtocolLiquidityRemoved { pm_id, pool_id, bins, liquidity_shares, amount_a, amount_b }`.
+
+## Collect Fees (Protocol)
+
+Calls `pool::collect_position_fee`, splits each side via `take_fee` — `fee_a = floor(gross_a × fee_house.fee_rate / 10_000)` to `fee_house.fee[CoinTypeA]`, remainder to `pm.fee[CoinTypeA]`; same for `CoinTypeB`.
+
+Signature:
+
+```move
+public fun protocol_collect_fee<CoinTypeA, CoinTypeB>(
+    access: &AccessList,
+    fee_house: &mut FeeHouse,
+    pm: &mut PositionManager,
+    pool: &mut Pool<CoinTypeA, CoinTypeB>,
+    config: &GlobalConfig,
+    versioned: &Versioned,
+    ctx: &mut TxContext,
+);
+```
+
+```typescript
+async function protocolCollectFees(
+  client: SuiGrpcClient,
+  signer: any,
+  accessListId: string,
+  feeHouseId: string,
+  pmId: string,
+  poolId: string,
+  coinTypeA: string,
+  coinTypeB: string,
+) {
+  const tx = new Transaction();
+
+  tx.moveCall({
+    target: `${CDPM_PACKAGE}::cdpm::protocol_collect_fee`,
+    typeArguments: [coinTypeA, coinTypeB],
+    arguments: [
+      tx.object(accessListId),
+      tx.object(feeHouseId),
+      tx.object(pmId),
+      tx.object(poolId),
+      tx.object(CETUS_GLOBAL_CONFIG_ID),
+      tx.object(CETUS_VERSIONED_ID),
+    ],
+  });
+
+  return await client.signAndExecuteTransaction({ signer, transaction: tx });
+}
+```
+
+Emits `ProtocolFeeCollected { pm_id, pool_id, coin_type_a, coin_type_b, amount_a, amount_b, fee_a, fee_b }`.
+
+## Collect Reward (Protocol)
+
+Calls `pool::collect_position_reward<CoinTypeA, CoinTypeB, RewardType>`, applies the same `take_fee` split — `fee_amount = floor(gross × fee_house.fee_rate / 10_000)` to `fee_house.fee[RewardType]`, remainder to `pm.fee[RewardType]`.
+
+Signature:
+
+```move
+public fun protocol_collect_reward<CoinTypeA, CoinTypeB, RewardType>(
+    access: &AccessList,
+    fee_house: &mut FeeHouse,
+    pm: &mut PositionManager,
+    pool: &mut Pool<CoinTypeA, CoinTypeB>,
+    config: &GlobalConfig,
+    versioned: &Versioned,
+    ctx: &mut TxContext,
+);
+```
+
+```typescript
+async function protocolCollectReward(
+  client: SuiGrpcClient,
+  signer: any,
+  accessListId: string,
+  feeHouseId: string,
+  pmId: string,
+  poolId: string,
+  coinTypeA: string,
+  coinTypeB: string,
+  rewardType: string,
+) {
+  const tx = new Transaction();
+
+  tx.moveCall({
+    target: `${CDPM_PACKAGE}::cdpm::protocol_collect_reward`,
+    typeArguments: [coinTypeA, coinTypeB, rewardType],
+    arguments: [
+      tx.object(accessListId),
+      tx.object(feeHouseId),
+      tx.object(pmId),
+      tx.object(poolId),
+      tx.object(CETUS_GLOBAL_CONFIG_ID),
+      tx.object(CETUS_VERSIONED_ID),
+    ],
+  });
+
+  return await client.signAndExecuteTransaction({ signer, transaction: tx });
+}
+```
+
+Emits `ProtocolRewardCollected { pm_id, pool_id, coin_type, amount, fee_amount }` where `coin_type = type_name<RewardType>`.
+
 ## Transfer Fee to Balance (Protocol)
 
-Move accumulated fee bag funds back into the PositionManager's balance bag so they can be used by subsequent protocol operations.
+Move accumulated `pm.fee[T]` funds into `pm.balance[T]` so they can be consumed by subsequent protocol operations (e.g. compounding into Scallop / Kai).
 
-> Signature: `protocol_transfer_fee_to_balance<T>(access, pm, amount, ctx)` — **does not take Clock**.
+Signature:
 
-The emitted `FeeTransferredToBalance.amount` reflects the actual coin value moved (which may be smaller than the requested `amount` when the fee bag holds less than requested).
+```move
+public fun protocol_transfer_fee_to_balance<T>(
+    access: &AccessList,
+    pm: &mut PositionManager,
+    amount: u64,
+    ctx: &mut TxContext,
+);
+```
+
+The internal `withdraw_from_fee<T>` clamps `amount` to the live `pm.fee[T]` value, so passing `u64::MAX` drains the entire entry. The emitted `FeeTransferredToBalance.amount` reflects the post-clamp value actually moved.
 
 ```typescript
 async function protocolTransferFeeToBalance(
   client: SuiGrpcClient,
-  signer: any,  // Must be in AccessList
+  signer: any,
   accessListId: string,
   pmId: string,
   coinType: string,
-  amount: bigint
+  amount: bigint,
 ) {
   const tx = new Transaction();
 
@@ -159,84 +290,43 @@ async function protocolTransferFeeToBalance(
 }
 ```
 
-## Collect Fees (Protocol)
-
-```typescript
-async function protocolCollectFees(
-  client: SuiGrpcClient,
-  signer: any,
-  accessListId: string,
-  feeHouseId: string,
-  pmId: string,
-  poolId: string  // Can be fetched from PositionManager
-) {
-  const tx = new Transaction();
-  
-  tx.moveCall({
-    target: `${CDPM_PACKAGE}::cdpm::protocol_collect_fee`,
-    typeArguments: [coinTypeA, coinTypeB],
-    arguments: [
-      tx.object(accessListId),
-      tx.object(feeHouseId),
-      tx.object(pmId),
-      tx.object(poolId),
-      tx.object(globalConfigId),
-      tx.object(versionedId),
-    ],
-  });
-  
-  return await client.signAndExecuteTransaction({ signer, transaction: tx });
-}
-
-// Example: Auto-fetch pool_id from PositionManager
-async function protocolCollectFeesAuto(
-  client: SuiGrpcClient,
-  signer: any,
-  accessListId: string,
-  feeHouseId: string,
-  pmId: string
-) {
-  // Read pool_id from PositionManager's position field
-  const poolId = await getPoolIdFromPositionManager(client, pmId);
-  if (!poolId) {
-    throw new Error('PositionManager has no associated pool');
-  }
-  
-  return protocolCollectFees(
-    client, signer, accessListId, feeHouseId, pmId, poolId
-  );
-}
-```
+Emits `FeeTransferredToBalance { pm_id, coin_type, amount }`.
 
 ## Scallop Lending (Supply / Redeem)
 
-> **REQUIRED — every Scallop PTB starts with `accrue_interest_for_market`.**
-> `protocol::accrue_interest::accrue_interest_for_market(version, market, clock)`
-> MUST be **command 0** of any PTB that touches `scallop_start_supply` or
-> `scallop_start_redeem`. cdpm aborts with `EStaleScallopState (1011)` otherwise.
-> The Scallop SDK does NOT inject this call. No SDK shortcut. No optional path.
+`scallop_supply<T>` and `scallop_redeem<T>` are each one `tx.moveCall`. cdpm runs `protocol::mint::mint` / `protocol::redeem::redeem` internally, then re-deposits the result back into the PM. Caller authorization is the union `owner || agent || (in AccessList AND pm.agents.is_empty())`. See [`scallop-lending.md`](./scallop-lending.md) for the full Scallop reference (sizing helpers, snapshot reads, error handling).
 
-The Scallop hot-potato API is open to whitelisted protocol bots, but only when `pm.agents` is empty (the protocol-tier invariant). `assert_caller_authorized` inside `scallop_start_supply` / `scallop_start_redeem` lets the bot through under the union `is_owner || is_agent || (is_in_access_list && pm.agents.is_empty())`.
+Signatures:
 
-`scallop_finish_supply` / `scallop_finish_redeem` only verify `ticket.pm_id == object::id(pm)` — the auth check is done up front.
+```move
+public fun scallop_supply<T>(
+    access: &AccessList,
+    pm: &mut PositionManager,
+    version: &ScallopVersion,
+    market: &mut Market,
+    amount: u64,
+    clock: &Clock,
+    ctx: &mut TxContext,
+);
 
-### Pre-flight: Accrue Interest First (Enforced)
-
-cdpm now enforces freshness: `scallop_start_supply` / `scallop_start_redeem` take `&Clock` and assert `borrow_dynamics::last_updated_by_type(market.borrow_dynamics(), type<T>) == clock::timestamp_ms(clock) / 1000`. Omitting `protocol::accrue_interest::accrue_interest_for_market(version, market, clock)` as command 0 aborts at the cdpm boundary with `EStaleScallopState (1011)` before any balance is touched. `scallop_finish_*` also re-take `&Market` and assert canonical-id match (`EWrongMarket = 1012`).
-
-### PTB Recipe — Protocol Supply
-
+public fun scallop_redeem<T>(
+    access: &AccessList,
+    pm: &mut PositionManager,
+    fee_house: &mut FeeHouse,
+    version: &ScallopVersion,
+    market: &mut Market,
+    scoin_amount: u64,
+    clock: &Clock,
+    ctx: &mut TxContext,
+);
 ```
-1. protocol::accrue_interest::accrue_interest_for_market(version, market, clock)
-2. cdpm::scallop_start_supply<T>(access, pm, market, clock, amount)       → (coin_t, ticket)
-3. protocol::mint::mint<T>(version, market, coin_t, clock)                → coin_market<T>
-4. cdpm::scallop_finish_supply<T>(pm, market, ticket, coin_market)
-```
+
+`scoin_amount = u64::MAX` drains the `ScallopVault<T>` entry from `pm.lending`.
 
 ```typescript
 async function protocolSupplyToScallop(
   client: SuiGrpcClient,
-  signer: any,                 // Must be in AccessList.allow
+  signer: any,
   accessListId: string,
   pmId: string,
   underlyingCoinType: string,
@@ -244,67 +334,22 @@ async function protocolSupplyToScallop(
 ) {
   const tx = new Transaction();
 
-  // REQUIRED PTB[0] — cdpm asserts EStaleScallopState (1011) without this.
-  // NOT injected by scallopTx.deposit / depositQuick.
   tx.moveCall({
-    target: `${SCALLOP_PROTOCOL}::accrue_interest::accrue_interest_for_market`,
-    arguments: [
-      tx.object(SCALLOP_VERSION_ID),
-      tx.object(SCALLOP_MARKET_ID),
-      tx.object('0x6'),
-    ],
-  });
-
-  const [coinT, ticket] = tx.moveCall({
-    target: `${CDPM_PACKAGE}::cdpm::scallop_start_supply`,
+    target: `${CDPM_PACKAGE}::cdpm::scallop_supply`,
     typeArguments: [underlyingCoinType],
     arguments: [
       tx.object(accessListId),
       tx.object(pmId),
-      tx.object(SCALLOP_MARKET_ID),
-      tx.object('0x6'),
-      tx.pure.u64(amount),
-    ],
-  });
-
-  const [coinMarket] = tx.moveCall({
-    target: `${SCALLOP_PROTOCOL}::mint::mint`,
-    typeArguments: [underlyingCoinType],
-    arguments: [
       tx.object(SCALLOP_VERSION_ID),
       tx.object(SCALLOP_MARKET_ID),
-      coinT,
+      tx.pure.u64(amount),
       tx.object('0x6'),
-    ],
-  });
-
-  tx.moveCall({
-    target: `${CDPM_PACKAGE}::cdpm::scallop_finish_supply`,
-    typeArguments: [underlyingCoinType],
-    arguments: [
-      tx.object(pmId),
-      tx.object(SCALLOP_MARKET_ID),
-      ticket,
-      coinMarket,
     ],
   });
 
   return await client.signAndExecuteTransaction({ signer, transaction: tx });
 }
-```
 
-### PTB Recipe — Protocol Redeem (Yield Fee Applies)
-
-`scallop_finish_redeem` deducts `floor(max(0, redeemed − principal_portion) × fee_house.fee_rate / 10_000)` from the interest portion before adding the rest to `pm.balance[T]`. Protocol callers pay the same yield fee as owner / agent.
-
-```
-1. protocol::accrue_interest::accrue_interest_for_market(version, market, clock)
-2. cdpm::scallop_start_redeem<T>(access, pm, market, clock, scoin_amount) → (coin_market, ticket)
-3. protocol::redeem::redeem<T>(version, market, coin_market, clock)       → coin_t
-4. cdpm::scallop_finish_redeem<T>(pm, market, fee_house, ticket, coin_t)
-```
-
-```typescript
 async function protocolRedeemFromScallop(
   client: SuiGrpcClient,
   signer: any,
@@ -316,49 +361,17 @@ async function protocolRedeemFromScallop(
 ) {
   const tx = new Transaction();
 
-  // REQUIRED PTB[0] — cdpm asserts EStaleScallopState (1011) without this.
-  // NOT injected by scallopTx.deposit / depositQuick.
   tx.moveCall({
-    target: `${SCALLOP_PROTOCOL}::accrue_interest::accrue_interest_for_market`,
-    arguments: [
-      tx.object(SCALLOP_VERSION_ID),
-      tx.object(SCALLOP_MARKET_ID),
-      tx.object('0x6'),
-    ],
-  });
-
-  const [coinMarket, ticket] = tx.moveCall({
-    target: `${CDPM_PACKAGE}::cdpm::scallop_start_redeem`,
+    target: `${CDPM_PACKAGE}::cdpm::scallop_redeem`,
     typeArguments: [underlyingCoinType],
     arguments: [
       tx.object(accessListId),
       tx.object(pmId),
-      tx.object(SCALLOP_MARKET_ID),
-      tx.object('0x6'),
-      tx.pure.u64(scoinAmount),
-    ],
-  });
-
-  const [coinT] = tx.moveCall({
-    target: `${SCALLOP_PROTOCOL}::redeem::redeem`,
-    typeArguments: [underlyingCoinType],
-    arguments: [
+      tx.object(feeHouseId),
       tx.object(SCALLOP_VERSION_ID),
       tx.object(SCALLOP_MARKET_ID),
-      coinMarket,
+      tx.pure.u64(scoinAmount),
       tx.object('0x6'),
-    ],
-  });
-
-  tx.moveCall({
-    target: `${CDPM_PACKAGE}::cdpm::scallop_finish_redeem`,
-    typeArguments: [underlyingCoinType],
-    arguments: [
-      tx.object(pmId),
-      tx.object(SCALLOP_MARKET_ID),
-      tx.object(feeHouseId),
-      ticket,
-      coinT,
     ],
   });
 
@@ -366,57 +379,100 @@ async function protocolRedeemFromScallop(
 }
 ```
 
-### Sizing Redemptions Before Calling `scallop_start_redeem`
+`scallop_supply` emits `ScallopSupplied`. `scallop_redeem` emits `ScallopRedeemed` and routes `fee_amount = floor(interest × fee_house.fee_rate / 10_000)` into `fee_house.fee[T]`.
 
-Protocol bots, like agents, usually know "I need `K` underlying for the next operation" and must compute `market_coin_amount` from that. `scallop_start_redeem` takes sCoin, not underlying, so the bot has to invert `compute_expected_underlying_scallop` (and the yield-fee deduction) before signing.
+## Kai SAV Lending (Supply / Redeem)
 
-Two practical inverses:
+`kai_supply<T, YT>` and `kai_redeem<T, ST, YT>` are each one `tx.moveCall`. `kai_redeem` is generic over the supply-pool strategy `<T, ST>` because cdpm walks `kai_vault::withdraw → klsp::withdraw → kai_vault::redeem_withdraw_ticket` internally. See [`kai-lending.md`](./kai-lending.md) for the full Kai reference.
 
-- **Pre-fee target** — I need at least `K` underlying out of Scallop, ignoring fee:
-  ```
-  scoin_to_burn = ceil(K × supply / denom)            // denom = cash + debt − revenue
-  ```
-- **Post-fee target** — I need at least `K` net underlying credited to `pm.balance[T]`:
-  ```
-  Let r = fee_rate / 10000, π = P_vault / S_vault, p = denom / supply
-  N ≈ ceil(K / (p × (1 − r) + r × π))                  when p >  π   (interest exists)
-  N  = ceil(K × supply / denom)                        when p <= π   (no interest, no fee)
-  ```
+Signatures:
 
-Both use **ceiling division** because Scallop's redeem floors the underlying output. Asking for `floor(N)` risks receiving 1 unit fewer than the target. The full derivation, edge cases, and an iterative refinement helper (`scoinToBurnForTargetNet`) live in [`cdpm-calculation-skill/reference/scallop-lending-math.md`](../../cdpm-calculation-skill/reference/scallop-lending-math.md) section 7.
+```move
+public fun kai_supply<T, YT>(
+    access: &AccessList,
+    pm: &mut PositionManager,
+    vault: &mut kai_vault::Vault<T, YT>,
+    amount: u64,
+    clock: &Clock,
+    ctx: &mut TxContext,
+);
+
+public fun kai_redeem<T, ST, YT>(
+    access: &AccessList,
+    pm: &mut PositionManager,
+    fee_house: &mut FeeHouse,
+    vault: &mut kai_vault::Vault<T, YT>,
+    strategy: &mut klsp::Strategy<T, ST>,
+    supply_pool: &mut SupplyPool<T, ST>,
+    yt_amount: u64,
+    clock: &Clock,
+    ctx: &mut TxContext,
+);
+```
+
+`yt_amount = u64::MAX` drains the `KaiVault<T, YT>` entry from `pm.lending`.
 
 ```typescript
-import {
-  scoinToBurnForTargetUnderlying,
-  scoinToBurnForTargetNet,
-} from './scallop-lending-math';
+async function protocolSupplyToKai(
+  client: SuiGrpcClient,
+  signer: any,
+  accessListId: string,
+  pmId: string,
+  underlyingCoinType: string,
+  ytCoinType: string,
+  vaultObjectId: string,
+  amount: bigint,
+) {
+  const tx = new Transaction();
 
-async function protocolSizedRedeem(
+  tx.moveCall({
+    target: `${CDPM_PACKAGE}::cdpm::kai_supply`,
+    typeArguments: [underlyingCoinType, ytCoinType],
+    arguments: [
+      tx.object(accessListId),
+      tx.object(pmId),
+      tx.object(vaultObjectId),
+      tx.pure.u64(amount),
+      tx.object('0x6'),
+    ],
+  });
+
+  return await client.signAndExecuteTransaction({ signer, transaction: tx });
+}
+
+async function protocolRedeemFromKai(
   client: SuiGrpcClient,
   signer: any,
   accessListId: string,
   feeHouseId: string,
   pmId: string,
   underlyingCoinType: string,
-  desiredNet: bigint,           // K in underlying base units
-  feeRateBp: bigint,            // read from FeeHouse.fee_rate
+  stCoinType: string,
+  ytCoinType: string,
+  vaultObjectId: string,
+  strategyObjectId: string,
+  supplyPoolObjectId: string,
+  ytAmount: bigint,
 ) {
-  const reserve = await readReserveSnapshot(client, underlyingCoinType);
-  const vault   = await readVaultSnapshot(client, pmId, underlyingCoinType);
+  const tx = new Transaction();
 
-  const scoinAmount = scoinToBurnForTargetNet(
-    reserve, vault, desiredNet, feeRateBp,
-  );
+  tx.moveCall({
+    target: `${CDPM_PACKAGE}::cdpm::kai_redeem`,
+    typeArguments: [underlyingCoinType, stCoinType, ytCoinType],
+    arguments: [
+      tx.object(accessListId),
+      tx.object(pmId),
+      tx.object(feeHouseId),
+      tx.object(vaultObjectId),
+      tx.object(strategyObjectId),
+      tx.object(supplyPoolObjectId),
+      tx.pure.u64(ytAmount),
+      tx.object('0x6'),
+    ],
+  });
 
-  return protocolRedeemFromScallop(
-    client, signer, accessListId, feeHouseId,
-    pmId, underlyingCoinType, scoinAmount,
-  );
+  return await client.signAndExecuteTransaction({ signer, transaction: tx });
 }
 ```
 
-`scoinToBurnForTargetNet` returns `MAX_U64` when the vault cannot satisfy `desiredNet`; passing that value to `scallop_start_redeem` drains the entire vault and removes its entry from `pm.lending`. Always re-snapshot reserve and vault *after* the `accrue_interest_for_market` command and before sizing — stale snapshots predict a higher `denom` than the live reserve and can leave the bot 1-2 underlying short.
-
-### No Wrapper-Extract Escape for Lending
-
-cdpm exposes **no** `user_extract_scallop_market_coin`-style wrapper-extraction function for anyone — not for protocol bots, not for agents, not even for the owner. The only exit path from `pm.lending` is the full redeem flow: `scallop_start_redeem` → `redeem::redeem` (in the caller's PTB) → `scallop_finish_redeem` (which deducts the yield fee and deposits the underlying into `pm.balance[T]`) → `user_remove_liquidity_from_balance<T>` (owner-only). If Scallop is unreachable (Version bump, paused market), the inner `redeem::redeem` aborts before any cdpm `*_finish_*` runs, so the hot-potato ticket is never consumed and `pm.lending` stays intact; recovery is to retry the normal redeem flow once Scallop ships an SDK update against the new Version.
+`kai_supply` emits `KaiSupplied`. `kai_redeem` emits `KaiRedeemed` and routes `fee_amount = floor(interest × fee_house.fee_rate / 10_000)` into `fee_house.fee[T]`.

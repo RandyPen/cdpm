@@ -8,50 +8,40 @@
 ## Common Agent Errors
 
 ```typescript
-// cdpm error codes (sources/cdpm.move) — codes are SHARED between Scallop and Kai integrations.
+// cdpm error codes (sources/cdpm.move). Codes are SHARED across all integrations.
 const CDPM_ERROR_CODES = {
   ENotOwner:           1001, // Caller is not pm.owner (e.g. agent tried user_get_position / user_get_and_return_position)
-  ENotAllow:           1002, // assert_caller_authorized failed (or invariant broken)
-  EInvalidFeeRate:     1003, // admin_set_fee given rate > MAX_FEE_RATE (30%)
+  ENotAllow:           1002, // assert_caller_authorized failed, or pm.agents invariant broken
+  EInvalidFeeRate:     1003, // admin_set_fee given rate > MAX_FEE_RATE = 5000 (50%)
   ELendingNotEmpty:    1004, // user_close_pm called with non-empty pm.lending (any Scallop or Kai entry)
-  ENoSuchVault:        1005, // scallop_start_redeem / kai_start_redeem called for an absent vault entry
-  EReserveEmpty:       1006, // Scallop reserve degenerate OR Kai vault total_yt_supply == 0
-  EZeroExpected:       1007, // scallop_start_* / kai_start_* would yield 0 — amount too small
-  EWrongPm:            1008, // Hot-potato ticket consumed against a different PM (Scallop or Kai)
-  EAmountShortfall:    1009, // finish_* received Coin with value < ticket.expected
-  ENoSuchBalance:      1010, // withdraw_from_balance / withdraw_from_fee for an absent type key
-  EStaleScallopState:  1011, // scallop_start_* called before accrue_interest_for_market in the same PTB second
-  EWrongMarket:        1012, // scallop_finish_* received a Market with id != ticket.market_id
-  EWrongVault:         1013, // kai_finish_* received a Vault with id != ticket.vault_id
+  ENoSuchVault:        1005, // scallop_redeem / kai_redeem called for an absent vault entry
+  ENoSuchBalance:      1006, // withdraw_from_balance / withdraw_from_fee for an absent type key
+  EPositionHasRewards: 1007, // user_close_pm called with unclaimed Cetus pool rewards
+  EBalanceNotEmpty:    1008, // user_close_pm called with non-empty pm.balance
+  EFeeNotEmpty:        1009, // user_close_pm called with non-empty pm.fee
 };
 
 async function handleAgentError(error: any): Promise<string> {
   const errorStr = error.toString();
 
   if (errorStr.includes('ENotOwner')) {
-    return 'Operation requires owner permission. Agents cannot call user_get_position / user_get_and_return_position (the only owner-only escape hatch — the Cetus DLMM Position object). cdpm exposes no wrapper-extract escape for Scallop/Kai lending.';
+    return 'Operation requires owner permission. Agents cannot call user_get_position / user_get_and_return_position (the Cetus DLMM Position object is owner-only).';
   } else if (errorStr.includes('ENotAllow')) {
     return 'Agent not in pm.agents. Contact owner for authorization.';
   } else if (errorStr.includes('ELendingNotEmpty')) {
-    return 'pm.lending is non-empty; every ScallopVault<T> AND KaiVault<T, YT> entry must be redeemed (full scallop_*/kai_* start→finish flow) before user_close_pm. There is no wrapper-extract bypass.';
+    return 'pm.lending is non-empty. Every ScallopVault<T> AND KaiVault<T, YT> entry must be redeemed (scallop_redeem / kai_redeem) before user_close_pm.';
   } else if (errorStr.includes('ENoSuchVault')) {
-    return 'No ScallopVault<T> or KaiVault<T, YT> entry in pm.lending for the requested key. Check pm.lending entries before calling scallop_start_redeem / kai_start_redeem.';
-  } else if (errorStr.includes('EReserveEmpty')) {
-    return 'Lending reserve degenerate. Scallop: zero supply or zero (cash+debt-revenue) — call accrue_interest_for_market first. Kai: total_yt_supply == 0 — supply first.';
-  } else if (errorStr.includes('EZeroExpected')) {
-    return 'Supply/redeem amount too small — predicted output is 0. Increase the amount.';
-  } else if (errorStr.includes('EWrongPm')) {
-    return 'Hot-potato ticket (ScallopSupplyTicket / ScallopRedeemTicket / KaiSupplyTicket / KaiRedeemTicket) consumed against a different PositionManager.';
-  } else if (errorStr.includes('EAmountShortfall')) {
-    return 'finish_* received Coin shorter than ticket.expected by more than REDEEM_DUST_TOLERANCE_RAW=4 raw. cdpm now absorbs floor-div dust on-chain (Kai dust ≈ 2 raw × strategies drawn, single-strategy mainnet SAVs ⟹ ≤2; Scallop ≈ 0), so for current vaults this should not trip from rounding. Most likely cause: vault/reserve state shifted between snapshot and signing — re-snapshot just before signing. For Scallop, also confirm accrue_interest_for_market is PTB command 0. Rare future cause: a ≥3-strategy Kai vault whose dust exceeds 4 raw — fall back to a coin::join topup of (observedDust − 4) raw before kai_finish_redeem. Capping the burn at wrapperRaw − LENDING_SAFE_MARGIN_WRAPPER_RAW remains recommended (leaves a residual bag entry; unrelated to the 1009 dust concern). See cdpm-calculation-skill/reference/{kai,scallop}-lending-math.md §9.1 and cdpm-agent-sdk/reference/{kai,scallop}-lending.md "Floor-div dust".';
+    return 'No ScallopVault<T> or KaiVault<T, YT> entry in pm.lending for the requested key. Check pm.lending entries before calling scallop_redeem / kai_redeem.';
   } else if (errorStr.includes('ENoSuchBalance')) {
     return 'withdraw_from_balance / withdraw_from_fee called for an absent type key. Check pm.balance / pm.fee for the type before signing.';
-  } else if (errorStr.includes('EStaleScallopState')) {
-    return 'scallop_start_* called without accrue_interest::accrue_interest_for_market in the same PTB. Make it command 0 of the batch — cdpm enforces this.';
-  } else if (errorStr.includes('EWrongMarket')) {
-    return 'scallop_finish_* received a Market whose id != ticket.market_id. Reuse the same tx.object(SCALLOP_MARKET_ID) handle across start_* and finish_*.';
-  } else if (errorStr.includes('EWrongVault')) {
-    return 'kai_finish_* received a Vault whose id != ticket.vault_id. Reuse the same tx.object(vaultObjectId) handle across start_* and finish_*.';
+  } else if (errorStr.includes('EPositionHasRewards')) {
+    return 'user_close_pm called while the Cetus position still holds unclaimed reward tokens. Owner must call user_collect_reward<CoinTypeA, CoinTypeB, RewardType> for each reward type on the pool before user_close_pm.';
+  } else if (errorStr.includes('EBalanceNotEmpty')) {
+    return 'user_close_pm called with non-empty pm.balance. Drain via user_remove_liquidity_from_balance<T> for each entry before closing.';
+  } else if (errorStr.includes('EFeeNotEmpty')) {
+    return 'user_close_pm called with non-empty pm.fee. Drain via user_withdraw_fee<T> for each entry before closing.';
+  } else if (errorStr.includes('EInvalidFeeRate')) {
+    return 'admin_set_fee given a rate above MAX_FEE_RATE = 5000 (50% cap). Choose a rate <= 5000.';
   }
 
   return `Unknown error: ${errorStr}`;

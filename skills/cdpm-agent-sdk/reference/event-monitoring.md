@@ -7,18 +7,19 @@
 
 ## Agent Events
 
+cdpm event payloads carry no `by` field for any event. To distinguish owner / agent / protocol callers, use the Sui event envelope's `event.sender` (the transaction signer).
+
 ```typescript
-// Agent added liquidity (scalar actual amounts consumed by the pool)
+// Emitted by agent_add_liquidity
 interface AgentLiquidityAdded {
   pm_id: string;
   pool_id: string;
   bins: number[];
   amount_a: string;  // Actual amount A consumed
   amount_b: string;  // Actual amount B consumed
-  by: string;        // Agent address
 }
 
-// Agent removed liquidity
+// Emitted by agent_remove_liquidity
 interface AgentLiquidityRemoved {
   pm_id: string;
   pool_id: string;
@@ -26,10 +27,9 @@ interface AgentLiquidityRemoved {
   liquidity_shares: string[];
   amount_a: string;   // Actual token A returned
   amount_b: string;   // Actual token B returned
-  by: string;
 }
 
-// Agent collected fees
+// Emitted by agent_collect_fee
 interface AgentFeeCollected {
   pm_id: string;
   pool_id: string;
@@ -37,21 +37,24 @@ interface AgentFeeCollected {
   coin_type_b: string;
   amount_a: string;
   amount_b: string;
-  by: string;
 }
 
-// Agent collected rewards
+// Emitted by agent_collect_reward
 interface AgentRewardCollected {
   pm_id: string;
   pool_id: string;
   coin_type: string;
   amount: string;
-  by: string;
 }
 
-// Scallop supply (emitted by scallop_finish_supply, regardless of caller).
-// Note: there is NO `by` field — use `event.sender` from the event envelope
-// to distinguish owner / agent / protocol callers.
+// Emitted by agent_transfer_fee_to_balance (also emitted by protocol_transfer_fee_to_balance — same struct)
+interface FeeTransferredToBalance {
+  pm_id: string;
+  coin_type: string;
+  amount: string;
+}
+
+// Emitted by scallop_supply, regardless of caller.
 interface ScallopSupplied {
   pm_id: string;
   coin_type: string;            // type_name<T> — sCoin type is always MarketCoin<T>
@@ -59,7 +62,7 @@ interface ScallopSupplied {
   market_coin_minted: string;   // sCoin received and added to pm.lending
 }
 
-// Scallop redeem (emitted by scallop_finish_redeem, regardless of caller).
+// Emitted by scallop_redeem, regardless of caller.
 interface ScallopRedeemed {
   pm_id: string;
   coin_type: string;
@@ -70,8 +73,7 @@ interface ScallopRedeemed {
   fee_amount: string;           // protocol yield fee deducted from interest
 }
 
-// Kai supply / redeem — same shape, with extra `yt_type` for the YT generic.
-// Emitted by kai_finish_supply / kai_finish_redeem regardless of caller.
+// Emitted by kai_supply, regardless of caller.
 interface KaiSupplied {
   pm_id: string;
   coin_type: string;            // type_name<T>
@@ -80,19 +82,18 @@ interface KaiSupplied {
   yt_minted: string;
 }
 
+// Emitted by kai_redeem, regardless of caller.
 interface KaiRedeemed {
   pm_id: string;
   coin_type: string;
   yt_type: string;
   yt_burned: string;
-  redeemed_amount: string;      // underlying received pre-fee (after the strategy walk)
+  redeemed_amount: string;      // underlying received pre-fee
   principal_portion: string;
   interest: string;
   fee_amount: string;           // protocol yield fee — same fee_house.fee_rate as Scallop
 }
 ```
-
-> Sui event envelopes carry `event.sender`; the cdpm payload no longer includes a `by` field for either the Scallop or the Kai events to keep payload size constant across callers.
 
 ## Event Subscription
 
@@ -111,12 +112,9 @@ class AgentEventMonitor {
         },
       },
       onMessage: (event) => {
-        // Filter events by agent address.
-        // Cetus liquidity / fee / reward events carry `by`; Scallop and Kai
-        // lending events do NOT (the cdpm payload omits it). Fall back to the
-        // envelope's `event.sender` for those.
-        const actor = event.parsedJson?.by ?? event.sender;
-        if (actor === agentAddress) {
+        // cdpm event payloads carry no `by` field. Filter on the envelope's
+        // `event.sender` (the transaction signer) to identify the actor.
+        if (event.sender === agentAddress) {
           onEvent(event);
         }
       },

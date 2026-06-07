@@ -2,74 +2,50 @@
 
 ## Contents
 
-- [Hot-Potato API Overview](#hot-potato-api-overview)
+- [API Overview](#api-overview)
 - [PTB Recipe: Supply](#ptb-recipe-supply)
-- [PTB Recipe: Redeem (with strategy walk)](#ptb-recipe-redeem-with-strategy-walk)
-- [No Wrapper-Extract Escape](#no-wrapper-extract-escape)
+- [PTB Recipe: Redeem](#ptb-recipe-redeem)
+- [Exit Path](#exit-path)
 - [Closing a PositionManager With Active Vaults](#closing-a-positionmanager-with-active-vaults)
 - [Events](#events)
 - [Error Cheat Sheet](#error-cheat-sheet)
 
-## Hot-Potato API Overview
+## API Overview
 
-Same shape as Scallop — start/finish ticket pairs glued together inside one PTB:
+Two single-MoveCall entry points, one per direction. Kai SAV is two-generic (`<T, YT>`) on supply; redeem additionally carries the supply-pool strategy generic `ST`:
 
-| Phase    | cdpm function | Returns / consumes |
-|----------|----------------------------|------------------------------------------------------|
-| Supply   | `kai_start_supply<T, YT>`  | `(Coin<T>, KaiSupplyTicket<T, YT>)`                  |
-| Supply   | `kai_finish_supply<T, YT>` | consumes `KaiSupplyTicket<T, YT>` + `Coin<YT>`       |
-| Redeem   | `kai_start_redeem<T, YT>`  | `(Coin<YT>, KaiRedeemTicket<T, YT>)`                 |
-| Redeem   | `kai_finish_redeem<T, YT>` | consumes `KaiRedeemTicket<T, YT>` + `Coin<T>`        |
+| Phase  | cdpm function              | Effect |
+|--------|----------------------------|--------|
+| Supply | `kai_supply<T, YT>`        | Splits `amount` `Coin<T>` out of `pm.balance[T]`, calls `kai_sav::vault::deposit<T, YT>`, stores the resulting `Balance<YT>` and principal into `pm.lending` under key `type_name<YT>`. |
+| Redeem | `kai_redeem<T, ST, YT>`    | Pulls (a slice of) `Balance<YT>` from `pm.lending`, runs the full Kai withdraw chain (`vault::withdraw` → `kai_leverage_supply_pool::withdraw` → `vault::redeem_withdraw_ticket`), splits the protocol yield-fee off the interest portion into `FeeHouse`, deposits the net underlying back into `pm.balance[T]`. |
 
-`KaiSupplyTicket<T, YT>` and `KaiRedeemTicket<T, YT>` have **no `drop` ability**. Forgetting `kai_finish_*` aborts the PTB.
+Authorization on both is `assert_caller_authorized`: caller must be **owner**, **an authorized agent**, or **a whitelisted protocol bot AND the PM has no agents**.
 
-Authorization on `kai_start_*` is the same `assert_caller_authorized`: caller must be **owner**, **an authorized agent**, or **a whitelisted protocol bot AND the PM has no agents**. `kai_finish_*` only checks `ticket.pm_id == object::id(pm)`.
+Each function is one `tx.moveCall`. Kai's `vault::deposit` reads `total_available_balance(vault, clock)` internally (which already folds in time-locked profit), so no external accrual call is needed.
 
-### Differences vs Scallop at a glance
-
-| Aspect | Scallop | Kai SAV |
-|---|---|---|
-| Generic | `<T>` | `<T, YT>` |
-| Pre-call accrual | **Required** (`accrue_interest_for_market`) | **Not needed** — `total_available_balance` auto-accounts time-locked profit via `tlb::max_withdrawable` |
-| Deposit shape | 1-call: `protocol::mint::mint<T>` | 1-call: `vault::deposit<T, YT>` |
-| Redeem shape | 1-call: `protocol::redeem::redeem<T>` | **2 + N call**: `vault::withdraw` → strategy walks → `vault::redeem_withdraw_ticket` |
-| Yield-fee path | Identical (lives in `kai_finish_redeem`) | Identical |
-| Permissionless | YES (Scallop allow-all) | YES at the SAV layer — `vault::deposit` / `vault::withdraw` take no `ActionRequest`. Inner strategies (e.g. `kai_leverage::supply_pool::supply`) need `ActionRequest` but discharge it inside their own modules. |
+The bag key for Kai entries is `type_name<YT>`, so a single underlying `T` can simultaneously have a `ScallopVault<T>` (key = `type_name<T>`) and a `KaiVault<T, YT>` (key = `type_name<YT>`) without collision.
 
 ---
 
 ## PTB Recipe: Supply
 
-No accrual command is required up front. Kai's `vault::deposit` reads `total_available_balance(vault, clock)` internally, which already folds in time-locked profit; cdpm's `compute_expected_yt` reads the same pair (`total_available_balance` and `total_yt_supply`) view-only.
-
-`kai_start_supply` records `vault_id = object::id(vault)` on the ticket; `kai_finish_supply` re-takes `&Vault<T,YT>` and asserts the id matches, aborting with `EWrongVault (1013)` on mismatch. Use the same `tx.object(vaultObjectId)` handle across both calls.
-
-Authoritative signatures:
+Authoritative signature:
 
 ```move
-public fun kai_start_supply<T, YT>(
+public fun kai_supply<T, YT>(
     access: &AccessList,
     pm: &mut PositionManager,
-    vault: &kai_vault::Vault<T, YT>,
+    vault: &mut kai_vault::Vault<T, YT>,
     amount: u64,
     clock: &Clock,
     ctx: &mut TxContext,
-): (Coin<T>, KaiSupplyTicket<T, YT>);
-
-public fun kai_finish_supply<T, YT>(
-    pm: &mut PositionManager,
-    vault: &kai_vault::Vault<T, YT>,
-    ticket: KaiSupplyTicket<T, YT>,
-    yt: Coin<YT>,
 );
 ```
 
-Required PTB order (3 commands):
+PTB shape (1 command):
 
 ```
-1. cdpm::kai_start_supply<T, YT>(access, pm, vault, amount, clock)   → (coin_t, ticket)
-2. kai_sav::vault::deposit<T, YT>(vault, coin_t.into_balance(), clock) → balance_yt
-3. cdpm::kai_finish_supply<T, YT>(pm, vault, ticket, balance_yt.into_coin())
+cdpm::kai_supply<T, YT>(access, pm, vault, amount, clock)
 ```
 
 ```typescript
@@ -86,49 +62,15 @@ async function userSupplyToKai(
 ) {
   const tx = new Transaction();
 
-  // 1. Withdraw underlying from pm.balance and emit a KaiSupplyTicket.
-  //    The vault is read-only (& reference) — does not need to be a sharedObjectRef
-  //    with mutable=true here, but it WILL need mutable=true in step 2.
-  const [coinT, ticket] = tx.moveCall({
-    target: `${CDPM_PACKAGE}::cdpm::kai_start_supply`,
+  tx.moveCall({
+    target: `${CDPM_PACKAGE}::cdpm::kai_supply`,
     typeArguments: [underlyingCoinType, ytCoinType],
     arguments: [
       tx.object(CDPM_MAINNET.ACCESS_LIST_ID),
       tx.object(pmId),
       tx.object(vaultObjectId),
       tx.pure.u64(amount),
-      tx.object('0x6'),
-    ],
-  });
-
-  // 2. Deposit underlying balance into the Kai vault, receive Balance<YT>.
-  //    `vault::deposit` returns a Balance<YT>, not a Coin<YT>; wrap it.
-  const balanceT = tx.moveCall({
-    target: '0x2::coin::into_balance',
-    typeArguments: [underlyingCoinType],
-    arguments: [coinT],
-  });
-  const balanceYT = tx.moveCall({
-    target: `${KAI_SAV_PACKAGE}::vault::deposit`,
-    typeArguments: [underlyingCoinType, ytCoinType],
-    arguments: [tx.object(vaultObjectId), balanceT, tx.object('0x6')],
-  });
-  const coinYT = tx.moveCall({
-    target: '0x2::coin::from_balance',
-    typeArguments: [ytCoinType],
-    arguments: [balanceYT],
-  });
-
-  // 3. Burn the KaiSupplyTicket by depositing the YT coin into pm.lending.
-  //    finish_* asserts object::id(vault) == ticket.vault_id (EWrongVault=1013).
-  tx.moveCall({
-    target: `${CDPM_PACKAGE}::cdpm::kai_finish_supply`,
-    typeArguments: [underlyingCoinType, ytCoinType],
-    arguments: [
-      tx.object(pmId),
-      tx.object(vaultObjectId),
-      ticket,
-      coinYT,
+      tx.object('0x6'),                  // Clock
     ],
   });
 
@@ -138,141 +80,24 @@ async function userSupplyToKai(
 
 Important properties:
 
-- `kai_start_supply` decreases `pm.balance[T]` by `amount` and stores `principal` for later yield accounting (same path as `scallop_start_supply`, just under a different bag key).
-- `kai_finish_supply` requires `coin_yt.value() >= ticket.expected_yt`; otherwise it aborts with `EAmountShortfall (1009)`. Because `Coin<YT>` cannot be forged outside Kai's `Vault<T, YT>`, an agent cannot short-change the vault.
-- The first supply for a given `(T, YT)` creates a fresh `KaiVault<T, YT>`; subsequent supplies of the same `(T, YT)` pair add to it.
-- **Bootstrap caveat.** If `total_available_balance == 0` Kai treats deposits as 1:1 (cdpm's `compute_expected_yt` matches). The degenerate state `total > 0 && yt_supply == 0` cannot occur on a healthy Kai vault — when it appears, cdpm conservatively predicts `0` and `kai_start_supply` aborts with `EZeroExpected (1007)`.
+- `kai_supply` decreases `pm.balance[T]` by `amount` (via `withdraw_from_balance<T>`; the resulting `Coin<T>` value is recorded as `principal`).
+- The first supply for a given `(T, YT)` creates a fresh `KaiVault<T, YT>` under bag key `type_name<YT>`; subsequent supplies of the same `(T, YT)` pair join the new `Balance<YT>` and add to `principal`.
+- The `Balance<YT>` returned by `vault::deposit` never leaves the contract. External code cannot forge `Coin<YT>` because Kai's vault module owns the `TreasuryCap<YT>`.
+- If the vault is in the degenerate bootstrap state `total_available_balance == 0`, Kai mints YT 1:1.
 
 ---
 
-## PTB Recipe: Redeem (with strategy walk)
+## PTB Recipe: Redeem
 
-Kai's redeem path is **multi-step** because the vault delegates capital to N strategies (e.g. `kai_leverage::supply_pool`, Scallop SAV strategies). `vault::withdraw` returns a `WithdrawTicket` that records how much each strategy must un-allocate; the caller PTB has to walk each strategy module that has a non-zero `to_withdraw` slot, then call `redeem_withdraw_ticket` to settle the final `Balance<T>`.
+`kai_redeem` covers the full Kai withdrawal flow in one call:
 
-`kai_start_redeem` records `vault_id`; `kai_finish_redeem` re-takes `&Vault<T,YT>` and asserts the id matches (`EWrongVault = 1013`).
+1. `kai_vault::withdraw<T, YT>` produces a `WithdrawTicket`.
+2. `kai_leverage_supply_pool::withdraw<T, ST, YT>` walks the supply-pool strategy.
+3. `kai_vault::redeem_withdraw_ticket<T, YT>` settles to `Balance<T>`.
 
-Authoritative signatures:
+All three steps execute inside `kai_redeem`. The function is generic over the kai-leverage supply-pool strategy `<T, ST, YT>` since every production Kai SAV vault uses that strategy.
 
-```move
-public fun kai_start_redeem<T, YT>(
-    access: &AccessList,
-    pm: &mut PositionManager,
-    vault: &kai_vault::Vault<T, YT>,
-    yt_amount: u64,
-    clock: &Clock,
-    ctx: &mut TxContext,
-): (Coin<YT>, KaiRedeemTicket<T, YT>);
-
-public fun kai_finish_redeem<T, YT>(
-    pm: &mut PositionManager,
-    vault: &kai_vault::Vault<T, YT>,
-    fee_house: &mut FeeHouse,
-    ticket: KaiRedeemTicket<T, YT>,
-    underlying: Coin<T>,
-    ctx: &mut TxContext,
-);
-```
-
-Required PTB order (variable length — 4 + N commands):
-
-```
-1. cdpm::kai_start_redeem<T, YT>(access, pm, vault, yt_amount, clock)        → (coin_yt, ticket)
-2. kai_sav::vault::withdraw<T, YT>(vault, coin_yt.into_balance(), clock)     → withdraw_ticket
-3..3+N. for each strategy s with to_withdraw(s) > 0:
-        <strategy_module>::strategy_withdraw_for_vault(strategy, vault, withdraw_ticket, ...)
-        // strategy module discharges its own access-management ActionRequest internally
-3+N+1. balance_t = kai_sav::vault::redeem_withdraw_ticket<T, YT>(vault, withdraw_ticket)
-3+N+2. cdpm::kai_finish_redeem<T, YT>(pm, vault, fee_house, ticket, balance_t.into_coin())
-```
-
-`yt_amount = u64::MAX` is a sentinel meaning *drain the entire `KaiVault<T, YT>` entry from `pm.lending`* — `pull_from_kai_lending` clamps to the stored YT balance and removes the bag entry.
-
-```typescript
-async function userRedeemFromKai(
-  client: SuiGrpcClient,
-  signer: any,
-  pmId: string,
-  underlyingCoinType: string,
-  ytCoinType: string,
-  vaultObjectId: string,
-  ytAmount: bigint,
-  // Off-chain SDK enumerates the active strategies attached to this Vault and
-  // returns a list of move-call descriptors for the PTB to walk.
-  strategyWalkers: Array<{
-    target: string;
-    typeArguments: string[];
-    extraArgs: (tx: Transaction, withdrawTicket: any) => any[];
-  }>,
-) {
-  const tx = new Transaction();
-
-  // 1. Pull YT out of pm.lending and emit a KaiRedeemTicket.
-  const [coinYT, ticket] = tx.moveCall({
-    target: `${CDPM_PACKAGE}::cdpm::kai_start_redeem`,
-    typeArguments: [underlyingCoinType, ytCoinType],
-    arguments: [
-      tx.object(CDPM_MAINNET.ACCESS_LIST_ID),
-      tx.object(pmId),
-      tx.object(vaultObjectId),
-      tx.pure.u64(ytAmount),
-      tx.object('0x6'),
-    ],
-  });
-
-  // 2. Hand the YT to Kai's vault, receive a WithdrawTicket.
-  const balanceYT = tx.moveCall({
-    target: '0x2::coin::into_balance',
-    typeArguments: [ytCoinType],
-    arguments: [coinYT],
-  });
-  const withdrawTicket = tx.moveCall({
-    target: `${KAI_SAV_PACKAGE}::vault::withdraw`,
-    typeArguments: [underlyingCoinType, ytCoinType],
-    arguments: [tx.object(vaultObjectId), balanceYT, tx.object('0x6')],
-  });
-
-  // 3..3+N. Walk each strategy that has to_withdraw > 0. The off-chain SDK is
-  //         responsible for enumerating active strategies — cdpm does NOT track
-  //         them, and Kai's vault leaves the walk to the caller.
-  for (const walker of strategyWalkers) {
-    tx.moveCall({
-      target: walker.target,
-      typeArguments: walker.typeArguments,
-      arguments: walker.extraArgs(tx, withdrawTicket),
-    });
-  }
-
-  // 3+N+1. Settle the WithdrawTicket — returns Balance<T>.
-  const balanceT = tx.moveCall({
-    target: `${KAI_SAV_PACKAGE}::vault::redeem_withdraw_ticket`,
-    typeArguments: [underlyingCoinType, ytCoinType],
-    arguments: [tx.object(vaultObjectId), withdrawTicket],
-  });
-  const coinT = tx.moveCall({
-    target: '0x2::coin::from_balance',
-    typeArguments: [underlyingCoinType],
-    arguments: [balanceT],
-  });
-
-  // 3+N+2. Burn the KaiRedeemTicket — yield fee deducted from interest.
-  //         finish_* asserts object::id(vault) == ticket.vault_id (EWrongVault=1013).
-  tx.moveCall({
-    target: `${CDPM_PACKAGE}::cdpm::kai_finish_redeem`,
-    typeArguments: [underlyingCoinType, ytCoinType],
-    arguments: [
-      tx.object(pmId),
-      tx.object(vaultObjectId),
-      tx.object(CDPM_MAINNET.FEE_HOUSE_ID),
-      ticket,
-      coinT,
-    ],
-  });
-
-  return await client.signAndExecuteTransaction({ signer, transaction: tx });
-}
-```
-
-The yield-fee math inside `kai_finish_redeem` is identical to Scallop's `scallop_finish_redeem`:
+Yield-fee math (identical to Scallop):
 
 ```
 interest      = max(0, redeemed_amount − principal_portion)
@@ -282,25 +107,74 @@ to_pm_balance = redeemed_amount − fee_amount
 
 `principal_portion` is the slice of stored principal proportional to the burned YT: `principal_portion = floor(P_total × yt_burned / YT_total)` (see `pull_from_kai_lending`).
 
-### Strategy walk responsibility
+Authoritative signature:
 
-cdpm does not track which strategies a Kai vault has attached — that state lives entirely on the on-chain `Vault<T, YT>`. The off-chain SDK **must**:
+```move
+public fun kai_redeem<T, ST, YT>(
+    access: &AccessList,
+    pm: &mut PositionManager,
+    fee_house: &mut FeeHouse,
+    vault: &mut kai_vault::Vault<T, YT>,
+    strategy: &mut klsp::Strategy<T, ST>,
+    supply_pool: &mut SupplyPool<T, ST>,
+    yt_amount: u64,
+    clock: &Clock,
+    ctx: &mut TxContext,
+);
+```
 
-1. Read the live `Vault<T, YT>` object before signing.
-2. Enumerate `vault.strategies` (or equivalent — see the live Kai SAV ABI).
-3. For each strategy with non-zero `to_withdraw` after `vault::withdraw`, append the matching `<strategy_module>::strategy_withdraw_for_vault` PTB command. Each strategy module discharges its own `ActionRequest` against `kai_leverage::access_management` internally; the caller does **not** need to construct an `ActionRequest` manually.
-4. Always finish with `vault::redeem_withdraw_ticket` followed by `cdpm::kai_finish_redeem`.
+PTB shape (1 command):
 
-If any strategy in the walk emits a `StrategyLossEvent` it does **not** abort the vault — Kai socializes the loss across YT holders. cdpm will still see `redeemed_amount >= expected_underlying` for the same `yt_burned`, because cdpm derives `expected_underlying` from `total_available_balance` (which already reflects the loss). If the on-chain redeemed underlying is somehow lower than the off-chain prediction (e.g. between snapshot and signing the vault loses value), `kai_finish_redeem` aborts with `EAmountShortfall (1009)`.
+```
+cdpm::kai_redeem<T, ST, YT>(access, pm, fee_house, vault, strategy, supply_pool, yt_amount, clock)
+```
+
+`yt_amount = u64::MAX` is a sentinel meaning *drain the entire `KaiVault<T, YT>` entry from `pm.lending`* — `pull_from_kai_lending` clamps `want_amount` to the stored YT balance and removes the bag entry.
+
+```typescript
+async function userRedeemFromKai(
+  client: SuiGrpcClient,
+  signer: any,
+  pmId: string,
+  underlyingCoinType: string,    // T
+  stCoinType: string,            // ST — kai_leverage_supply_pool strategy share token
+  ytCoinType: string,            // YT
+  vaultObjectId: string,         // Vault<T, YT>
+  strategyObjectId: string,      // klsp::Strategy<T, ST>
+  supplyPoolObjectId: string,    // SupplyPool<T, ST>
+  ytAmount: bigint,              // u64::MAX (0xffffffffffffffffn) to drain
+) {
+  const tx = new Transaction();
+
+  tx.moveCall({
+    target: `${CDPM_PACKAGE}::cdpm::kai_redeem`,
+    typeArguments: [underlyingCoinType, stCoinType, ytCoinType],
+    arguments: [
+      tx.object(CDPM_MAINNET.ACCESS_LIST_ID),
+      tx.object(pmId),
+      tx.object(CDPM_MAINNET.FEE_HOUSE_ID),
+      tx.object(vaultObjectId),
+      tx.object(strategyObjectId),
+      tx.object(supplyPoolObjectId),
+      tx.pure.u64(ytAmount),
+      tx.object('0x6'),                  // Clock
+    ],
+  });
+
+  return await client.signAndExecuteTransaction({ signer, transaction: tx });
+}
+```
+
+The off-chain SDK supplies the three Kai object IDs (vault, strategy, supply pool). For a given `(T, YT)`, those are fixed per-vault and can be cached.
 
 ### Sizing Redemptions
 
-`kai_start_redeem` takes a `yt_amount` (yield tokens), but most callers think in terms of *underlying they need*. Two inverses cover the realistic cases:
+`kai_redeem` takes a `yt_amount` (yield tokens), but most callers think in terms of *underlying they need*. Two inverses cover the realistic cases:
 
 - **Pre-fee target.** I want at least `K` underlying out of Kai, fee aside. `yt_to_burn = ceil(K × yt_supply / total_available_balance)`.
 - **Post-fee target.** I want at least `K` net underlying credited to `pm.balance[T]` after the yield fee. The closed form is `N ≈ ceil(K / (p × (1 − r) + r × π))` when there is interest (the typical case `p > π`), where `p = total_available_balance / yt_supply`, `π = principal / yt_total_in_vault`, `r = fee_rate / 10000`.
 
-Both formulas use **ceiling** division — Kai's `vault::withdraw` itself uses `muldiv_round_up` for fairness to remaining YT holders, but the cdpm prediction `compute_expected_underlying_kai` floors. To guarantee the on-chain output is `>= K` after both rounds, ceiling is correct. Cross-link: the full derivation, edge cases (bootstrap, vault drain, socialized loss), and an iterative refinement helper live in [`cdpm-calculation-skill/reference/kai-lending-math.md`](../../cdpm-calculation-skill/reference/kai-lending-math.md) section 7.
+Both formulas use **ceiling** division — Kai's `vault::withdraw` uses `muldiv_round_up` for fairness to remaining YT holders. To guarantee the on-chain output is `>= K`, ceiling is correct. Cross-link: the full derivation, edge cases (bootstrap, vault drain, socialized loss), and an iterative refinement helper live in [`cdpm-calculation-skill/reference/kai-lending-math.md`](../../cdpm-calculation-skill/reference/kai-lending-math.md) section 7.
 
 ```typescript
 import {
@@ -323,86 +197,51 @@ const nPostFee = ytToBurnForTargetNet(
   2_000n,                   // 2000 bp = 20%
 );
 
-// Feed it straight into kai_start_redeem.
+// Feed it straight into kai_redeem.
 tx.moveCall({
-  target: `${CDPM_PACKAGE}::cdpm::kai_start_redeem`,
-  typeArguments: [underlyingCoinType, ytCoinType],
+  target: `${CDPM_PACKAGE}::cdpm::kai_redeem`,
+  typeArguments: [underlyingCoinType, stCoinType, ytCoinType],
   arguments: [
     tx.object(CDPM_MAINNET.ACCESS_LIST_ID),
     tx.object(pmId),
+    tx.object(CDPM_MAINNET.FEE_HOUSE_ID),
     tx.object(vaultObjectId),
-    tx.pure.u64(nPostFee),  // sentinel MAX_U64 drains the whole KaiVault entry
+    tx.object(strategyObjectId),
+    tx.object(supplyPoolObjectId),
+    tx.pure.u64(nPostFee),               // sentinel MAX_U64 drains the entry
     tx.object('0x6'),
   ],
 });
 ```
 
-If the helper returns `MAX_U64` it means the `KaiVault<T, YT>` entry cannot satisfy the target; passing `MAX_U64` to `kai_start_redeem` drains the entry entirely and returns whatever Kai pays out after the strategy walk.
+If the helper returns `MAX_U64` it means the `KaiVault<T, YT>` entry cannot satisfy the target; passing `MAX_U64` drains the entry entirely and returns whatever Kai pays out.
 
 ---
 
-## No Wrapper-Extract Escape
+## Exit Path
 
-cdpm does **not** expose a `user_extract_kai_yt`-style function for anyone — not for owner, not for agents, not for protocol bots. The lending wrapper has no off-protocol utility: a raw `Coin<YT>` outside cdpm is only useful for redemption back through the same `vault::withdraw` path, and handing it out would only delete the principal-counter accounting that protocol-fee math depends on. Lending exit is constrained to the full redeem flow:
+cdpm exposes no function that hands `YT` out to the caller. The only exit is:
 
 ```
-kai_start_redeem → vault::withdraw → strategy walk → redeem_withdraw_ticket → kai_finish_redeem → pm.balance → user_remove_liquidity_from_balance<T>
+kai_redeem<T, ST, YT> → pm.balance[T] → user_remove_liquidity_from_balance<T>
 ```
 
-If Kai is unreachable (Version bump, withdrawals disabled, paused vault, etc.) the abort happens inside the inner `vault::withdraw` / `redeem_withdraw_ticket` call before any cdpm `*_finish_*` runs, so the hot-potato ticket is never consumed and `pm.lending` stays intact. The position remains intact in `pm.lending`; retry the normal flow once Kunalabs lifts the disable flag or issues a new SDK version against the new Vault Version. cdpm itself stays operational throughout.
+If Kai is unreachable (Version bump, withdrawals disabled, paused vault, etc.) the abort happens inside the inner `vault::withdraw` / `redeem_withdraw_ticket` calls and `pm.lending` stays intact. Retry once Kunalabs lifts the disable flag or ships an SDK update against the new Vault Version; cdpm itself stays operational throughout.
 
-The Cetus DLMM `Position` is the only object cdpm cannot recover from upstream breakage in-band, and that one case is handled by the unrelated owner-only `user_get_position` / `user_get_and_return_position` extraction documented in [`position-management.md`](./position-management.md).
+The Cetus DLMM `Position` is the only object cdpm cannot recover from upstream breakage in-band, and that one case is handled by the owner-only `user_get_position` / `user_get_and_return_position` extraction documented in [`position-management.md`](./position-management.md).
 
 ---
 
 ## Closing a PositionManager With Active Vaults
 
-`user_close_pm` asserts `bag::is_empty(&pm.lending)` (`ELendingNotEmpty = 1004`). Before calling it you must drain every `(T, YT)` Kai vault entry through the full redeem flow above (`kai_start_redeem` → strategy walk → `kai_finish_redeem`); the post-fee underlying lands in `pm.balance[T]` and can then be withdrawn with `user_remove_liquidity_from_balance<T>`. The same `ELendingNotEmpty` covers both Scallop and Kai entries.
+`user_close_pm` asserts `bag::is_empty(&pm.lending)` (`ELendingNotEmpty = 1004`). Before calling it, redeem every `(T, YT)` Kai vault entry with `kai_redeem<T, ST, YT>` (use `yt_amount = u64::MAX` to drain); the post-fee underlying lands in `pm.balance[T]` and is then withdrawn with `user_remove_liquidity_from_balance<T>(u64::MAX)`. The same `ELendingNotEmpty` covers both Scallop and Kai entries.
 
-### Full-Drain Pattern (No Top-Up Needed)
+`user_close_pm` also asserts:
+- `bag::is_empty(&pm.balance)` (`EBalanceNotEmpty = 1008`) — drain every `pm.balance[T]` first.
+- `bag::is_empty(&pm.fee)` (`EFeeNotEmpty = 1009`) — drain every `pm.fee[T]` first.
+- Every `PositionInfo.rewards_owned[i] == 0` (`EPositionHasRewards = 1007`) — call `user_collect_reward<A, B, R>` for every reward type on the pool first.
 
-Owner-driven close-PM is the **only** caller that legitimately needs to fully empty a Kai entry — protocol bots and agents intentionally leave a small wrapper residual (see [`cdpm-agent-sdk/reference/kai-lending.md`](../../cdpm-agent-sdk/reference/kai-lending.md#dont-full-drain-a-lending-entry) and [`cdpm-protocol-sdk/reference/kai-lending.md`](../../cdpm-protocol-sdk/reference/kai-lending.md)). On full drain (`ytAmount = u64::MAX`), the strategy-walker chain returns a few raw underlying less than `expected_underlying` due to per-step floor-div — **`kai_finish_redeem` absorbs this on-chain** via `REDEEM_DUST_TOLERANCE_RAW = 4` raw, so close-PM does not need a `coin::join` topup.
-
-```ts
-import { Transaction, type TransactionObjectArgument } from "@mysten/sui/transactions";
-
-// 1. start_redeem returns (coinYT, redeemTicket).
-const [coinYT, redeemTicket] = tx.moveCall({
-  target: `${CDPM}::cdpm::kai_start_redeem`,
-  typeArguments: [T, YT],
-  arguments: [tx.object(ACCESS), tx.object(pmId), vault,
-              tx.pure.u64(REDEEM_ALL_U64), tx.object(CLOCK)],
-});
-// 2-5. vault::withdraw / supply_pool::withdraw / redeem_withdraw_ticket / from_balance → coinT
-//      (omitted; same as the standard redeem recipe above)
-
-// 6. kai_finish_redeem auto-tolerates floor-div dust ≤ 4 raw.
-//    The protocol fee = floor(interest × fee_rate / 10000) is split off the
-//    redeemed coin into FeeHouse; the rest lands in pm.balance[T] and is
-//    drained with `user_remove_liquidity_from_balance<T>(u64::MAX)` later.
-tx.moveCall({
-  target: `${CDPM}::cdpm::kai_finish_redeem`,
-  typeArguments: [T, YT],
-  arguments: [tx.object(pmId), vault, tx.object(FEE_HOUSE), redeemTicket, coinT],
-});
-```
-
-See [`cdpm-calculation-skill/reference/kai-lending-math.md` §9.1](../../cdpm-calculation-skill/reference/kai-lending-math.md#91-floor-div-dust-on-chain-tolerance-and-deploy-side-floor) for the dust math and [`cross-protocol-ptb.md` §5.1](../../cdpm-calculation-skill/reference/cross-protocol-ptb.md#51-caller-specific-full-drain-patterns) for the side-by-side comparison with protocol/agent patterns.
-
-**Optional fallback for a future ≥3-strategy vault.** If a future Kai SAV draws from ≥3 strategies, its per-redeem dust could exceed 4 raw and 1009 would reappear. In that contingency, insert a `0x2::coin::join(coinT, topup)` between the redeem chain and `kai_finish_redeem`, where `topup` is a `Coin<T>` of `(observedDust − 4)` raw. Three-tier source priority — `pm.balance[T]` (`user_remove_liquidity_from_balance<T>`) → `pm.fee[T]` (`user_withdraw_fee<T>`) → user wallet — both PM-internal entrypoints `balance::split` when `amount < entry_value`, so a tiny slice does not disturb the entry. Net user cost is `topup × fee_rate` and is invariant to source. This is a contingency, not a normal hot-path requirement.
-
-**Batched `transferObjects` at the end of the PTB**
-
-The close-PM PTB ultimately returns many `Coin<*>` objects to the user: collected rewards, residual `pm.balance[T]` (one per type, drained with `amount = u64::MAX`), residual `pm.fee[T]`, etc. Each is a separate PTB command; calling `tx.transferObjects` once per object is one PTB command per coin, each with its own base cost. Sui's `transferObjects` accepts a vector — batch every user-bound coin into one final call:
-
-```ts
-const toTransfer: TransactionObjectArgument[] = [];
-// ... push collected rewards, residual balance/fee withdrawals, etc. ...
-// Topup-split handles must NOT enter toTransfer — they are consumed by coin::join.
-tx.transferObjects(toTransfer, signer.toSuiAddress());
-```
-
-See `workflows.md` § Close Position Safely for the full template.
+See [`workflows.md`](./workflows.md) § Close Position Safely for the full template.
 
 ---
 
@@ -414,7 +253,7 @@ interface KaiSupplied {
   coin_type: string;          // type_name<T>
   yt_type: string;            // type_name<YT>
   deposit_amount: u64;        // underlying transferred to Kai
-  yt_minted: u64;             // YT received (Coin<YT>)
+  yt_minted: u64;             // YT received
 }
 
 interface KaiRedeemed {
@@ -429,9 +268,7 @@ interface KaiRedeemed {
 }
 ```
 
-cdpm does not emit an extraction event for Kai lending — there is no wrapper-extract function.
-
-> Events carry **both** `coin_type` (T) and `yt_type` (YT). The bag key is `yt_type`, but `coin_type` is needed for human-readable reporting and to disambiguate from a hypothetical second yield token over the same underlying. Sui event envelopes already record the transaction sender, so events do not carry a `by` field — reach for `event.sender` if you need to distinguish owner / agent / protocol callers.
+> Events carry **both** `coin_type` (T) and `yt_type` (YT). The bag key is `yt_type`, but `coin_type` is needed for human-readable reporting and to disambiguate from a hypothetical second yield token over the same underlying. Sui event envelopes already record the transaction sender, so events do not carry a sender field — reach for `event.sender` if you need to distinguish owner / agent / protocol callers.
 
 ---
 
@@ -439,20 +276,16 @@ cdpm does not emit an extraction event for Kai lending — there is no wrapper-e
 
 | Code | Constant | When |
 |------|----------|------|
-| 1001 | `ENotOwner` | Non-owner called an owner-only entry (e.g. `user_get_position` — note Kai lending exposes no owner-only entry) |
-| 1002 | `ENotAllow` | `kai_start_supply` / `kai_start_redeem` failed `assert_caller_authorized` |
-| 1004 | `ELendingNotEmpty` | `user_close_pm` while `pm.lending` is non-empty (any Scallop or Kai entry) |
-| 1005 | `ENoSuchVault` | `kai_start_redeem` for an absent `(T, YT)` entry |
-| 1006 | `EReserveEmpty` | Kai vault has zero `total_yt_supply` (degenerate; cdpm asserts `yt_supply > 0` in `compute_expected_underlying_kai`) |
-| 1007 | `EZeroExpected` | `kai_start_supply` / `kai_start_redeem` would yield 0 — amount too small, or vault state degenerate |
-| 1008 | `EWrongPm` | `kai_finish_*` ticket consumed against a different PositionManager |
-| 1009 | `EAmountShortfall` | `kai_finish_*` Coin value `<` ticket.expected. On full drain (`ytAmount = u64::MAX`) the strategy-walker floor-div dust trips this reliably — use the top-up pattern above. On partial redeems it indicates a stale vault snapshot or strategy loss mid-PTB — re-snapshot and retry. |
-| 1013 | `EWrongVault` | `kai_finish_*` received a `&Vault<T,YT>` whose id ≠ ticket.vault_id. Reuse the same `tx.object(vaultObjectId)` across `start_*` and `finish_*`. |
+| 1001 | `ENotOwner` | Non-owner called an owner-only entry (Kai lending itself exposes no owner-only entry; this code does not surface from `kai_supply` / `kai_redeem`). |
+| 1002 | `ENotAllow` | `kai_supply` / `kai_redeem` failed `assert_caller_authorized` (caller is not owner, not in `pm.agents`, and either not in `access.allow` or `pm.agents` is non-empty). |
+| 1004 | `ELendingNotEmpty` | `user_close_pm` while `pm.lending` is non-empty (any Scallop or Kai entry). |
+| 1005 | `ENoSuchVault` | `kai_redeem` for an absent `(T, YT)` entry (bag key `type_name<YT>` not present in `pm.lending`). |
+| 1006 | `ENoSuchBalance` | `kai_supply` ran with `amount > 0` but `pm.balance` has no `Balance<T>` entry to draw from. Deposit `Coin<T>` into the PM with `user_add_liquidity_to_balance<T>` first. |
 
 External aborts you may hit (these come from Kai itself, not cdpm):
 
-- `vault::EWithdrawalsDisabled` — admin called `set_withdrawals_disabled`. The position remains intact in `pm.lending`; retry once Kunalabs lifts the disable flag or issues a new SDK version. cdpm offers no in-protocol escape.
+- `vault::EWithdrawalsDisabled` — admin called `set_withdrawals_disabled`. The position remains intact in `pm.lending`; retry once Kunalabs lifts the disable flag. cdpm offers no in-protocol escape.
 - `vault::ETvlCapExceeded` — admin set a `tvl_cap` that your deposit would breach. Lower `amount` or wait.
 - `vault::ERateLimit` — admin-configured rate limiter rejected the deposit/withdraw. Retry later.
 
-The cdpm functions themselves never construct these aborts; they bubble up from the inner `vault::deposit` / `vault::withdraw` move-calls in your PTB and abort the whole transaction before `kai_finish_*` runs (which is correct — the hot-potato ticket is then never consumed and you cannot lose funds).
+The cdpm functions themselves never construct these aborts; they bubble up from the inner `vault::deposit` / `vault::withdraw` calls and abort the whole `kai_supply` / `kai_redeem` move-call before cdpm's bookkeeping mutates state.

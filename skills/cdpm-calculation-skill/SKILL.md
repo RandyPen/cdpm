@@ -1,13 +1,13 @@
 ---
 name: cdpm-calculation-skill
-description: CDPM calculation utilities using Cetus DLMM SDK plus the Scallop and Kai SAV lending math used by scallop_start_supply / scallop_start_redeem / scallop_finish_redeem and their Kai counterparts. Provides liquidity calculation, bin price math, position management, fee calculations, and yield-fee accounting for both lending integrations. Use when performing mathematical operations for CDPM positions.
+description: CDPM calculation utilities using Cetus DLMM SDK plus the Scallop and Kai SAV lending math used by scallop_supply / scallop_redeem / kai_supply / kai_redeem. Provides liquidity calculation, bin price math, position management, fee calculations, and yield-fee accounting for both lending integrations. Use when performing mathematical operations for CDPM positions.
 ---
 
 # CDPM Calculation Guide
 
 ## Overview
 
-This skill provides calculation utilities for CDPM (Cetus DLMM Position Manager) using the **Cetus DLMM SDK**, plus off-chain twins of **both** lending integrations' math the cdpm contract performs on-chain — Scallop (`scallop_*`) and Kai SAV (`kai_*`). All Cetus calculations should use the SDK for accuracy and to handle edge cases properly; the Scallop and Kai formulas mirror the on-chain implementations in `sources/cdpm.move`. The two integrations share `pm.lending: Bag`, the hot-potato ticket pattern, and a single `fee_house.fee_rate` knob, so the principal-amortization and yield-fee math is structurally identical — only the `compute_expected_*` predictors differ (Scallop reads `balance_sheet`, Kai reads `total_available_balance` + `total_yt_supply`).
+This skill provides calculation utilities for CDPM (Cetus DLMM Position Manager) using the **Cetus DLMM SDK**, plus off-chain twins of **both** lending integrations' upstream math — Scallop (`scallop_*`) and Kai SAV (`kai_*`). All Cetus calculations should use the SDK for accuracy and to handle edge cases properly; the Scallop and Kai formulas mirror the upstream `protocol::mint` / `protocol::redeem` and `kai_vault::deposit` / `kai_vault::withdraw` math that cdpm composes into single-call entries. The two integrations share `pm.lending: Bag`, the same `fee_house.fee_rate` knob, and the same principal-amortization shape — only the predictors differ (Scallop reads `balance_sheet`, Kai reads `total_available_balance` + `total_yt_supply`).
 
 ## Installation
 
@@ -34,9 +34,9 @@ import { BinUtils, FeeUtils } from '@cetusprotocol/dlmm-sdk/utils'
 - **[Position Query](reference/position-query.md)** — Query PositionManager assets, fees, rewards.
 
 ### Lending Math (Scallop & Kai SAV)
-- **[Scallop Lending Math](reference/scallop-lending-math.md)** — Expected sCoin / underlying, principal amortization, yield-fee deduction, redemption sizing (inverse formulas + worked example), live supply APY via `@scallop-io/sui-scallop-sdk`, Scallop-vs-Kai picker, granular PTB-builder hooks.
-- **[Kai SAV Lending Math](reference/kai-lending-math.md)** — Same shape for `<T, YT>` vaults; live APY via `@kunalabs-io/kai`; full-drain dust handling and `LENDING_SAFE_MARGIN_WRAPPER_RAW` floor (§9.1).
-- **[Cross-Protocol PTB (cdpm + Scallop + Kai)](reference/cross-protocol-ptb.md)** — Mysten-rooted shared-`Transaction` pattern, approach comparison table, atomic Scallop ↔ Kai rebalance, caller-specific full-drain patterns (§5.1), integration caveats.
+- **[Scallop Lending Math](reference/scallop-lending-math.md)** — `predictScallopMint` / `predictScallopRedeem`, principal amortization, yield-fee deduction, redemption sizing (inverse formulas + worked example), live supply APY via `@scallop-io/sui-scallop-sdk`, Scallop-vs-Kai picker.
+- **[Kai SAV Lending Math](reference/kai-lending-math.md)** — `predictKaiDeposit` / `predictKaiWithdraw` for `<T, YT>` vaults; live APY via `@kunalabs-io/kai`.
+- **[Cross-Protocol PTB (cdpm + Scallop + Kai)](reference/cross-protocol-ptb.md)** — Mysten-rooted shared-`Transaction` pattern, approach comparison table, atomic Scallop ↔ Kai rebalance, dust-prediction patterns when composing redeem → add-liquidity.
 
 ### Advanced Topics
 - **[Price Conversion](reference/price-conversion.md)** - Compare CDPM prices with external exchanges
@@ -194,28 +194,28 @@ async function calculateRebalance(
 ### 1. Always Use SDK Utils
 
 ```typescript
-// ✅ Good - Use SDK
+// Good - Use SDK
 import { BinUtils } from '@cetusprotocol/dlmm-sdk/utils'
 const liquidity = BinUtils.getLiquidity(amountA, amountB, qPrice)
 
-// ❌ Bad - Manual calculation
+// Bad - Manual calculation
 const liquidity = (BigInt(price) * BigInt(amountA)) + (BigInt(amountB) << 64n)
 ```
 
 ### 2. Pass Amounts as Strings
 
 ```typescript
-// ✅ Good - String format
+// Good - String format
 const liquidity = BinUtils.getLiquidity('1000000', '1200000', qPrice)
 
-// ❌ Bad - Number format (precision loss)
+// Bad - Number format (precision loss)
 const liquidity = BinUtils.getLiquidity(1000000, 1200000, qPrice)
 ```
 
 ### 3. Cache QPrice
 
 ```typescript
-// ✅ Good - Cache QPrice
+// Good - Cache QPrice
 const qPriceCache = new Map()
 function getCachedQPrice(binId: number, binStep: number) {
   const key = `${binId}-${binStep}`

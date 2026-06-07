@@ -6,7 +6,7 @@
 const CDPM_PACKAGE = '0x3284fd6e5e5b0ee4db61b67f9cf6e890809e6d45f6b4fc20639ba7a4897a8f7d';
 const FEE_DENOMINATOR = 10000;
 const DEFAULT_FEE_RATE = 2000; // 20%
-const MAX_FEE_RATE = 3000;     // 30% — enforced cap in admin_set_fee
+const MAX_FEE_RATE = 5000;     // 50% — enforced cap in admin_set_fee
 ```
 
 Publish references:

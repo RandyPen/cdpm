@@ -3,12 +3,13 @@
 ## Contents
 
 - [Why a Protocol Tier Wants Kai Alongside Scallop](#why-a-protocol-tier-wants-kai-alongside-scallop)
-- [No Pre-Call Accrual Required](#no-pre-call-accrual-required)
-- [Protocol PTB Recipe: Supply](#protocol-ptb-recipe-supply)
-- [Protocol PTB Recipe: Redeem (with strategy walk)](#protocol-ptb-recipe-redeem-with-strategy-walk)
+- [Authoritative Signatures](#authoritative-signatures)
+- [Protocol Supply](#protocol-supply)
+- [Protocol Redeem (with yield-fee deduction)](#protocol-redeem-with-yield-fee-deduction)
+- [Sizing Redemptions](#sizing-redemptions)
 - [Protocol-Tier Permission Invariant](#protocol-tier-permission-invariant)
-- [Events Emitted by Protocol Kai Operations](#events-emitted-by-protocol-kai-operations)
-- [Error Cheat Sheet (protocol-flavored)](#error-cheat-sheet-protocol-flavored)
+- [Events](#events)
+- [Error Cheat Sheet](#error-cheat-sheet)
 
 ## Why a Protocol Tier Wants Kai Alongside Scallop
 
@@ -17,64 +18,66 @@ Two dimensions of diversification:
 1. **Underlying yield source.** Scallop is a money market (variable supply APY tied to utilization). Kai SAV aggregates strategies — leveraged supply on `kai_leverage::supply_pool`, vault-of-vaults on Scallop SAV strategies, etc. A protocol bot that periodically rebalances idle balance between the two diversifies the yield curve.
 2. **Coexistence on a single PM.** The `pm.lending: Bag` keys Scallop entries by `type_name<T>` and Kai entries by `type_name<YT>`. A protocol bot can hold both `ScallopVault<USDC>` and `KaiVault<USDC, YUSDC>` simultaneously without bag collision.
 
-The yield-fee math inside `kai_finish_redeem` is **identical** to `scallop_finish_redeem`:
+The yield-fee math inside `kai_redeem` is **identical** to `scallop_redeem`:
 
 ```
-interest      = max(0, redeemed_amount − principal_portion)
-fee_amount    = floor(interest × fee_house.fee_rate / 10_000)
-to_pm_balance = redeemed_amount − fee_amount
+principal_portion = floor(P_total × yt_burned / YT_total)
+interest          = max(0, redeemed_amount − principal_portion)
+fee_amount        = floor(interest × fee_house.fee_rate / 10_000)
+to_pm_balance     = redeemed_amount − fee_amount
 ```
 
-`fee_house.fee_rate` is shared across Scallop and Kai redeems. `admin_set_fee` caps it at `MAX_FEE_RATE = 3000` (30%); the default is `2000` (20%).
+`fee_house.fee_rate` is shared across Scallop and Kai redeems. `admin_set_fee` caps it at `MAX_FEE_RATE = 5000` (50%); the default is `2000` (20%).
 
 ---
 
-## No Pre-Call Accrual Required
-
-Unlike Scallop (which requires `protocol::accrue_interest::accrue_interest_for_market` as the first PTB command), Kai's `vault::deposit` / `vault::withdraw` read `total_available_balance(vault, clock)`, which folds in time-locked profit via `tlb::max_withdrawable` automatically. cdpm's `compute_expected_yt` and `compute_expected_underlying_kai` read the same auto-accruing pair, so the off-chain prediction matches the live on-chain quote at the same `clock` timestamp.
-
-> If the vault state moves between off-chain snapshot and on-chain signing — e.g. another transaction in the same block deposits into the vault and changes the YT/underlying ratio — `kai_finish_supply` / `kai_finish_redeem` aborts with `EAmountShortfall (1009)`. The hot-potato ticket is then never consumed; the PM state is intact; the protocol bot retries with a fresh snapshot.
-
----
-
-## Protocol PTB Recipe: Supply
-
-`kai_start_supply` records `vault_id = object::id(vault)` on the ticket; `kai_finish_supply` re-takes `&Vault<T,YT>` and asserts the id matches, aborting with `EWrongVault (1013)` on mismatch. Reuse the same `tx.object(vaultObjectId)` handle across `start_*` and `finish_*`.
-
-Authoritative signatures:
+## Authoritative Signatures
 
 ```move
-public fun kai_start_supply<T, YT>(
+public fun kai_supply<T, YT>(
     access: &AccessList,
     pm: &mut PositionManager,
-    vault: &kai_vault::Vault<T, YT>,
+    vault: &mut kai_vault::Vault<T, YT>,
     amount: u64,
     clock: &Clock,
     ctx: &mut TxContext,
-): (Coin<T>, KaiSupplyTicket<T, YT>);
+);
 
-public fun kai_finish_supply<T, YT>(
+public fun kai_redeem<T, ST, YT>(
+    access: &AccessList,
     pm: &mut PositionManager,
-    vault: &kai_vault::Vault<T, YT>,
-    ticket: KaiSupplyTicket<T, YT>,
-    yt: Coin<YT>,
+    fee_house: &mut FeeHouse,
+    vault: &mut kai_vault::Vault<T, YT>,
+    strategy: &mut klsp::Strategy<T, ST>,
+    supply_pool: &mut SupplyPool<T, ST>,
+    yt_amount: u64,
+    clock: &Clock,
+    ctx: &mut TxContext,
 );
 ```
 
-3 commands:
+Each is one `tx.moveCall`. `kai_supply` pulls `amount` of underlying from `pm.balance[T]`, calls `kai_vault::deposit<T, YT>`, and stores the resulting `Balance<YT>` plus principal under `KaiVault<T, YT>` keyed by `type_name<YT>` in `pm.lending`.
+
+`kai_redeem` is generic over the supply-pool strategy `<T, ST>`. cdpm walks the production Kai withdrawal flow internally:
 
 ```
-1. cdpm::kai_start_supply<T, YT>(access, pm, vault, amount, clock)        → (coin_t, ticket)
-2. kai_sav::vault::deposit<T, YT>(vault, coin_t.into_balance(), clock)    → balance_yt
-3. cdpm::kai_finish_supply<T, YT>(pm, vault, ticket, balance_yt.into_coin())
+kai_vault::withdraw<T, YT>          // mints a WithdrawTicket
+  → klsp::withdraw<T, ST, YT>       // strategy-side draw against SupplyPool<T, ST>
+  → kai_vault::redeem_withdraw_ticket<T, YT>   // settles to underlying
 ```
+
+The yield fee is deducted into `fee_house.fee[T]` and the remainder is added to `pm.balance[T]`. `yt_amount = u64::MAX` drains the `KaiVault<T, YT>` entry from `pm.lending`.
+
+---
+
+## Protocol Supply
 
 ```typescript
 import { Transaction } from '@mysten/sui/transactions';
 
 async function protocolSupplyToKai(
   client: SuiGrpcClient,
-  protocolSigner: any,         // address must be in AccessList AND pm.agents must be empty
+  protocolSigner: any,         // address in AccessList.allow AND pm.agents must be empty
   pmId: string,
   underlyingCoinType: string,
   ytCoinType: string,
@@ -83,8 +86,8 @@ async function protocolSupplyToKai(
 ) {
   const tx = new Transaction();
 
-  const [coinT, ticket] = tx.moveCall({
-    target: `${CDPM_PACKAGE}::cdpm::kai_start_supply`,
+  tx.moveCall({
+    target: `${CDPM_PACKAGE}::cdpm::kai_supply`,
     typeArguments: [underlyingCoinType, ytCoinType],
     arguments: [
       tx.object(CDPM_MAINNET.ACCESS_LIST_ID),
@@ -95,77 +98,24 @@ async function protocolSupplyToKai(
     ],
   });
 
-  const balanceT = tx.moveCall({
-    target: '0x2::coin::into_balance',
-    typeArguments: [underlyingCoinType],
-    arguments: [coinT],
-  });
-  const balanceYT = tx.moveCall({
-    target: `${KAI_SAV_PACKAGE}::vault::deposit`,
-    typeArguments: [underlyingCoinType, ytCoinType],
-    arguments: [tx.object(vaultObjectId), balanceT, tx.object('0x6')],
-  });
-  const coinYT = tx.moveCall({
-    target: '0x2::coin::from_balance',
-    typeArguments: [ytCoinType],
-    arguments: [balanceYT],
-  });
-
-  tx.moveCall({
-    target: `${CDPM_PACKAGE}::cdpm::kai_finish_supply`,
-    typeArguments: [underlyingCoinType, ytCoinType],
-    arguments: [
-      tx.object(pmId),
-      tx.object(vaultObjectId),
-      ticket,
-      coinYT,
-    ],
-  });
-
   return await client.signAndExecuteTransaction({ signer: protocolSigner, transaction: tx });
 }
 ```
 
-**`MAX_U64` is a "drain whatever's there" sentinel.** `kai_start_supply` pulls the underlying via the internal `withdraw_from_balance<T>` helper (`cdpm.move:1271-1286`), which clamps `amount >= balance_amount` and removes the bag entry; the post-clamp `coin.value()` is what feeds `compute_expected_yt`. So passing `tx.pure.u64(MAX_U64)` consumes the entire `pm.balance[T]` entry, and the only remaining abort path is `EZeroExpected (1007)` if the entry is empty / dust. This mirrors `protocol_transfer_fee_to_balance`, which uses the same sentinel today (the helper has identical clamp logic in `withdraw_from_fee`, `cdpm.move:1301-1316`). Prefer the sentinel for atomic-rebalance flows where the supply leg should atomically absorb the prior redeem residual without an off-chain dev-inspect round trip. Use an explicit sized `amount` only when you intentionally want to leave a residual in `pm.balance[T]`.
+`amount` is clamped to the live `pm.balance[T]` value by the internal `withdraw_from_balance<T>` helper, so passing `u64::MAX` consumes the entire `pm.balance[T]` entry. Use an explicit sized `amount` only when you intentionally want to leave a residual.
+
+Emits `KaiSupplied { pm_id, coin_type, yt_type, deposit_amount, yt_minted }`.
 
 ---
 
-## Protocol PTB Recipe: Redeem (with strategy walk)
+## Protocol Redeem (with yield-fee deduction)
 
-Variable length (4 + N commands). `vault::withdraw` returns a `WithdrawTicket` recording per-strategy `to_withdraw` quotas; the protocol bot's PTB has to walk every strategy with non-zero quota, then settle with `vault::redeem_withdraw_ticket`. The off-chain SDK is responsible for enumerating active strategies — cdpm does **not** track them.
+`kai_redeem` requires four object handles besides the cdpm shared objects:
 
-`kai_start_redeem` records `vault_id`; `kai_finish_redeem` re-takes `&Vault<T,YT>` and asserts the id matches (`EWrongVault = 1013`).
-
-Authoritative signatures:
-
-```move
-public fun kai_start_redeem<T, YT>(
-    access: &AccessList,
-    pm: &mut PositionManager,
-    vault: &kai_vault::Vault<T, YT>,
-    yt_amount: u64,
-    clock: &Clock,
-    ctx: &mut TxContext,
-): (Coin<YT>, KaiRedeemTicket<T, YT>);
-
-public fun kai_finish_redeem<T, YT>(
-    pm: &mut PositionManager,
-    vault: &kai_vault::Vault<T, YT>,
-    fee_house: &mut FeeHouse,
-    ticket: KaiRedeemTicket<T, YT>,
-    underlying: Coin<T>,
-    ctx: &mut TxContext,
-);
-```
-
-```
-1. cdpm::kai_start_redeem<T, YT>(access, pm, vault, yt_amount, clock)          → (coin_yt, ticket)
-2. kai_sav::vault::withdraw<T, YT>(vault, coin_yt.into_balance(), clock)       → withdraw_ticket
-3..3+N. for each strategy s with to_withdraw(s) > 0:
-        <strategy_module>::strategy_withdraw_for_vault(strategy, vault, withdraw_ticket, ...)
-3+N+1. balance_t = kai_sav::vault::redeem_withdraw_ticket<T, YT>(vault, withdraw_ticket)
-3+N+2. cdpm::kai_finish_redeem<T, YT>(pm, vault, fee_house, ticket, balance_t.into_coin())
-```
+- `vaultObjectId` — the `kai_vault::Vault<T, YT>` shared object.
+- `strategyObjectId` — a `klsp::Strategy<T, ST>` attached to the vault.
+- `supplyPoolObjectId` — the matching `kai_leverage::supply_pool::SupplyPool<T, ST>`.
+- `feeHouseId` — cdpm's `FeeHouse` shared object.
 
 ```typescript
 async function protocolRedeemFromKai(
@@ -173,76 +123,27 @@ async function protocolRedeemFromKai(
   protocolSigner: any,
   pmId: string,
   underlyingCoinType: string,
+  stCoinType: string,
   ytCoinType: string,
   vaultObjectId: string,
+  strategyObjectId: string,
+  supplyPoolObjectId: string,
   ytAmount: bigint,
-  // Off-chain SDK enumerates active strategies attached to the live Vault<T, YT>
-  // and returns one move-call descriptor per strategy with to_withdraw > 0.
-  strategyWalkers: Array<{
-    target: string;
-    typeArguments: string[];
-    extraArgs: (tx: Transaction, withdrawTicket: any) => any[];
-  }>,
 ) {
   const tx = new Transaction();
 
-  const [coinYT, ticket] = tx.moveCall({
-    target: `${CDPM_PACKAGE}::cdpm::kai_start_redeem`,
-    typeArguments: [underlyingCoinType, ytCoinType],
+  tx.moveCall({
+    target: `${CDPM_PACKAGE}::cdpm::kai_redeem`,
+    typeArguments: [underlyingCoinType, stCoinType, ytCoinType],
     arguments: [
       tx.object(CDPM_MAINNET.ACCESS_LIST_ID),
       tx.object(pmId),
+      tx.object(CDPM_MAINNET.FEE_HOUSE_ID),
       tx.object(vaultObjectId),
+      tx.object(strategyObjectId),
+      tx.object(supplyPoolObjectId),
       tx.pure.u64(ytAmount),
       tx.object('0x6'),
-    ],
-  });
-
-  const balanceYT = tx.moveCall({
-    target: '0x2::coin::into_balance',
-    typeArguments: [ytCoinType],
-    arguments: [coinYT],
-  });
-  const withdrawTicket = tx.moveCall({
-    target: `${KAI_SAV_PACKAGE}::vault::withdraw`,
-    typeArguments: [underlyingCoinType, ytCoinType],
-    arguments: [tx.object(vaultObjectId), balanceYT, tx.object('0x6')],
-  });
-
-  for (const walker of strategyWalkers) {
-    tx.moveCall({
-      target: walker.target,
-      typeArguments: walker.typeArguments,
-      arguments: walker.extraArgs(tx, withdrawTicket),
-    });
-  }
-
-  const balanceT = tx.moveCall({
-    target: `${KAI_SAV_PACKAGE}::vault::redeem_withdraw_ticket`,
-    typeArguments: [underlyingCoinType, ytCoinType],
-    arguments: [tx.object(vaultObjectId), withdrawTicket],
-  });
-  const coinT = tx.moveCall({
-    target: '0x2::coin::from_balance',
-    typeArguments: [underlyingCoinType],
-    arguments: [balanceT],
-  });
-
-  // No dust topup needed: cdpm's `kai_finish_redeem` tolerates up to
-  // `REDEEM_DUST_TOLERANCE_RAW = 4` raw of floor-div dust on-chain (covers
-  // single-strategy mainnet SAV dust ≤2 raw with margin). See "Floor-div
-  // dust" below. Optional fallback for a future ≥3-strategy vault whose
-  // dust exceeds 4: insert an extra `coin::join(coinT, topupCoin)` here.
-
-  tx.moveCall({
-    target: `${CDPM_PACKAGE}::cdpm::kai_finish_redeem`,
-    typeArguments: [underlyingCoinType, ytCoinType],
-    arguments: [
-      tx.object(pmId),
-      tx.object(vaultObjectId),
-      tx.object(CDPM_MAINNET.FEE_HOUSE_ID),
-      ticket,
-      coinT,
     ],
   });
 
@@ -250,11 +151,13 @@ async function protocolRedeemFromKai(
 }
 ```
 
-`strategy_withdraw_for_vault` discharges its own `kai_leverage::access_management::ActionRequest` internally — protocol bots do **not** assemble or co-sign an `ActionRequest`. The walk is purely a sequence of move calls the SDK builds from the live `Vault<T, YT>` snapshot.
+Emits `KaiRedeemed { pm_id, coin_type, yt_type, yt_burned, redeemed_amount, principal_portion, interest, fee_amount }`.
 
-### Sizing Redemptions Before Calling `kai_start_redeem`
+---
 
-Protocol bots, like agents, usually know "I need `K` underlying for the next operation" and must compute `yt_amount` from that. `kai_start_redeem` takes YT, not underlying.
+## Sizing Redemptions
+
+Protocol bots usually know "I need `K` underlying for the next operation" and must compute `yt_amount` from that. `kai_redeem` takes YT, not underlying.
 
 - **Pre-fee target** — I need at least `K` underlying out of Kai, ignoring fee:
 
@@ -269,7 +172,7 @@ Protocol bots, like agents, usually know "I need `K` underlying for the next ope
                     / ((10000 − r_bp) × total_available × YT_in_pm + r_bp × yt_supply × P_in_pm))
   ```
 
-Both use **ceiling division** because cdpm's prediction floors. Asking for `floor(N)` risks receiving 1 unit fewer than the target. The full derivation, edge cases, and an iterative refinement helper (`ytToBurnForTargetNet`) live in [`cdpm-calculation-skill/reference/kai-lending-math.md`](../../cdpm-calculation-skill/reference/kai-lending-math.md) section 7.
+Both use **ceiling division** because the underlying delivery floors. Asking for `floor(N)` risks receiving 1 unit fewer than the target. The full derivation, edge cases, and an iterative refinement helper (`ytToBurnForTargetNet`) live in [`cdpm-calculation-skill/reference/kai-lending-math.md`](../../cdpm-calculation-skill/reference/kai-lending-math.md) section 7.
 
 ```typescript
 import {
@@ -282,13 +185,15 @@ async function protocolRedeemForTargetNet(
   protocolSigner: any,
   pmId: string,
   underlyingCoinType: string,
+  stCoinType: string,
   ytCoinType: string,
   vaultObjectId: string,
+  strategyObjectId: string,
+  supplyPoolObjectId: string,
   desiredNet: bigint,
   feeRateBp: bigint,
   vaultSnapshot: KaiVaultSnapshot,
   pmKaiVault: KaiPmVaultSnapshot,
-  strategyWalkers: any[],
 ) {
   const ytAmount = ytToBurnForTargetNet(
     vaultSnapshot, pmKaiVault, desiredNet, feeRateBp,
@@ -296,24 +201,14 @@ async function protocolRedeemForTargetNet(
 
   return protocolRedeemFromKai(
     client, protocolSigner, pmId,
-    underlyingCoinType, ytCoinType, vaultObjectId,
+    underlyingCoinType, stCoinType, ytCoinType,
+    vaultObjectId, strategyObjectId, supplyPoolObjectId,
     ytAmount,
-    strategyWalkers,
   );
 }
 ```
 
-`ytToBurnForTargetNet` may return `MAX_U64` when the `KaiVault<T, YT>` entry cannot satisfy `desiredNet`. **Protocol callers should still cap the burn** — not because of `1009` (now handled on-chain by `REDEEM_DUST_TOLERANCE_RAW`, see below) but to leave a residual `pm.lending` entry so the bag key survives and the user's close-PM path stays clean. See [`cdpm-calculation-skill/reference/kai-lending-math.md` §9.1](../../cdpm-calculation-skill/reference/kai-lending-math.md#91-floor-div-dust-on-chain-tolerance-and-deploy-side-floor) for the math.
-
-Cap at `wrapperRaw − LENDING_SAFE_MARGIN_WRAPPER_RAW` (default 100 YT). The residual is reclaimed when the user closes the PM.
-
-### Floor-div dust: tolerated on-chain (no topup needed)
-
-cdpm's `kai_finish_redeem` tolerates floor-div dust up to `REDEEM_DUST_TOLERANCE_RAW = 4` raw on-chain. The Kai strategy walk floors twice per strategy (`muldiv` underlying→shares, then `redeem_lossy` shares→underlying), so dust ≈ 2 raw × (strategies drawn). All current mainnet SAVs are single-strategy ⟹ ≤2 raw, well within the tolerance. Dust is constant in principal (not proportional) and structural to the vault — not raised by transaction patterns like withdraw-then-redeposit.
-
-⟹ **Protocol bots do NOT need a `coin::join` dust topup on `kai_finish_redeem`.** No per-redeem donation into `pm.balance`, no per-asset wallet pre-funding. (Earlier guidance required a mandatory ~3 raw topup from the bot wallet; that requirement is removed. Capping the burn remains useful for the residual-entry reason above.)
-
-**Optional fallback (rare).** If a future ≥3-strategy vault surfaces dust > 4 raw and 1009 reappears, merge `(observedDust − 4)` raw of `Coin<T>` between the redeem chain and `kai_finish_redeem`. Preferred over raising the on-chain constant (which would weaken the high-value-asset margin — see [`cdpm-calculation-skill/reference/kai-lending-math.md` §9.1](../../cdpm-calculation-skill/reference/kai-lending-math.md#91-floor-div-dust-on-chain-tolerance-and-deploy-side-floor)). cdpm exposes no protocol-tier function that returns a spendable `Coin<T>` from PM bags, so the topup must come from the bot wallet — but this is a contingency, not a normal hot-path requirement.
+`ytToBurnForTargetNet` may return `MAX_U64` when the `KaiVault<T, YT>` entry cannot satisfy `desiredNet`. Passing `MAX_U64` drains the entire entry; cap the burn at `wrapperRaw − LENDING_SAFE_MARGIN_WRAPPER_RAW` (default 100 YT) when you want to keep the entry alive for the user-close flow. The residual is reclaimed when the user closes the PM.
 
 ```typescript
 const LENDING_SAFE_MARGIN_WRAPPER_RAW = 100n;
@@ -328,17 +223,20 @@ function capRedeemBurnRaw(exact: bigint, wrapperRaw: bigint): bigint | null {
 const exact = ytToBurnForTargetUnderlying(vaultSnapshot, desiredUnderlying);
 const burn  = capRedeemBurnRaw(exact, BigInt(entry.wrapperRaw));
 if (burn === null) return;  // entry too small to safely redeem
-tx.moveCall({ target: `${CDPM}::cdpm::kai_start_redeem`,
-  arguments: [..., tx.pure.u64(burn.toString()), ...] });
+tx.moveCall({
+  target: `${CDPM_PACKAGE}::cdpm::kai_redeem`,
+  typeArguments: [underlyingCoinType, stCoinType, ytCoinType],
+  arguments: [..., tx.pure.u64(burn.toString()), ...],
+});
 ```
 
-Always re-snapshot vault state right before signing — Kai's `total_available_balance` ticks every block as time-locked profit unlocks.
+Re-snapshot vault state right before signing — Kai's `total_available_balance` ticks every block as time-locked profit unlocks.
 
 ---
 
 ## Protocol-Tier Permission Invariant
 
-The protocol-tier branch of `assert_caller_authorized` *only* fires when `pm.agents.is_empty()`. Once the owner authorizes any agent, the protocol tier is locked out until every agent is revoked. This is the same rule Scallop uses; it applies to both `kai_start_supply` and `kai_start_redeem`.
+The protocol-tier branch of `assert_caller_authorized` *only* fires when `pm.agents.is_empty()`. Once the owner authorizes any agent, the protocol tier is locked out until every agent is revoked. The same rule applies to `scallop_supply` / `scallop_redeem`.
 
 ```typescript
 async function validateProtocolKaiOperation(
@@ -369,19 +267,17 @@ async function validateProtocolKaiOperation(
 }
 ```
 
-**No wrapper-extract escape for lending.** cdpm exposes no `user_extract_kai_yt`-style function for anyone — not for protocol bots, not for the owner. If Kai is impaired, no caller can rescue raw `Coin<YT>` from `pm.lending`. The only exit is the full redeem flow (`kai_start_redeem` → `vault::withdraw` → strategy walk → `redeem_withdraw_ticket` → `kai_finish_redeem`); if Kai's `vault::withdraw` aborts (Version bump, withdrawals disabled, etc.), the cdpm hot-potato ticket is never consumed, `pm.lending` stays intact, and recovery is to retry the normal flow once Kunalabs ships an SDK update against the new Version.
+The exit path from `pm.lending` is `kai_redeem<T, ST, YT>`, which walks the full vault withdrawal flow, deducts the yield fee, and lands the remainder in `pm.balance[T]`. If any leg of the internal walk aborts (Kai vault paused, supply-pool rate limit, strategy mismatch), `kai_redeem` aborts as a whole — `pm.lending` stays intact, and the protocol bot retries once Kai is healthy.
 
 ---
 
-## Events Emitted by Protocol Kai Operations
-
-Identical event types as user/agent paths — Sui event envelopes already record `event.sender`, so the protocol address is observable without a separate `by` field.
+## Events
 
 ```typescript
 interface KaiSupplied {
   pm_id: string;
-  coin_type: string;
-  yt_type: string;
+  coin_type: string;       // type_name<T>
+  yt_type: string;         // type_name<YT>
   deposit_amount: u64;
   yt_minted: u64;
 }
@@ -398,27 +294,23 @@ interface KaiRedeemed {
 }
 ```
 
-cdpm emits no extraction event for Kai lending — there is no wrapper-extract function. `KaiRedeemed` is the only exit-related Kai event and is emitted by `kai_finish_redeem` once the underlying lands in `pm.balance`.
+Sui event envelopes already record `event.sender`, so the protocol address is observable without a separate `by` field.
 
 ---
 
-## Error Cheat Sheet (protocol-flavored)
+## Error Cheat Sheet
 
-| Code | Constant | Most likely cause for a protocol bot |
-|------|----------|---------------------------------------|
-| 1002 | `ENotAllow` | Either: protocol address not in AccessList, or PM has at least one agent (protocol-tier locked out). Snapshot `pm.agents` and `access.allow` before each batch. |
-| 1004 | `ELendingNotEmpty` | Owner attempted `user_close_pm` while the protocol bot still has a Kai entry in `pm.lending`. Coordinate with owner — drain via the full redeem flow before close (no wrapper-extract bypass exists). |
-| 1005 | `ENoSuchVault` | `kai_start_redeem` for a `(T, YT)` pair with no entry. Re-fetch `pm.lending` before sizing. |
-| 1006 | `EReserveEmpty` | `total_yt_supply == 0` on the live vault — degenerate. Bootstrap by supplying first or skip this vault. |
-| 1007 | `EZeroExpected` | Amount too small for the current vault ratio. Increase amount; for tiny TVL vaults, batch multiple PMs into one supply. |
-| 1008 | `EWrongPm` | Hot-potato ticket consumed against a different PM. Bug in batch construction — assert `pmId` consistency across all four cdpm move-calls in the batch. |
-| 1009 | `EAmountShortfall` | Floor-div dust up to 4 raw is tolerated on-chain (`REDEEM_DUST_TOLERANCE_RAW`), so for current single-strategy mainnet SAVs this should not trip from rounding. Most likely cause: vault state moved between snapshot and signing — re-snapshot just before signing. Rare future cause: a ≥3-strategy vault whose dust exceeds 4 raw — fall back to a `coin::join` topup of `(observedDust − 4)` raw before `kai_finish_redeem` (see "Floor-div dust"). |
-| 1013 | `EWrongVault` | `kai_finish_*` received a `&Vault<T,YT>` whose id ≠ ticket.vault_id. Reuse the same `tx.object(vaultObjectId)` handle across `start_*` and `finish_*`. |
+| Code | Constant | Cause for a protocol bot |
+|------|----------|---------------------------|
+| 1002 | `ENotAllow` | Either: protocol address not in AccessList, or PM has at least one agent (protocol-tier locked out by the `assert_caller_authorized` union). Snapshot `pm.agents` and `access.allow` before each batch. |
+| 1004 | `ELendingNotEmpty` | Owner attempted `user_close_pm` while the protocol bot still has a Kai entry in `pm.lending`. Coordinate with the owner — drain via `kai_redeem` before close. |
+| 1005 | `ENoSuchVault` | `kai_redeem` for a `(T, YT)` pair with no entry. Re-fetch `pm.lending` before sizing. |
+| 1006 | `ENoSuchBalance` | `kai_supply` for a `T` with no balance entry in `pm.balance`. Fund `pm.balance[T]` first via `user_add_liquidity_to_balance` (owner) or by removing liquidity / collecting fees. |
 
 External aborts that bubble up from Kai itself (cdpm does not produce these):
 
-- `vault::EWithdrawalsDisabled` — admin disabled withdrawals; nobody can drain through cdpm. `pm.lending` stays intact (the hot-potato ticket is never consumed) and waits for Kunalabs to re-enable withdrawals.
+- `vault::EWithdrawalsDisabled` — admin disabled withdrawals; nobody can drain through cdpm. `pm.lending` stays intact and waits for Kunalabs to re-enable withdrawals.
 - `vault::ETvlCapExceeded` — admin set a `tvl_cap` that the supply would breach.
 - `vault::ERateLimit` — admin-configured rate limiter rejected the operation.
 
-When any of these hit, the cdpm hot-potato ticket is never consumed (the abort happens inside the inner Kai move-call before `kai_finish_*` runs), so the PM state is intact. The protocol bot can reschedule once Kai is healthy.
+When any of these hit, `kai_supply` / `kai_redeem` aborts before PM mutation completes — PM state is intact. The protocol bot can reschedule once Kai is healthy.

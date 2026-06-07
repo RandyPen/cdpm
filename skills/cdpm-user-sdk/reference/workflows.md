@@ -153,45 +153,30 @@ async function createPositionSmart(
 
 ## Close Position
 
-> **IMPORTANT — reward safety**
-> `pool::close_position` (used internally by `user_close_pm`) only returns
-> underlying tokens and accumulated trading fees. Any **incentive reward
-> tokens** still held by the position will be destroyed together with the
-> `ClosePositionCert`. Because the contract itself doesn't know which
-> `RewardType`s a pool has, you MUST construct a PTB that first calls
-> `user_collect_reward<CoinTypeA, CoinTypeB, RewardType>` once for each
-> reward token on that pool (typically 1-3 types), then `user_close_pm`
-> in the same transaction.
-
-> **IMPORTANT — lending bag must be empty (Scallop AND Kai)**
-> `user_close_pm` asserts `bag::is_empty(&pm.lending)` and aborts with
-> `ELendingNotEmpty (1004)` otherwise. The same `lending: Bag` holds both
-> Scallop `ScallopVault<T>` entries (key = `type_name<T>`) and Kai SAV
-> `KaiVault<T, YT>` entries (key = `type_name<YT>`); every entry of either
-> flavor must be drained before close. cdpm exposes **no** wrapper-extract
-> escape (no `user_extract_scallop_market_coin`, no `user_extract_kai_yt`);
-> the only exit path is the full redeem flow. For Scallop, run
-> `accrue_interest::accrue_interest_for_market → scallop_start_redeem →
-> redeem::redeem → scallop_finish_redeem` followed by
-> `user_remove_liquidity_from_balance<T>`. For Kai, run `kai_start_redeem →
-> vault::withdraw → strategy walk → redeem_withdraw_ticket →
-> kai_finish_redeem` followed by `user_remove_liquidity_from_balance<T>`.
-> See `reference/scallop-lending.md` and `reference/kai-lending.md` for
-> the full recipes.
+> **IMPORTANT — `user_close_pm` preconditions**
 >
-> **Full-drain dust handled on-chain (no top-up required).** Each
-> `*_finish_redeem` enforces `redeemed_amount + REDEEM_DUST_TOLERANCE_RAW
-> >= expected_underlying` (`REDEEM_DUST_TOLERANCE_RAW = 4` raw). The Kai
-> strategy walk floors twice per strategy ⟹ dust ≈ 2 raw × (strategies
-> drawn) — single-strategy mainnet SAVs ⟹ ≤2, safely under the tolerance.
-> Scallop's upstream shares cdpm's single floor-div ⟹ dust ≈ 0. The
-> close-PM PTB therefore does **not** need a `coin::join` topup — neither
-> on the Kai branch nor on the Scallop branch — and does not need the
-> three-tier topup resolver. If a future Kai vault ever draws from ≥3
-> strategies and 1009 reappears, the contingency fallback is documented
-> in `reference/kai-lending.md` § Full-Drain Pattern (insert a
-> `coin::join(coinT, topup)` of `observedDust − 4` raw between the
-> redeem chain and `kai_finish_redeem`).
+> Before `user_close_pm` can succeed it asserts (each surfaces as a cdpm
+> error code, not a generic framework abort):
+>
+> - Every reward type on the pool has been collected via
+>   `user_collect_reward<CoinTypeA, CoinTypeB, RewardType>` — otherwise
+>   `EPositionHasRewards (1007)` fires. `pool::close_position` (called
+>   internally) destroys any leftover reward balances together with the
+>   `ClosePositionCert`, so calling close without collecting first burns
+>   the rewards.
+> - Every Scallop and Kai vault entry in `pm.lending` has been redeemed
+>   — otherwise `ELendingNotEmpty (1004)` fires. The same `lending: Bag`
+>   holds both `ScallopVault<T>` (key = `type_name<T>`) and
+>   `KaiVault<T, YT>` (key = `type_name<YT>`); empty both flavors.
+>   Use `scallop_redeem<T>` with `scoin_amount = u64::MAX` and
+>   `kai_redeem<T, ST, YT>` with `yt_amount = u64::MAX` (each is one
+>   `tx.moveCall`); see `reference/scallop-lending.md` and
+>   `reference/kai-lending.md`.
+> - `pm.balance` has been drained — otherwise `EBalanceNotEmpty (1008)`
+>   fires. Withdraw every type with
+>   `user_remove_liquidity_from_balance<T>(u64::MAX)`.
+> - `pm.fee` has been drained — otherwise `EFeeNotEmpty (1009)` fires.
+>   Withdraw every type with `user_withdraw_fee<T>(u64::MAX)`.
 
 ```typescript
 async function closePosition(
@@ -223,7 +208,7 @@ async function closePosition(
 
 ### Close Position Safely (collect rewards first)
 
-The following variant sweeps every `RewardType` on the pool **before** closing, so no incentive rewards are lost. It also drains every residual `pm.balance[T]` and `pm.fee[T]` (mandatory — `user_close_pm` calls `destroy_empty` on both bags) and emits **one** batched `transferObjects` at the end instead of one call per coin (each `transferObjects` is its own PTB command with its own base cost):
+The following variant sweeps every `RewardType` on the pool **before** closing, so no incentive rewards are lost. It also redeems every Scallop and Kai lending entry, drains every residual `pm.balance[T]` and `pm.fee[T]` (mandatory — `user_close_pm` asserts both bags empty), and emits **one** batched `transferObjects` at the end instead of one call per coin (each `transferObjects` is its own PTB command with its own base cost):
 
 ```typescript
 async function closePositionSafe(
@@ -235,15 +220,20 @@ async function closePositionSafe(
   rewardCoinTypes: string[],  // e.g. ["0x2::sui::SUI", "0x...::rewardX::RewardX"]
   coinTypeA: string,
   coinTypeB: string,
-  // Off-chain pre-scan of pm.balance and pm.fee dynamic-field keys + values.
-  // The same scan feeds resolveTopup (see kai-lending.md § Top-Up Pattern).
-  pmSnap: { balance: Map<string, bigint>; fee: Map<string, bigint> },
+  // Off-chain pre-scan of pm.lending, pm.balance, pm.fee dynamic-field keys.
+  pmSnap: {
+    scallopVaults: Array<{ T: string }>;
+    kaiVaults: Array<{ T: string; ST: string; YT: string;
+                       vaultId: string; strategyId: string; supplyPoolId: string }>;
+    balance: Map<string, bigint>;
+    fee: Map<string, bigint>;
+  },
 ) {
   const tx = new Transaction();
   const REDEEM_ALL_U64 = 0xffffffffffffffffn;
   const toTransfer: TransactionObjectArgument[] = [];
 
-  // Step 1: collect every reward type BEFORE close
+  // Step 1: collect every reward type BEFORE close (otherwise EPositionHasRewards=1007).
   for (const rewardType of rewardCoinTypes) {
     const [rewardCoin] = tx.moveCall({
       target: `${CDPM_PACKAGE}::cdpm::user_collect_reward`,
@@ -258,16 +248,46 @@ async function closePositionSafe(
     toTransfer.push(rewardCoin);
   }
 
-  // Step 2: (if any lending entries) run *_finish_redeem flows here.
-  // The top-up between each *_start_redeem and *_finish_redeem is sourced
-  // through the three-tier resolver (pm.balance[T] → pm.fee[T] → wallet) —
-  // see kai-lending.md § Top-Up Pattern. Topup-split handles are consumed
-  // by coin::join and MUST NOT enter toTransfer. The post-finish underlying
-  // lands back in pm.balance[T] and is drained by Step 3.
+  // Step 2: drain every Scallop lending entry (ScallopVault<T>).
+  //         Net underlying lands in pm.balance[T] and is drained in Step 4.
+  for (const v of pmSnap.scallopVaults) {
+    tx.moveCall({
+      target: `${CDPM_PACKAGE}::cdpm::scallop_redeem`,
+      typeArguments: [v.T],
+      arguments: [
+        tx.object(CDPM_MAINNET.ACCESS_LIST_ID),
+        tx.object(pmId),
+        tx.object(CDPM_MAINNET.FEE_HOUSE_ID),
+        tx.object(SCALLOP_VERSION_ID),
+        tx.object(SCALLOP_MARKET_ID),
+        tx.pure.u64(REDEEM_ALL_U64),
+        tx.object('0x6'),
+      ],
+    });
+  }
 
-  // Step 3: drain every remaining bag key. Use REDEEM_ALL_U64 so the entry
+  // Step 3: drain every Kai lending entry (KaiVault<T, YT>).
+  //         Net underlying lands in pm.balance[T] and is drained in Step 4.
+  for (const v of pmSnap.kaiVaults) {
+    tx.moveCall({
+      target: `${CDPM_PACKAGE}::cdpm::kai_redeem`,
+      typeArguments: [v.T, v.ST, v.YT],
+      arguments: [
+        tx.object(CDPM_MAINNET.ACCESS_LIST_ID),
+        tx.object(pmId),
+        tx.object(CDPM_MAINNET.FEE_HOUSE_ID),
+        tx.object(v.vaultId),
+        tx.object(v.strategyId),
+        tx.object(v.supplyPoolId),
+        tx.pure.u64(REDEEM_ALL_U64),
+        tx.object('0x6'),
+      ],
+    });
+  }
+
+  // Step 4: drain every remaining bag key. Use REDEEM_ALL_U64 so the entry
   // is fully removed (amount >= entry_value → bag::remove, leaving an empty
-  // bag for user_close_pm's destroy_empty).
+  // bag — required by user_close_pm's EBalanceNotEmpty / EFeeNotEmpty checks).
   for (const T of pmSnap.balance.keys()) {
     const [coin] = tx.moveCall({
       target: `${CDPM_PACKAGE}::cdpm::user_remove_liquidity_from_balance`,
@@ -285,7 +305,8 @@ async function closePositionSafe(
     toTransfer.push(coin);
   }
 
-  // Step 4: close (consumes pm; bag::destroy_empty asserts both bags are empty)
+  // Step 5: close (consumes pm; asserts pm.balance / pm.fee / pm.lending all empty
+  // and PositionInfo.rewards_owned all zero).
   tx.moveCall({
     target: `${CDPM_PACKAGE}::cdpm::user_close_pm`,
     typeArguments: [coinTypeA, coinTypeB],
@@ -299,7 +320,7 @@ async function closePositionSafe(
     ],
   });
 
-  // Step 5: ONE batched transfer for everything destined to the user.
+  // Step 6: ONE batched transfer for everything destined to the user.
   if (toTransfer.length > 0) {
     tx.transferObjects(toTransfer, signer.toSuiAddress());
   }
@@ -310,11 +331,45 @@ async function closePositionSafe(
 
 > The LP underlying (`Coin<CoinTypeA>` / `Coin<CoinTypeB>` from `pool::close_position`) is transferred to the sender **inside** `user_close_pm` via Move-side `transfer::public_transfer` — those two coins do not pass through the client and are not part of `toTransfer`.
 
+## Return Record to GlobalRecord (`unregister_record`)
+
+After closing every PositionManager owned by the user, the per-user
+`Record` table is empty and can be returned to the `GlobalRecord`. This
+frees the `address → ID` entry so the user can later `register_and_return_record`
+again. The call aborts if `record.record` still tracks any PM.
+
+```move
+public fun unregister_record(global_record: &mut GlobalRecord, record: Record, ctx: &TxContext);
+```
+
+```typescript
+async function unregisterRecord(
+  client: SuiGrpcClient,
+  signer: any,
+  globalRecordId: string,
+  recordId: string,
+) {
+  const tx = new Transaction();
+
+  tx.moveCall({
+    target: `${CDPM_PACKAGE}::cdpm::unregister_record`,
+    arguments: [
+      tx.object(globalRecordId),  // shared
+      tx.object(recordId),        // owned by sender; consumed
+    ],
+  });
+
+  return await client.signAndExecuteTransaction({ signer, transaction: tx });
+}
+```
+
+Emits `RecordDeleted { record_id, owner }`.
+
 ## Events
 
 ### Monitor User Events
 
-> Event timestamps are available on `SuiEvent.timestampMs`; the on-chain payload no longer includes a `timestamp` field.
+> Event timestamps are available on `SuiEvent.timestampMs`; the on-chain payload does not include a `timestamp` field. Sui event envelopes record the transaction sender — reach for `event.sender` if you need to distinguish owner / agent / protocol callers.
 
 ```typescript
 // Position created
@@ -334,7 +389,6 @@ interface LiquidityAdded {
   bins: number[];
   amount_a: string;  // Actual amount A consumed
   amount_b: string;  // Actual amount B consumed
-  by: string;
 }
 
 // Liquidity removed
@@ -345,7 +399,6 @@ interface LiquidityRemoved {
   liquidity_shares: string[];
   amount_a: string;   // Actual token A returned
   amount_b: string;   // Actual token B returned
-  by: string;
 }
 
 // Subscribe to events

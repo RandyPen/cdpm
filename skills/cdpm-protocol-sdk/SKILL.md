@@ -1,6 +1,6 @@
 ---
 name: cdpm-protocol-sdk
-description: TypeScript SDK guide for CDPM protocol integration and management. Covers architecture, permission system, fee mechanics, admin operations, and the Scallop and Kai SAV hot-potato supply/redeem APIs for agents-empty PMs. Use when building protocol integrations, managing AccessList, or configuring protocol parameters.
+description: TypeScript SDK guide for CDPM protocol integration and management. Covers architecture, permission system, fee mechanics, admin operations, and the Scallop and Kai SAV supply/redeem APIs for agents-empty PMs. Use when building protocol integrations, managing AccessList, or configuring protocol parameters.
 ---
 
 # CDPM Protocol SDK Guide
@@ -24,10 +24,10 @@ import { SuiGrpcClient } from '@mysten/sui/grpc';
 - **[Fee Mechanics](reference/permission-system.md#fee-mechanics)** - Fee calculation and distribution
 
 ### Operations
-- **[Admin Operations](reference/admin-operations.md)** - Set fee rate (cap 30%), manage AccessList, collect fees
-- **[Protocol Operations](reference/protocol-operations.md)** - Protocol-managed liquidity operations and Scallop supply/redeem
-- **[Scallop Lending](reference/scallop-lending.md)** - **REQUIRED PTB[0]: `protocol::accrue_interest::accrue_interest_for_market(version, market, clock)` — cdpm-enforced via `EStaleScallopState (1011)`, NOT injected by `scallopTx.deposit` / `depositQuick`.** Protocol-tier `scallop_start_supply` / `scallop_start_redeem`; canonical `Market` rebinding on `finish_*` (`EWrongMarket = 1012`); agents-empty gating; shared yield-fee math; trust-boundary discussion.
-- **[Kai SAV Lending](reference/kai-lending.md)** - Protocol-tier `kai_start_supply` / `kai_start_redeem` with strategy walk and canonical `Vault` rebinding on `finish_*` (`EWrongVault = 1013`); agents-empty gating; shared yield-fee math
+- **[Admin Operations](reference/admin-operations.md)** - Set fee rate (cap 50%), manage AccessList, collect fees
+- **[Protocol Operations](reference/protocol-operations.md)** - Protocol-managed liquidity operations, Cetus reward collection, and Scallop / Kai SAV supply / redeem
+- **[Scallop Lending](reference/scallop-lending.md)** - `scallop_supply<T>` / `scallop_redeem<T>` — one `tx.moveCall` each; agents-empty gating; shared yield-fee math; trust-boundary discussion.
+- **[Kai SAV Lending](reference/kai-lending.md)** - `kai_supply<T, YT>` / `kai_redeem<T, ST, YT>` — one `tx.moveCall` each; agents-empty gating; shared yield-fee math.
 
 ### Reference
 - **[Events](reference/events.md)** - Admin, protocol, Scallop, and Kai operation events
@@ -105,7 +105,7 @@ const adminSecurity = {
   useMultisig: true,
   
   // 2. Set reasonable fee rate limits
-  maxFeeRate: 3000,  // 30%
+  maxFeeRate: 5000,  // 50% — contract-enforced ceiling
   
   // 3. Regular access list audits
   auditInterval: 7 * 24 * 60 * 60 * 1000,  // 7 days
@@ -155,40 +155,36 @@ async function validateProtocolOperation(
 ```typescript
 // Source: sources/cdpm.move — codes are SHARED between Scallop and Kai integrations.
 const ERROR_CODES = {
-  ENotOwner:           1001, // Caller is not pm.owner (user_get_position / user_get_and_return_position — Cetus DLMM Position escape, the sole owner-only function)
-  ENotAllow:           1002, // Caller not in agents / access list (or invariant broken)
-  EInvalidFeeRate:     1003, // admin_set_fee given rate > MAX_FEE_RATE (3000 / 30%)
+  ENotOwner:           1001, // Caller is not pm.owner (user-only operations such as user_get_position / user_get_and_return_position)
+  ENotAllow:           1002, // Caller not in agents / access list, or protocol-tier gating with non-empty pm.agents
+  EInvalidFeeRate:     1003, // admin_set_fee given rate > MAX_FEE_RATE (5000 / 50%)
   ELendingNotEmpty:    1004, // user_close_pm called with non-empty lending Bag (any Scallop or Kai entry)
   ENoSuchVault:        1005, // pull_from_scallop_lending or pull_from_kai_lending for an absent vault entry
-  EReserveEmpty:       1006, // Scallop reserve degenerate (cash+debt-revenue == 0) OR Kai vault total_yt_supply == 0
-  EZeroExpected:       1007, // scallop_start_* / kai_start_* would yield 0 — amount too small
-  EWrongPm:            1008, // Hot-potato ticket consumed against a different PM (Scallop or Kai)
-  EAmountShortfall:    1009, // scallop_finish_* / kai_finish_* received Coin with value < ticket.expected
-  ENoSuchBalance:      1010, // withdraw_from_balance / withdraw_from_fee for an absent type key
-  EStaleScallopState:  1011, // scallop_start_* called before accrue_interest_for_market in the same PTB second
-  EWrongMarket:        1012, // scallop_finish_* received a Market with id != ticket.market_id
-  EWrongVault:         1013, // kai_finish_* received a Vault with id != ticket.vault_id
+  ENoSuchBalance:      1006, // withdraw_from_balance / withdraw_from_fee for an absent type key
+  EPositionHasRewards: 1007, // user_close_pm called with unclaimed Cetus pool rewards on PositionInfo.rewards_owned
+  EBalanceNotEmpty:    1008, // user_close_pm called with non-empty balance Bag
+  EFeeNotEmpty:        1009, // user_close_pm called with non-empty fee Bag
 };
 
 function parseError(error: string): string {
   if (error.includes('ENotOwner')) {
     return 'Operation requires owner permission';
   } else if (error.includes('ENotAllow')) {
-    return 'Caller not in AccessList, or PositionManager has active agents';
+    return 'Caller not in AccessList, or PositionManager has active agents (protocol tier requires pm.agents empty)';
   } else if (error.includes('EInvalidFeeRate')) {
-    return 'Fee rate must be between 0 and 3000 (30% cap enforced by admin_set_fee)';
+    return 'Fee rate must be between 0 and 5000 (50% cap enforced by admin_set_fee)';
   } else if (error.includes('ELendingNotEmpty')) {
     return 'PositionManager.lending is non-empty; drain every ScallopVault<T> AND KaiVault<T, YT> entry before user_close_pm';
-  } else if (error.includes('EReserveEmpty')) {
-    return 'Underlying reserve degenerate. Scallop: zero supply or zero (cash+debt-revenue) — accrue_interest_for_market first. Kai: total_yt_supply == 0.';
-  } else if (error.includes('EAmountShortfall')) {
-    return 'finish_* Coin value < ticket.expected. Scallop: likely stale accrual — run accrue_interest_for_market first. Kai: vault state moved between snapshot and signing — re-snapshot.';
-  } else if (error.includes('EStaleScallopState')) {
-    return 'scallop_start_* called without accrue_interest::accrue_interest_for_market in the same PTB. Make it command 0 of the batch — cdpm enforces this.';
-  } else if (error.includes('EWrongMarket')) {
-    return 'scallop_finish_* received a Market with id != ticket.market_id. Reuse the same tx.object(SCALLOP_MARKET_ID) handle across start_* and finish_*.';
-  } else if (error.includes('EWrongVault')) {
-    return 'kai_finish_* received a Vault with id != ticket.vault_id. Reuse the same tx.object(vaultObjectId) handle across start_* and finish_*.';
+  } else if (error.includes('ENoSuchVault')) {
+    return 'scallop_redeem / kai_redeem invoked for a (T) or (T, YT) pair with no entry in pm.lending';
+  } else if (error.includes('ENoSuchBalance')) {
+    return 'Internal withdraw_from_balance / withdraw_from_fee called for a coin type not present in the bag';
+  } else if (error.includes('EPositionHasRewards')) {
+    return 'user_close_pm aborted because Cetus PositionInfo.rewards_owned has nonzero entries — call user_collect_reward for each reward type first';
+  } else if (error.includes('EBalanceNotEmpty')) {
+    return 'user_close_pm aborted because pm.balance still holds at least one coin type — drain via user_remove_liquidity_from_balance first';
+  } else if (error.includes('EFeeNotEmpty')) {
+    return 'user_close_pm aborted because pm.fee still holds at least one coin type — drain via user_withdraw_fee first';
   }
   return 'Unknown error';
 }
