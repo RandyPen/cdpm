@@ -151,8 +151,8 @@ deps = { access_management = "access_management", bluefin_spot = "bluefin_spot",
 [pinned.mainnet.kai_sav]
 source = { local = "../kai-contracts/kai/sav/core-prover-patched" }
 use_environment = "mainnet"
-manifest_digest = "E107616476E5D1B95E445273B4E8B079723BDE23AAB4025AAFE98E9A787E1F27"
-deps = { access_management = "access_management", kai_leverage = "kai_leverage", kai_ywhusdte_ysui = "kai_ywhusdte_ysui", protocol = "ScallopProtocol", rate_limiter = "rate_limiter", spool = "spool", std = "MoveStdlib", sui = "Sui", whusdce = "whusdce", whusdte = "whusdte" }
+manifest_digest = "5DB1B019F44B4AA51B011AB8494EAF1C1B4366C65F8AC0FBFD98AE0C76C4191E"
+deps = { ScallopProtocol = "ScallopProtocol", access_management = "access_management", kai_leverage = "kai_leverage", kai_ywhusdte_ysui = "kai_ywhusdte_ysui", rate_limiter = "rate_limiter", spool = "spool", std = "MoveStdlib", sui = "Sui", whusdce = "whusdce", whusdte = "whusdte" }
 
 [pinned.mainnet.kai_ywhusdte_ysui]
 source = { local = "../kai-contracts/kai/sav/vault-token-init/kai-ywhusdte-ysui" }
