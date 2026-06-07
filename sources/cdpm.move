@@ -61,7 +61,7 @@ public struct PositionManager has key {
     id: UID,
     owner: address,
     agents: VecSet<address>,
-    position: Option<Position>,
+    position: Position,
     balance: Bag,
     fee: Bag,
     lending: Bag,
@@ -100,11 +100,6 @@ public struct PositionManagerCreated has copy, drop {
     lower_bin_id: I32,
     upper_bin_id: I32,
     liquidity_shares: vector<u128>,
-}
-
-public struct PositionExtract has copy, drop {
-    pm_id: ID,
-    owner: address,
 }
 
 public struct PositionManagerClosed has copy, drop {
@@ -431,7 +426,7 @@ public fun user_deposit_liquidity<CoinTypeA, CoinTypeB>(
         id: object::new(ctx),
         owner: ctx.sender(),
         agents: vec_set::empty(),
-        position: option::some(position),
+        position,
         balance: bag::new(ctx),
         fee: bag::new(ctx),
         lending: bag::new(ctx),
@@ -463,7 +458,7 @@ public fun user_deposit_position(
         id: object::new(ctx),
         owner: ctx.sender(),
         agents: vec_set::empty(),
-        position: option::some(position),
+        position,
         balance: bag::new(ctx),
         fee: bag::new(ctx),
         lending: bag::new(ctx),
@@ -480,29 +475,6 @@ public fun user_deposit_position(
         upper_bin_id,
         liquidity_shares,
     });
-}
-
-// in case of Cetus DLMM package upgrade
-public fun user_get_and_return_position(
-    pm: &mut PositionManager,
-    ctx: &TxContext,
-): Position {
-    assert!(pm.owner == ctx.sender(), ENotOwner);
-    event::emit(PositionExtract {
-        pm_id: object::id(pm),
-        owner: ctx.sender(),
-    });
-
-    option::extract(&mut pm.position)
-}
-
-#[allow(lint(self_transfer))]
-public fun user_get_position(
-    pm: &mut PositionManager,
-    ctx: &TxContext,
-) {
-    let position = user_get_and_return_position(pm, ctx);
-    transfer::public_transfer(position, ctx.sender());
 }
 
 public fun user_add_liquidity_to_position<CoinTypeA, CoinTypeB>(
@@ -572,7 +544,7 @@ public fun user_remove_liquidity_from_position<CoinTypeA, CoinTypeB>(
     assert!(pm.owner == ctx.sender(), ENotOwner);
     let (balance_a, balance_b) = pool::remove_liquidity(
         pool,
-        option::borrow_mut(&mut pm.position),
+        &mut pm.position,
         bins,
         liquidity_shares,
         config,
@@ -605,7 +577,7 @@ public fun user_collect_fee<CoinTypeA, CoinTypeB>(
     assert!(pm.owner == ctx.sender(), ENotOwner);
     let (balance_a, balance_b) = pool::collect_position_fee<CoinTypeA, CoinTypeB>(
         pool,
-        option::borrow_mut(&mut pm.position),
+        &mut pm.position,
         config,
         versioned,
         ctx,
@@ -635,7 +607,7 @@ public fun user_collect_reward<CoinTypeA, CoinTypeB, RewardType>(
     assert!(pm.owner == ctx.sender(), ENotOwner);
     let balance_reward = pool::collect_position_reward<CoinTypeA, CoinTypeB, RewardType>(
         pool,
-        option::borrow_mut(&mut pm.position),
+        &mut pm.position,
         config,
         versioned,
         ctx,
@@ -742,38 +714,30 @@ public fun user_close_pm<CoinTypeA, CoinTypeB>(
     // duplicate the check here against the live PositionInfo so the abort
     // surfaces as a cdpm error code (EPositionHasRewards) before the
     // close_position call happens.
-    if (option::is_some<Position>(&pm.position)) {
-        let p_ref = option::borrow<Position>(&pm.position);
-        let pos_id = object::id(p_ref);
-        let manager_ref = pool::position_manager<CoinTypeA, CoinTypeB>(pool);
-        let pos_info = position::borrow_position_info(manager_ref, pos_id);
-        let rewards = position::info_rewards(pos_info);
-        let n = vector::length(rewards);
-        let mut i = 0;
-        while (i < n) {
-            assert!(*vector::borrow(rewards, i) == 0, EPositionHasRewards);
-            i = i + 1;
-        };
+    let pos_id = object::id(&pm.position);
+    let manager_ref = pool::position_manager<CoinTypeA, CoinTypeB>(pool);
+    let pos_info = position::borrow_position_info(manager_ref, pos_id);
+    let rewards = position::info_rewards(pos_info);
+    let n = vector::length(rewards);
+    let mut i = 0;
+    while (i < n) {
+        assert!(*vector::borrow(rewards, i) == 0, EPositionHasRewards);
+        i = i + 1;
     };
 
     let PositionManager { id, owner, agents: _, position, balance, fee, lending } = pm;
 
-    if (option::is_some<Position>(&position)) {
-        let p = option::destroy_some<Position>(position);
-        let (cert, balance_a, balance_b) = pool::close_position<CoinTypeA, CoinTypeB>(
-            pool,
-            p,
-            config,
-            versioned,
-            clk,
-            ctx,
-        );
-        pool::destroy_close_position_cert(cert, versioned);
-        transfer::public_transfer(balance_a.into_coin(ctx), ctx.sender());
-        transfer::public_transfer(balance_b.into_coin(ctx), ctx.sender());
-    } else {
-        option::destroy_none<Position>(position);
-    };
+    let (cert, balance_a, balance_b) = pool::close_position<CoinTypeA, CoinTypeB>(
+        pool,
+        position,
+        config,
+        versioned,
+        clk,
+        ctx,
+    );
+    pool::destroy_close_position_cert(cert, versioned);
+    transfer::public_transfer(balance_a.into_coin(ctx), ctx.sender());
+    transfer::public_transfer(balance_b.into_coin(ctx), ctx.sender());
     balance.destroy_empty();
     fee.destroy_empty();
     lending.destroy_empty();
@@ -844,7 +808,7 @@ public fun protocol_remove_liquidity<CoinTypeA, CoinTypeB>(
     assert!(vec_set::is_empty<address>(&pm.agents), ENotAllow);
     let (balance_a, balance_b) = pool::remove_liquidity(
         pool,
-        option::borrow_mut(&mut pm.position),
+        &mut pm.position,
         bins,
         liquidity_shares,
         config,
@@ -880,7 +844,7 @@ public fun protocol_collect_fee<CoinTypeA, CoinTypeB>(
     assert!(vec_set::is_empty<address>(&pm.agents), ENotAllow);
     let (mut balance_a, mut balance_b) = pool::collect_position_fee<CoinTypeA, CoinTypeB>(
         pool,
-        option::borrow_mut(&mut pm.position),
+        &mut pm.position,
         config,
         versioned,
         ctx,
@@ -917,7 +881,7 @@ public fun protocol_collect_reward<CoinTypeA, CoinTypeB, RewardType>(
     assert!(vec_set::is_empty<address>(&pm.agents), ENotAllow);
     let mut balance_reward = pool::collect_position_reward<CoinTypeA, CoinTypeB, RewardType>(
         pool,
-        option::borrow_mut(&mut pm.position),
+        &mut pm.position,
         config,
         versioned,
         ctx,
@@ -1009,7 +973,7 @@ public fun agent_remove_liquidity<CoinTypeA, CoinTypeB>(
     assert!(vec_set::contains<address>(&pm.agents, &ctx.sender()), ENotAllow);
     let (balance_a, balance_b) = pool::remove_liquidity(
         pool,
-        option::borrow_mut(&mut pm.position),
+        &mut pm.position,
         bins,
         liquidity_shares,
         config,
@@ -1042,7 +1006,7 @@ public fun agent_collect_fee<CoinTypeA, CoinTypeB>(
     assert!(vec_set::contains<address>(&pm.agents, &ctx.sender()), ENotAllow);
     let (balance_a, balance_b) = pool::collect_position_fee<CoinTypeA, CoinTypeB>(
         pool,
-        option::borrow_mut(&mut pm.position),
+        &mut pm.position,
         config,
         versioned,
         ctx,
@@ -1072,7 +1036,7 @@ public fun agent_collect_reward<CoinTypeA, CoinTypeB, RewardType>(
     assert!(vec_set::contains<address>(&pm.agents, &ctx.sender()), ENotAllow);
     let balance_reward = pool::collect_position_reward<CoinTypeA, CoinTypeB, RewardType>(
         pool,
-        option::borrow_mut(&mut pm.position),
+        &mut pm.position,
         config,
         versioned,
         ctx,
@@ -1216,7 +1180,7 @@ fun add_liquidity_private<CoinTypeA, CoinTypeB>(
 ): (u64, u64) {
     let add_liquidity_cert = pool::add_liquidity(
         pool,
-        option::borrow_mut(&mut pm.position),
+        &mut pm.position,
         bins,
         amounts_a,
         amounts_b,
@@ -1232,7 +1196,7 @@ fun add_liquidity_private<CoinTypeA, CoinTypeB>(
     );
     pool::repay_add_liquidity(
         pool,
-        option::borrow_mut(&mut pm.position),
+        &mut pm.position,
         add_liquidity_cert,
         balance_a,
         balance_b,
@@ -1695,31 +1659,8 @@ public fun test_only_fee_house_rate(fee_house: &FeeHouse): u64 {
 }
 
 #[test_only]
-public fun test_only_make_pm(owner: address, ctx: &mut TxContext): PositionManager {
-    PositionManager {
-        id: object::new(ctx),
-        owner,
-        agents: vec_set::empty(),
-        position: option::none(),
-        balance: bag::new(ctx),
-        fee: bag::new(ctx),
-        lending: bag::new(ctx),
-    }
-}
-
-#[test_only]
 public fun test_only_share_pm(pm: PositionManager) {
     transfer::share_object(pm);
-}
-
-#[test_only]
-public fun test_only_destroy_empty_pm(pm: PositionManager) {
-    let PositionManager { id, owner: _, agents: _, position, balance, fee, lending } = pm;
-    option::destroy_none(position);
-    bag::destroy_empty(balance);
-    bag::destroy_empty(fee);
-    bag::destroy_empty(lending);
-    id.delete();
 }
 
 #[test_only]
