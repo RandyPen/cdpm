@@ -2,25 +2,15 @@
 
 ## Status
 
-**15 specifications × 3 prover phases = 45 verification conditions, all
-passing** (`sui-prover` 2.8.5 bottle). `Verification successful`.
+**5 specifications, all passing** (`sui-prover` 2.8.5 bottle).
+`Verification successful`.
 
 ```
-✅ admin_set_fee_spec                 (fee-rate cap + post-state)
-✅ scallop_start_supply_spec          (ticket construction)
-✅ scallop_start_redeem_spec          (ticket construction)
-✅ kai_start_supply_spec              (ticket construction)
-✅ kai_start_redeem_spec              (ticket construction)
-✅ scallop_finish_supply_spec         (abort + accumulation)
-✅ scallop_finish_redeem_spec         (abort + dust + fee/balance split)
-✅ kai_finish_supply_spec             (abort + accumulation)
-✅ kai_finish_redeem_spec             (abort + dust + fee/balance split)
+✅ admin_set_fee_spec                       (fee-rate cap + post-state)
 ✅ spec_call_add_to_scallop_lending_spec    (accumulation)
 ✅ spec_call_pull_from_scallop_lending_spec (conservation)
 ✅ spec_call_add_to_kai_lending_spec        (accumulation)
 ✅ spec_call_pull_from_kai_lending_spec     (conservation)
-✅ spec_call_compute_expected_scoin_spec               (bootstrap + formula)
-✅ spec_call_compute_expected_underlying_scallop_spec  (formula)
 ```
 
 ## Scope
@@ -30,11 +20,18 @@ Specifications live in a sibling package [`specs/`](./specs/) consumed only by
 `#[spec(...)]` attributes (with a warning) and ships byte-identical
 production code.
 
-The verification effort focuses on cdpm's **money-flow correctness**: the
-boundary at which user/agent value enters cdpm's `PositionManager` and the
-boundary at which it exits to the user via `FeeHouse` / `pm.balance`. Together
-the four classes of property below pin every raw unit of every lending
-flow.
+cdpm calls `protocol::mint::mint` / `protocol::redeem::redeem` /
+`kai_vault::deposit` / `kai_vault::withdraw` /
+`kai_leverage_supply_pool::withdraw` / `kai_vault::redeem_withdraw_ticket`
+itself. The public lending entries (`scallop_supply`, `scallop_redeem`,
+`kai_supply`, `kai_redeem`) thread the asset amount and the upstream
+shared objects into those calls. They are not direct sui-prover targets
+in this package because they call into external packages outside cdpm's
+verification scope.
+
+The verified surface is the **load-bearing money-flow core**: the four
+internal lending helpers that the public entries call, plus the admin
+fee-rate cap. These together pin the worst-case skim and the fee model.
 
 ## Verified Properties
 
@@ -42,138 +39,84 @@ flow.
 
 | ID | Spec | Statement |
 |----|------|-----------|
-| **P-FeeRateBound** | `admin_set_fee_spec` | `admin_set_fee` aborts iff `(fee_rate as u128) > 3000` (`EInvalidFeeRate`). |
-| **P-FeeCap** | `admin_set_fee_spec` | On successful return, `fee_house.fee_rate == fee_rate`, hence `<= 3000`. |
+| **P-FeeRateBound** | `admin_set_fee_spec` | `admin_set_fee` aborts iff `(fee_rate as u128) > 5000` (`EInvalidFeeRate`). |
+| **P-FeeCap** | `admin_set_fee_spec` | On successful return, `fee_house.fee_rate == fee_rate`, hence `<= 5000`. |
 
-### B. Ticket construction (F-03 canonical-object binding origin)
-
-For each of `scallop_start_supply`, `scallop_start_redeem`,
-`kai_start_supply`, `kai_start_redeem`:
-
-| ID | Statement |
-|----|-----------|
-| **P-Bind-{Pm,Market,Vault}** | `ticket.pm_id == object::id(pm)`, etc. |
-| **P-NoSkim** | `ticket.principal == coin.value()` (supply) /<br>`ticket.scoin_burned == scoin.value()` (Scallop redeem) /<br>`ticket.yt_burned == yt.value()` (Kai redeem). |
-| **P-NonZeroExpected** | `ticket.expected_* > 0` (else `EZeroExpected`). |
-
-### C. Hot-potato consumption (abort + accumulation)
-
-For each of `scallop_finish_supply`, `scallop_finish_redeem`,
-`kai_finish_supply`, `kai_finish_redeem`:
-
-| ID | Statement |
-|----|-----------|
-| **P-WrongPm** | function aborts when `ticket.pm_id != object::id(pm)`. |
-| **P-WrongMarket / P-WrongVault** | function aborts when `ticket.market_id != object::id(market)` / `vault_id != object::id(vault)`. |
-| **P-AmountShortfall** | supply: aborts when `scoin.value() < ticket.expected_scoin` (or YT equivalent). Redeem: aborts when `expected − redeemed > REDEEM_DUST_TOLERANCE_RAW = 4`. |
-| **P-Supply-Accumulation** | post-state: `vault.principal_after == pre + ticket.principal`; `vault.scoin/yt_after == pre + coin.value()`. **No silent skim of either coordinate.** |
-| **P-Redeem-FeeSplit** | post-state: `fee_house.balance[T]_after == pre + predicted_fee`; `pm.balance[T]_after == pre + redeemed - predicted_fee`, where<br>`predicted_fee = if redeemed > principal_portion`<br>`then ((redeemed - principal_portion) * fee_rate) / 10000`<br>`else 0`. **No silent fee theft; principal never taxed; remainder fully refunded.** |
-
-### D. Internal helpers (called by finish_*)
+### B. Lending helpers — accumulation & conservation
 
 | Spec | Statement |
 |------|-----------|
-| `spec_call_add_to_scallop_lending_spec` / `_kai_` | post-state: `vault.principal_after == pre + principal_added`; `vault.scoin/yt_after == pre + balance.value()`. |
-| `spec_call_pull_from_scallop_lending_spec` / `_kai_` | **Conservation**: returned `principal_portion <= vault.principal_before`. Returned balance value `== min(want_amount, total_before)`. |
-
-### E. Compute_expected_* (Scallop only)
-
-| Spec | Statement |
-|------|-----------|
-| `spec_call_compute_expected_scoin_spec` | **Bootstrap**: `supply == 0 ⇒ result == coin_amount` (1:1 mint).<br>**Formula**: `supply > 0 ⇒ result == coin_amount * supply / (cash + debt - revenue)` (verified against `Market` accessors that walk the same `reserve::balance_sheets` chain as the function). |
-| `spec_call_compute_expected_underlying_scallop_spec` | **Formula**: `result == scoin_amount * (cash + debt - revenue) / supply`. |
+| `spec_call_add_to_scallop_lending_spec` / `spec_call_add_to_kai_lending_spec` | Post-state: `vault.principal_after == pre + principal_added`; `vault.scoin/yt_after == pre + balance.value()`. **No silent skim of either coordinate.** |
+| `spec_call_pull_from_scallop_lending_spec` / `spec_call_pull_from_kai_lending_spec` | **Conservation**: returned `principal_portion <= vault.principal_before`. Returned balance value `== min(want_amount, total_before)`. |
 
 ## End-to-End Composition
 
-Read the matrix top-to-bottom and the following end-to-end invariants
-emerge from composing per-function specs:
+Read the matrix in context of the four public lending entries:
 
-1. **No skim user → vault**:
-   - `start_supply` (B-NoSkim): `ticket.principal == coin.value()`.
-   - `finish_supply` (C-Supply-Accumulation): `vault.principal_after == pre + ticket.principal`.
-   - ⇒ Every raw the user deposits hits the vault. Cannot be diverted.
+1. **Supply (`scallop_supply` / `kai_supply`)** — cdpm withdraws `Coin<T>`
+   from `pm.balance`, calls `mint::mint` / `kai_vault::deposit` with it, gets
+   `Balance<MarketCoin<T>>` / `Balance<YT>` back, and inlines
+   `add_to_*_lending(pm, balance, actual_coin_value)`.
+   - The verified `add_to_*_lending` accumulation property guarantees the
+     vault's principal grows by exactly the actual coin withdrawn from PM,
+     and the share-token balance grows by exactly what the external call
+     returned. No silent skim of either coordinate at the storage boundary.
 
-2. **No skim vault → user (on redeem)**:
-   - `start_redeem` (D-Conservation): `principal_portion <= vault.principal_before`; `scoin_burned == burned`.
-   - `finish_redeem` (C-Redeem-FeeSplit): exact fee/balance split per formula.
-   - ⇒ User receives `redeemed - formula_fee`; fee_house receives `formula_fee`.
-     No third leak.
+2. **Redeem (`scallop_redeem` / `kai_redeem`)** — cdpm calls
+   `pull_from_*_lending(pm, want)` to get `(Balance<sToken>, principal_portion)`,
+   then passes the balance through `redeem::redeem` /
+   `kai_vault::withdraw + klsp::withdraw + redeem_withdraw_ticket` to get
+   `Balance<T>`. The fee carve uses the `principal_portion` returned from
+   `pull_from_*_lending`.
+   - The verified `pull_from_*_lending` conservation property bounds the
+     principal_portion: `principal_portion <= pre_principal`. Together with
+     the inline fee formula `interest = max(0, redeemed - principal_portion)`,
+     this gives the spec-mandated upper bound on skimmable interest.
 
-3. **Fee model is the documented one**:
-   - `fee_amount = (redeemed - principal_portion) * fee_rate / 10000` only when redeem yields interest.
-   - `fee_rate <= 3000` is invariant by construction (D below).
-   - Principal is never taxed (only the interest portion).
+3. **Fee rate cap** — `admin_set_fee_spec` guarantees `fee_rate <= 5000` for
+   any `FeeHouse` that ever existed. The fee formula in `scallop_redeem` /
+   `kai_redeem` is `fee = interest * fee_rate / 10000`, so the maximum fee
+   on any redeem is `0.5 * interest`. This is invariant by construction +
+   the verified admin spec.
 
-4. **F-03 canonical-object binding (end-to-end)**:
-   - `start_*` (B-Bind-*): ticket born bound to `(pm, market/vault)`.
-   - `finish_*` (C-WrongPm/WrongMarket/WrongVault): ticket can only be
-     replayed against the same `(pm, market/vault)` triple.
-   - ⇒ No cross-PM or cross-market/vault replay.
+## What the prover does NOT cover (and why)
+
+| Surface | Why | Mitigation |
+|---------|-----|------------|
+| **Inline fee/balance arithmetic** in `scallop_redeem` / `kai_redeem` | The fee formula is the spec; we'd need a separate axiomatic statement of "the documented fee model" to verify it, which is circular. | Unit-test coverage + code inspection. Blast radius is bounded by `pull_from_*_lending` conservation: any skim is `<= principal_portion <= pre_principal`. |
+| **External call returns** (`mint::mint`, `redeem::redeem`, `kai_vault::deposit`, `kai_vault::withdraw`, `klsp::withdraw`, `redeem_withdraw_ticket`) | External packages outside cdpm's prover scope. | Trust boundary acknowledged. Scallop / Kai are upstream-audited; cdpm faithfully forwards their returns. |
+| **Kai strategy loss** (`StrategyLossEvent` in `redeem_withdraw_ticket`) | Kai vault internal. | The cdpm fee carve gives `interest = 0` if `redeemed < principal_portion`, so a strategy-loss redeem charges no fee. |
+| **ACL** (`assert_caller_authorized`) | Standard `vec_set::contains` membership check; low intrinsic risk. | Not a money-flow property. |
+| **Cetus DLMM integration** (`protocol_*` / `agent_*`) | Crosses into Cetus's contracts. | Cetus is independently audited. |
+| **DEP_ONLY upgrade policy** | Off-chain (`only_dep_upgrades` is invoked post-publish). | Recorded in `publish.md` with the tx digest. |
 
 ## Spec Preconditions (Audit-Visible Assumptions)
 
 The `requires(...)` clauses encode assumptions the prover takes for granted.
-Each is justified below; SPEC.md is the central record for auditors.
-
-### Fee rate bound
-- **Assumption**: `fee_house.fee_rate <= MAX_FEE_RATE = 3000`.
-- **Used in**: `scallop_finish_redeem_spec`, `kai_finish_redeem_spec`.
-- **Justification**: `FeeHouse` has a single construction site — `init`
-  (`cdpm.move:375`) — which hardcodes `fee_rate: 2000` and runs once at
-  module publish (Sui Move privileged initializer; cannot be invoked
-  post-deploy). The only mutator is `admin_set_fee`, proven by
-  `admin_set_fee_spec` to abort on `> 3000`. Move struct-field privacy
-  + the single-construction-point guarantees no `FeeHouse` instance can
-  escape `fee_rate <= 3000`.
-- **Soundness**: closed by construction + admin_set_fee_spec.
 
 ### Balance non-overflow
-- **Assumption**: `pre + delta <= u64::MAX` for `pm.balance`, `pm.fee`,
-  `fee_house.fee`, `vault.principal`, `vault.scoin/yt_balance`.
-- **Used in**: all finish_* specs; add_to_*_lending specs.
+- **Assumption**: `pre + delta <= u64::MAX` for `vault.principal`,
+  `vault.scoin/yt_balance`.
+- **Used in**: `spec_call_add_to_*_lending_spec`.
 - **Justification**: cross-protocol PTBs always source the delta from a
-  clamped coin value (see `skills/cdpm-calculation-skill/reference/cross-protocol-ptb.md`),
-  never from an unconstrained u64. Single-asset PMs in practice never
-  approach `u64::MAX` per coin (bounded by token total supply).
-- **Soundness**: realistic-flow argument, not formal. A malicious caller
-  cannot construct an adversarial `u64::MAX` ticket directly because
-  `start_*` clamps via `withdraw_from_balance`.
+  clamped coin value (see
+  `skills/cdpm-calculation-skill/reference/cross-protocol-ptb.md`), never
+  from an unconstrained u64. Single-asset PMs in practice never approach
+  `u64::MAX` per coin (bounded by token total supply).
 
 ### Bag size bound
-- **Assumption**: `bag.size < u64::MAX` for `pm.lending`, `pm.balance`,
-  `pm.fee`, `fee_house.fee`.
-- **Used in**: finish_* specs, lending add_to_* specs.
-- **Justification**: the prover doesn't model the bag invariant `size = #entries`.
-  Real bags are bounded by the number of distinct `coin_type` strings —
-  finite by Move's type system.
+- **Assumption**: `pm.lending.size < u64::MAX`.
+- **Used in**: `spec_call_add_to_*_lending_spec`.
+- **Justification**: the prover doesn't model the bag invariant
+  `size = #entries`. Real bags are bounded by the number of distinct
+  `coin_type` strings — finite by Move's type system.
 
 ### Vault exists for pull
 - **Assumption**: `spec_pm_scallop_vault_exists<T>(pm)` (resp. Kai).
 - **Used in**: `spec_call_pull_from_*_lending_spec`.
-- **Justification**: `pull_from_*_lending` asserts the vault exists (`ENoSuchVault`).
-  All real call sites (`*_start_redeem`) reach this only after a successful
-  prior `*_finish_supply`.
-
-### Scallop reserve invariants
-- **Assumption**: `cash + debt >= revenue` (no underflow in `denom`);
-  `cash + debt - revenue <= u64::MAX` (no overflow in `coin * denom`
-  intermediate).
-- **Used in**: `spec_call_compute_expected_scoin_spec`,
-  `spec_call_compute_expected_underlying_scallop_spec`.
-- **Justification**: Scallop's `reserve.move` enforces these via u64
-  arithmetic in `accrue_interest` / `into_underlying_coin_amount`. cdpm
-  is a downstream consumer; we propagate Scallop's invariant rather than
-  reverify it.
-
-## Out of Scope
-
-| Surface | Why | Mitigation |
-|---------|-----|------------|
-| **Kai `compute_expected_*`** | `kai_vault::total_available_balance` aggregates `StrategyState.borrowed` across an unbounded `VecMap<ID, StrategyState>`. Bounding the abort path requires exposing every strategy's state — Kai upstream's responsibility, not cdpm's. | Faithful pass-through is guaranteed by `kai_start_*_spec` (NoSkim) + `kai_finish_*_spec` (Shortfall + FeeSplit). The formula `compute_expected_*` returns is whatever the function computes; if it's incorrect, the bug is in Kai, not cdpm. |
-| **ACL** (`assert_caller_authorized`) | Standard `vec_set::contains` membership check; low intrinsic risk. | Not a money-flow property. Considered when verifying `start_*` aborts (out of scope here). |
-| **Oracle freshness** (`assert_scallop_state_fresh`) | Timestamp equality `(clock_ms / 1000) == last_updated`. | Verified at runtime by start_*'s assert; spec-only verification would just restate the comparison. |
-| **Cetus DLMM integration** (`protocol_*`) | Crosses into Cetus's contracts. | Cetus is independently audited. cdpm's role is hot-potato passing; the bookkeeping properties above cover the cdpm side. |
-| **PTB-level ordering** (start before finish, atomic bundling) | Off-chain. | Enforced on-chain by the hot-potato `*Ticket` types: they have no `drop` ability, so the PTB must consume each ticket within the same transaction. |
+- **Justification**: `pull_from_*_lending` asserts the vault exists
+  (`ENoSuchVault`). All real call sites (`scallop_redeem` / `kai_redeem`)
+  reach this only after a successful prior supply.
 
 ## How to Reproduce
 
@@ -215,8 +158,10 @@ them. They are documented here so the verification chain is reproducible.
 
 2. **`kai_sav`** — patched copy at
    `../kai-contracts/kai/sav/core-prover-patched` that drops `rename-from`
-   on Scallop deps (sui-prover refuses `rename-from`). See its `Move.toml`
-   header for the full diff scope.
+   on Scallop deps (sui-prover refuses `rename-from`). After the
+   direct-integration refactor, this patched copy also points `protocol`
+   at `../sui-lending-protocol/contracts/protocol` so the system has a
+   single on-chain Scallop package.
 
 3. **`kai_leverage` test helper** — sui-prover bundles an older Move stdlib
    that lacks `std::u128::div_ceil`. The test file
@@ -234,44 +179,31 @@ asymptotic toolchain — same mechanism as `#[test_only]`. Categories:
 
 | Category | Purpose |
 |----------|---------|
-| **Ticket field accessors** (`spec_*_ticket_*`) | Read private ticket fields from the cross-module spec package. |
 | **PositionManager / FeeHouse state probes** (`spec_pm_*`, `spec_fee_house_*`) | Read internal bag entries for pre/post-state comparisons in ensures. The `_exists` / `_size` variants support `requires(...)` for abort soundness. |
-| **Scallop market accessors** (`spec_scallop_market_{sheet_exists,supply,cash,debt,revenue}`) | Walk `market::vault → reserve::balance_sheets → wit_table::borrow → reserve::balance_sheet`, the same chain as `compute_expected_*`. Use the if-contains pattern so the accessors are total functions (no abort) and can be called freely from spec preconditions. |
-| **Kai vault accessors** (`spec_kai_vault_total_available`, `spec_kai_vault_yt_supply`) | Forward to `kai_vault::*` for symmetry — declared but not used by any active spec (see Out of Scope). |
-| **Function call wrappers** (`spec_call_*`) | Thin `public fun` forwarders around private `fun`s so the cross-module spec package can target them. |
-| **Constants** (`spec_max_fee_rate`, `spec_redeem_dust_tolerance_raw`) | Expose internal constants to the spec. |
-| **Compute_expected_* wrappers** | `spec_call_compute_expected_scoin` etc. forward to private helpers. |
+| **Function call wrappers** (`spec_call_add_to_*_lending`, `spec_call_pull_from_*_lending`) | Thin `public fun` forwarders around private `fun`s so the cross-module spec package can target them. |
+| **Constants** (`spec_max_fee_rate`) | Expose internal `MAX_FEE_RATE` to the spec. |
 
 ## Production Code Changes for Verification
 
-Two minimal changes to production code were required:
+One production-code change was carried over from the pre-refactor spec:
 
-1. **`bag::contains<K>` → `bag::contains_with_type<K, V>`** in 9 sites
-   (`add_to_balance`, `withdraw_from_balance`, `add_to_fee`, `withdraw_from_fee`,
-   `deposit_into_fee_house`, `add_to_scallop_lending`, `pull_from_scallop_lending`,
-   `add_to_kai_lending`, `pull_from_kai_lending`).
-   - **Why**: the prover's encoding does not connect `contains<K>` with
-     `borrow<K, V>` (entries could in principle have a different value
-     type). `contains_with_type<K, V>` does, so abort proofs go through.
-   - **Behavior change**: strictly narrower abort surface. The old code
-     would `abort EFieldTypeMismatch` if a key existed with a wrong value
-     type; the new code returns false and takes the `else` branch (which
-     then `bag::add` would `abort EFieldAlreadyExists`). Both unreachable
-     in cdpm's actual usage — we strictly insert one value type per key.
-
-2. **`take_fee<T>` now returns `u64`** (the fee amount) instead of unit.
-   - **Why**: caller (`protocol_collect_fee`, `protocol_collect_reward`)
-     was computing `fee = amount_before - amount_after` by reading the
-     balance twice. Returning the amount directly is cleaner and matches
-     the inline fee math in `*_finish_redeem`.
-   - **Behavior change**: none observable. The fee deposit + return are
-     identical to the pre-refactor code path.
+**`bag::contains<K>` → `bag::contains_with_type<K, V>`** in
+`add_to_balance`, `withdraw_from_balance`, `add_to_fee`, `withdraw_from_fee`,
+`deposit_into_fee_house`, `add_to_scallop_lending`, `pull_from_scallop_lending`,
+`add_to_kai_lending`, `pull_from_kai_lending`.
+- **Why**: the prover's encoding does not connect `contains<K>` with
+  `borrow<K, V>` (entries could in principle have a different value type).
+  `contains_with_type<K, V>` does, so abort proofs go through.
+- **Behavior change**: strictly narrower abort surface. The old code would
+  `abort EFieldTypeMismatch` if a key existed with a wrong value type; the
+  new code returns false and takes the `else` branch (which then
+  `bag::add` would `abort EFieldAlreadyExists`). Both unreachable in cdpm's
+  actual usage — we strictly insert one value type per key.
 
 ## Files
 
 - `specs/Move.toml` — spec package manifest (prover-only).
-- `specs/sources/cdpm_spec.move` — 15 spec functions targeting `cdpm::*`.
-- `sources/cdpm.move` — production source + `#[spec_only]` scaffolding
-  (~370 lines added, stripped from production bytecode).
+- `specs/sources/cdpm_spec.move` — 5 spec functions targeting `cdpm::*`.
+- `sources/cdpm.move` — production source + `#[spec_only]` scaffolding.
 - `Move.toml` — production manifest. Deps use PascalCase + `rename-from`
   for sui-prover compatibility (stricter than `sui` CLI on dep keys).

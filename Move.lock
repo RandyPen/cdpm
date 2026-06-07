@@ -35,13 +35,13 @@ manifest_digest = "E41BBD67BE8940D26C79D78B028477EF5B33BA217A1282C78ACB344CF8A5E
 deps = { std = "MoveStdlib", sui = "Sui" }
 
 [pinned.mainnet.MoveStdlib]
-source = { git = "https://github.com/MystenLabs/sui.git", subdir = "crates/sui-framework/packages/move-stdlib", rev = "73dd2c2ba6f9fdb21d7ffde2b50a3f2f0ac39bc1" }
+source = { git = "https://github.com/MystenLabs/sui.git", subdir = "crates/sui-framework/packages/move-stdlib", rev = "367fd808279bed26f7c64fc63160062a2ee29ab7" }
 use_environment = "mainnet"
 manifest_digest = "C4FE4C91DE74CBF223B2E380AE40F592177D21870DC2D7EB6227D2D694E05363"
 deps = {}
 
 [pinned.mainnet.MoveStdlib_1]
-source = { git = "https://github.com/MystenLabs/sui.git", subdir = "crates/sui-framework/packages/move-stdlib", rev = "2f5992f189cd24445cd010ccf0aa7ff418ff93b1" }
+source = { git = "https://github.com/MystenLabs/sui.git", subdir = "crates/sui-framework/packages/move-stdlib", rev = "d10b7db79a6634acbc483ad8633a7d27fe3bc7c8" }
 use_environment = "mainnet"
 manifest_digest = "C4FE4C91DE74CBF223B2E380AE40F592177D21870DC2D7EB6227D2D694E05363"
 deps = {}
@@ -53,13 +53,13 @@ manifest_digest = "A91D5B1E1A8E663F005C45833346765F113FED7FFCC93A0E938717DEB8DE0
 deps = { CoinDecimalsRegistry = "CoinDecimalsRegistry", Decimal = "Decimal", Math = "Math", Sui = "Sui_1", TestCoin = "TestCoin", Whitelist = "Whitelist", X = "X", XOracle = "XOracle" }
 
 [pinned.mainnet.Sui]
-source = { git = "https://github.com/MystenLabs/sui.git", subdir = "crates/sui-framework/packages/sui-framework", rev = "73dd2c2ba6f9fdb21d7ffde2b50a3f2f0ac39bc1" }
+source = { git = "https://github.com/MystenLabs/sui.git", subdir = "crates/sui-framework/packages/sui-framework", rev = "367fd808279bed26f7c64fc63160062a2ee29ab7" }
 use_environment = "mainnet"
 manifest_digest = "CD547CB1ACCE0880C835DAED2D8FFCB91D56C833AE5240D3AA5B918398263195"
 deps = { MoveStdlib = "MoveStdlib" }
 
 [pinned.mainnet.Sui_1]
-source = { git = "https://github.com/MystenLabs/sui.git", subdir = "crates/sui-framework/packages/sui-framework", rev = "2f5992f189cd24445cd010ccf0aa7ff418ff93b1" }
+source = { git = "https://github.com/MystenLabs/sui.git", subdir = "crates/sui-framework/packages/sui-framework", rev = "d10b7db79a6634acbc483ad8633a7d27fe3bc7c8" }
 use_environment = "mainnet"
 manifest_digest = "CD547CB1ACCE0880C835DAED2D8FFCB91D56C833AE5240D3AA5B918398263195"
 deps = { MoveStdlib = "MoveStdlib_1" }
@@ -118,12 +118,6 @@ use_environment = "mainnet"
 manifest_digest = "1E932E9C4C15B3E671C5AACEE3107A26421CD5F431977EB48BE64EF5BE1AD9CA"
 deps = { IntegerMate = "IntegerMate", MoveSTL = "MoveSTL", std = "MoveStdlib", sui = "Sui" }
 
-[pinned.mainnet.coin_decimals_registry]
-source = { local = "../kai-contracts/_vendor/Scallop/coin-decimals-registry-v1" }
-use_environment = "mainnet"
-manifest_digest = "E41BBD67BE8940D26C79D78B028477EF5B33BA217A1282C78ACB344CF8A5ECF6"
-deps = { std = "MoveStdlib", sui = "Sui" }
-
 [pinned.mainnet.deep]
 source = { local = "../kai-contracts/_vendor/coins/DEEP" }
 use_environment = "mainnet"
@@ -157,8 +151,8 @@ deps = { access_management = "access_management", bluefin_spot = "bluefin_spot",
 [pinned.mainnet.kai_sav]
 source = { local = "../kai-contracts/kai/sav/core-prover-patched" }
 use_environment = "mainnet"
-manifest_digest = "1A562E73D50D6D9BD6AD3B896ADD95149A831C73E72DA8E71D6BA2B41A91A7AC"
-deps = { access_management = "access_management", kai_leverage = "kai_leverage", kai_ywhusdte_ysui = "kai_ywhusdte_ysui", protocol = "protocol", rate_limiter = "rate_limiter", spool = "spool", std = "MoveStdlib", sui = "Sui", whusdce = "whusdce", whusdte = "whusdte" }
+manifest_digest = "E107616476E5D1B95E445273B4E8B079723BDE23AAB4025AAFE98E9A787E1F27"
+deps = { access_management = "access_management", kai_leverage = "kai_leverage", kai_ywhusdte_ysui = "kai_ywhusdte_ysui", protocol = "ScallopProtocol", rate_limiter = "rate_limiter", spool = "spool", std = "MoveStdlib", sui = "Sui", whusdce = "whusdce", whusdte = "whusdte" }
 
 [pinned.mainnet.kai_ywhusdte_ysui]
 source = { local = "../kai-contracts/kai/sav/vault-token-init/kai-ywhusdte-ysui" }
@@ -172,23 +166,11 @@ use_environment = "mainnet"
 manifest_digest = "E41BBD67BE8940D26C79D78B028477EF5B33BA217A1282C78ACB344CF8A5ECF6"
 deps = { std = "MoveStdlib", sui = "Sui" }
 
-[pinned.mainnet.math]
-source = { local = "../kai-contracts/_vendor/Scallop/math-v1" }
-use_environment = "mainnet"
-manifest_digest = "E41BBD67BE8940D26C79D78B028477EF5B33BA217A1282C78ACB344CF8A5ECF6"
-deps = { std = "MoveStdlib", sui = "Sui" }
-
 [pinned.mainnet.move_stl]
 source = { local = "../kai-contracts/_vendor/Cetus/move-stl-v5" }
 use_environment = "mainnet"
 manifest_digest = "E41BBD67BE8940D26C79D78B028477EF5B33BA217A1282C78ACB344CF8A5ECF6"
 deps = { std = "MoveStdlib", sui = "Sui" }
-
-[pinned.mainnet.protocol]
-source = { local = "../kai-contracts/_vendor/Scallop/protocol-v10" }
-use_environment = "mainnet"
-manifest_digest = "4EE5BC4823892B73595CD0FFC5F8171067FA3AAB0EB2FCF131E51B38457B525E"
-deps = { coin_decimals_registry = "coin_decimals_registry", math = "math", std = "MoveStdlib", sui = "Sui", whitelist = "whitelist", x = "x", x_oracle = "x_oracle" }
 
 [pinned.mainnet.pyth]
 source = { local = "../kai-contracts/_vendor/Pyth/core-v2" }
@@ -256,12 +238,6 @@ use_environment = "mainnet"
 manifest_digest = "E41BBD67BE8940D26C79D78B028477EF5B33BA217A1282C78ACB344CF8A5ECF6"
 deps = { std = "MoveStdlib", sui = "Sui" }
 
-[pinned.mainnet.whitelist]
-source = { local = "../kai-contracts/_vendor/Scallop/whitelist-v1" }
-use_environment = "mainnet"
-manifest_digest = "E41BBD67BE8940D26C79D78B028477EF5B33BA217A1282C78ACB344CF8A5ECF6"
-deps = { std = "MoveStdlib", sui = "Sui" }
-
 [pinned.mainnet.whusdce]
 source = { local = "../kai-contracts/_vendor/coins/whUSDCe" }
 use_environment = "mainnet"
@@ -276,18 +252,6 @@ deps = { std = "MoveStdlib", sui = "Sui", token_bridge = "token_bridge" }
 
 [pinned.mainnet.wormhole]
 source = { local = "../kai-contracts/_vendor/Wormhole/core-v1" }
-use_environment = "mainnet"
-manifest_digest = "E41BBD67BE8940D26C79D78B028477EF5B33BA217A1282C78ACB344CF8A5ECF6"
-deps = { std = "MoveStdlib", sui = "Sui" }
-
-[pinned.mainnet.x]
-source = { local = "../kai-contracts/_vendor/Scallop/x-v1" }
-use_environment = "mainnet"
-manifest_digest = "E41BBD67BE8940D26C79D78B028477EF5B33BA217A1282C78ACB344CF8A5ECF6"
-deps = { std = "MoveStdlib", sui = "Sui" }
-
-[pinned.mainnet.x_oracle]
-source = { local = "../kai-contracts/_vendor/Scallop/x-oracle-v1" }
 use_environment = "mainnet"
 manifest_digest = "E41BBD67BE8940D26C79D78B028477EF5B33BA217A1282C78ACB344CF8A5ECF6"
 deps = { std = "MoveStdlib", sui = "Sui" }

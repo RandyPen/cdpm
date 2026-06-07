@@ -2,28 +2,80 @@
 
 ## Overview
 
-This document provides a complete reference for all public functions in the CDPM (Cetus DLMM Position Manager) smart contract. Functions are organized by permission level and category.
+This document is the canonical reference for the public functions in
+`sources/cdpm.move`. It is kept in lock-step with that file; if anything
+here disagrees with the source, the source wins.
 
 ## Permission Levels
 
 | Level | Identifier | Key Functions |
 |-------|------------|---------------|
 | **Owner** | `pm.owner == ctx.sender()` | `user_*` functions |
-| **Agent** | `vec_set::contains<address>(&pm.agents, &ctx.sender())` | `agent_*` functions |
-| **Protocol** | `vec_set::contains<address>(&access.allow, &ctx.sender())` AND `vec_set::is_empty<address>(&pm.agents)` | `protocol_*` functions |
+| **Agent** | `vec_set::contains(&pm.agents, &ctx.sender())` | `agent_*` functions |
+| **Protocol** | `vec_set::contains(&access.allow, &ctx.sender())` AND `vec_set::is_empty(&pm.agents)` | `protocol_*` functions |
 | **Admin** | Holds `AdminCap` | `admin_*` functions |
+| **Managed (owner ∨ agent ∨ protocol-and-no-agents)** | `assert_caller_authorized` | `scallop_*` / `kai_*` lending entries |
 
-## User Functions (Owner Permission)
+## Error Codes
 
-Functions that require the caller to be the owner of the PositionManager.
+| Code | Constant | Meaning |
+|------|----------|---------|
+| 1001 | `ENotOwner` | Caller is not `pm.owner` |
+| 1002 | `ENotAllow` | Caller not in agents / access list (or invariant broken) |
+| 1003 | `EInvalidFeeRate` | `admin_set_fee` given rate > `MAX_FEE_RATE` (5000 / 50%) |
+| 1004 | `ELendingNotEmpty` | `user_close_pm` called with non-empty `lending` Bag |
+| 1005 | `ENoSuchVault` | `pull_from_*_lending` called for an absent vault entry |
+| 1006 | `ENoSuchBalance` | `withdraw_from_balance` / `withdraw_from_fee` for an absent type |
+| 1007 | `EPositionHasRewards` | `user_close_pm` called with unclaimed Cetus pool rewards |
+| 1008 | `EBalanceNotEmpty` | `user_close_pm` called with non-empty `balance` Bag |
+| 1009 | `EFeeNotEmpty` | `user_close_pm` called with non-empty `fee` Bag |
 
-### 1. Position Creation and Management
+---
 
-#### `user_deposit`
-Creates a new PositionManager with initial liquidity.
+## Record Management (any user)
+
+### `register_and_return_record`
+Creates a per-user `Record` tracking PM IDs the caller owns. Aborts if the
+sender already has a Record registered (`table::add` duplicate-key abort).
 
 ```move
-public fun user_deposit<CoinTypeA, CoinTypeB>(
+public fun register_and_return_record(
+    global_record: &mut GlobalRecord,
+    ctx: &mut TxContext,
+): Record;
+```
+Emits `RecordCreated`.
+
+### `transfer_record`
+Sends the Record back to `ctx.sender()`. Typical pattern: call
+`register_and_return_record` then `transfer_record` in the same PTB.
+
+```move
+public fun transfer_record(record: Record, ctx: &TxContext);
+```
+
+### `unregister_record`
+Destroys the caller's Record. Requires the Record's internal table to be
+empty (close every PM first).
+
+```move
+public fun unregister_record(
+    global_record: &mut GlobalRecord,
+    record: Record,
+    ctx: &TxContext,
+);
+```
+Emits `RecordDeleted`.
+
+---
+
+## User Functions (owner-only)
+
+### `user_deposit_liquidity`
+Creates a PositionManager and opens a fresh Cetus position with bins.
+
+```move
+public fun user_deposit_liquidity<CoinTypeA, CoinTypeB>(
     record: &mut Record,
     pool: &mut Pool<CoinTypeA, CoinTypeB>,
     coin_a: &mut Coin<CoinTypeA>,
@@ -35,32 +87,43 @@ public fun user_deposit<CoinTypeA, CoinTypeB>(
     versioned: &Versioned,
     clk: &Clock,
     ctx: &mut TxContext,
-)
+);
 ```
+Emits `PositionManagerCreated`.
 
-**Parameters:**
-- `record`: User's Record for position tracking
-- `pool`: Cetus DLMM pool reference
-- `coin_a`, `coin_b`: Input coins for liquidity
-- `bins`: Target bin indices
-- `amounts_a`, `amounts_b`: Amounts per bin
-- `config`: Global configuration
-- `versioned`: Version compatibility object
-- `clk`: Clock for timestamp
-- `ctx`: Transaction context
+### `user_deposit_position`
+Wraps an existing Cetus `Position` (e.g. produced by a previous extract)
+into a new PM.
 
-**Events:**
-- `PositionManagerCreated`: New PositionManager created
+```move
+public fun user_deposit_position(
+    record: &mut Record,
+    position: Position,
+    ctx: &mut TxContext,
+);
+```
+Emits `PositionManagerCreated`.
 
-**Notes:**
-- Creates new PositionManager with empty agents, balance, and fee
-- Opens position in Cetus DLMM with provided liquidity
-- Registers PositionManager in user's Record
+### `user_get_and_return_position` / `user_get_position`
+Owner-only escape hatch for Cetus DLMM upgrades. Extracts the underlying
+`Position` out of the PM (`pm.position` becomes `None`). The PM shell can
+then be closed via `user_close_pm` (no position branch); a re-injection
+flow uses a fresh PM via `user_deposit_position`.
 
-### 2. Liquidity Management
+```move
+public fun user_get_and_return_position(
+    pm: &mut PositionManager,
+    ctx: &TxContext,
+): Position;
 
-#### `user_add_liquidity_to_position`
-Adds liquidity to an existing position.
+public fun user_get_position(pm: &mut PositionManager, ctx: &TxContext);
+```
+Emits `PositionExtract`.
+
+### `user_add_liquidity_to_position`
+Adds liquidity from the caller's `Coin<CoinTypeA>` / `Coin<CoinTypeB>` into
+the underlying Cetus position. Unused coin is returned to the caller's
+balances (the `&mut Coin` is split internally).
 
 ```move
 public fun user_add_liquidity_to_position<CoinTypeA, CoinTypeB>(
@@ -75,14 +138,26 @@ public fun user_add_liquidity_to_position<CoinTypeA, CoinTypeB>(
     versioned: &Versioned,
     clk: &Clock,
     ctx: &mut TxContext,
-)
+);
 ```
+Emits `LiquidityAdded`.
 
-**Events:**
-- `LiquidityAdded`: Liquidity added with amounts and bin count
+### `user_add_liquidity_to_balance`
+Deposits a `Coin<T>` into `pm.balance` (for later use by `agent_/protocol_`
+liquidity ops or lending supply).
 
-#### `user_remove_liquidity_from_position`
-Removes liquidity from a position.
+```move
+public fun user_add_liquidity_to_balance<T>(
+    pm: &mut PositionManager,
+    coin: Coin<T>,
+    ctx: &TxContext,
+);
+```
+Emits `BalanceDeposited`.
+
+### `user_remove_liquidity_from_position`
+Removes liquidity from the underlying Cetus position. Returns the released
+coins directly to the caller.
 
 ```move
 public fun user_remove_liquidity_from_position<CoinTypeA, CoinTypeB>(
@@ -94,18 +169,13 @@ public fun user_remove_liquidity_from_position<CoinTypeA, CoinTypeB>(
     versioned: &Versioned,
     clk: &Clock,
     ctx: &mut TxContext,
-): (Coin<CoinTypeA>, Coin<CoinTypeB>)
+): (Coin<CoinTypeA>, Coin<CoinTypeB>);
 ```
+Emits `LiquidityRemoved`.
 
-**Returns:** Removed coins (CoinTypeA, CoinTypeB)
-
-**Events:**
-- `LiquidityRemoved`: Liquidity removed with bin count
-
-### 3. Fee and Reward Collection
-
-#### `user_collect_fee`
-Collects fees from a position.
+### `user_collect_fee`
+Collects accumulated DLMM trading fees from the position; no protocol cut
+(self-management path). Returns fee coins to the caller.
 
 ```move
 public fun user_collect_fee<CoinTypeA, CoinTypeB>(
@@ -113,18 +183,13 @@ public fun user_collect_fee<CoinTypeA, CoinTypeB>(
     pool: &mut Pool<CoinTypeA, CoinTypeB>,
     config: &GlobalConfig,
     versioned: &Versioned,
-    clk: &Clock,
     ctx: &mut TxContext,
-): (Coin<CoinTypeA>, Coin<CoinTypeB>)
+): (Coin<CoinTypeA>, Coin<CoinTypeB>);
 ```
+Emits `FeeCollected`.
 
-**Returns:** Collected fee coins
-
-**Events:**
-- `FeeCollected`: Fees collected with amounts and coin types
-
-#### `user_collect_reward`
-Collects rewards from a position.
+### `user_collect_reward`
+Collects one incentive-reward type from the position; no protocol cut.
 
 ```move
 public fun user_collect_reward<CoinTypeA, CoinTypeB, RewardType>(
@@ -132,103 +197,53 @@ public fun user_collect_reward<CoinTypeA, CoinTypeB, RewardType>(
     pool: &mut Pool<CoinTypeA, CoinTypeB>,
     config: &GlobalConfig,
     versioned: &Versioned,
-    clk: &Clock,
     ctx: &mut TxContext,
-): (Coin<RewardType>)
+): Coin<RewardType>;
 ```
+Emits `RewardCollected`.
 
-**Returns:** Collected reward coin
-
-**Events:**
-- `RewardCollected`: Reward collected with amount and coin type
-
-### 4. Balance Management
-
-#### `user_add_liquidity_to_balance`
-Deposits coins to PositionManager balance.
-
-```move
-public fun user_add_liquidity_to_balance<T>(
-    pm: &mut PositionManager,
-    coin: Coin<T>,
-    clk: &Clock,
-    ctx: &TxContext,
-)
-```
-
-**Events:**
-- `BalanceDeposited`: Coin deposited with amount and type
-
-#### `user_remove_liquidity_from_balance`
-Withdraws coins from PositionManager balance.
+### `user_remove_liquidity_from_balance`
+Withdraws from `pm.balance`. `amount == 0` short-circuits to
+`coin::zero<T>(ctx)` without touching the bag. `amount > 0` of an absent
+type aborts with `ENoSuchBalance`.
 
 ```move
 public fun user_remove_liquidity_from_balance<T>(
     pm: &mut PositionManager,
     amount: u64,
-    clk: &Clock,
     ctx: &mut TxContext,
-): (Coin<T>)
+): Coin<T>;
 ```
+Emits `BalanceWithdrawn`.
 
-**Returns:** Withdrawn coin
-
-**Events:**
-- `BalanceWithdrawn`: Coin withdrawn with amount and type
-
-#### `user_withdraw_fee`
-Withdraws coins from fee bag.
+### `user_withdraw_fee`
+Same as above, against `pm.fee`.
 
 ```move
 public fun user_withdraw_fee<T>(
     pm: &mut PositionManager,
     amount: u64,
-    clk: &Clock,
     ctx: &mut TxContext,
-): (Coin<T>)
+): Coin<T>;
 ```
+Emits `UserFeeWithdrawn`.
 
-**Returns:** Withdrawn fee coin
-
-**Events:**
-- `UserFeeWithdrawn`: Fee withdrawn with amount and coin type
-
-### 5. Agent Management
-
-#### `user_insert_agent`
-Authorizes an agent address.
+### `user_insert_agent` / `user_remove_agent`
+Manage the PM's agent allow-list.
 
 ```move
-public fun user_insert_agent(
-    pm: &mut PositionManager,
-    agent: address,
-    clk: &Clock,
-    ctx: &TxContext,
-)
+public fun user_insert_agent(pm: &mut PositionManager, agent: address, ctx: &TxContext);
+public fun user_remove_agent(pm: &mut PositionManager, agent: address, ctx: &TxContext);
 ```
+Emit `AgentAdded` / `AgentRemoved`.
 
-**Events:**
-- `AgentAdded`: Agent authorized
-
-#### `user_remove_agent`
-Revokes agent authorization.
-
-```move
-public fun user_remove_agent(
-    pm: &mut PositionManager,
-    agent: address,
-    clk: &Clock,
-    ctx: &TxContext,
-)
-```
-
-**Events:**
-- `AgentRemoved`: Agent authorization revoked
-
-### 6. Position Closure
-
-#### `user_close_pm`
-Closes a PositionManager and returns all funds.
+### `user_close_pm`
+Closes the PM. Aborts up front (cdpm error codes, not framework strings)
+if any of:
+- `pm.balance` non-empty (`EBalanceNotEmpty`, 1008)
+- `pm.fee` non-empty (`EFeeNotEmpty`, 1009)
+- `pm.lending` non-empty (`ELendingNotEmpty`, 1004)
+- Cetus `PositionInfo.rewards_owned` has any non-zero entry (`EPositionHasRewards`, 1007)
 
 ```move
 public fun user_close_pm<CoinTypeA, CoinTypeB>(
@@ -239,26 +254,20 @@ public fun user_close_pm<CoinTypeA, CoinTypeB>(
     versioned: &Versioned,
     clk: &Clock,
     ctx: &mut TxContext,
-)
+);
 ```
+Emits `PositionManagerClosed`.
 
-**Events:**
-- `PositionManagerClosed`: PositionManager closed
-- If position exists: Position closed in Cetus DLMM
+---
 
-**Notes:**
-- Returns all funds to owner
-- Destroys PositionManager resources
-- Removes from user's Record
+## Protocol Functions (AccessList & no-agents)
 
-## Protocol Functions (AccessList Permission)
+Each function requires `vec_set::contains(&access.allow, &sender)` AND
+`vec_set::is_empty(&pm.agents)`.
 
-Functions that require the caller to be in the AccessList AND no active agents.
-
-### 1. Liquidity Management
-
-#### `protocol_add_liquidity`
-Protocol adds liquidity (with protocol fee on rewards).
+### `protocol_add_liquidity`
+Withdraws from `pm.balance`, adds liquidity to the position, returns
+unused balances back to `pm.balance`.
 
 ```move
 public fun protocol_add_liquidity<CoinTypeA, CoinTypeB>(
@@ -274,17 +283,12 @@ public fun protocol_add_liquidity<CoinTypeA, CoinTypeB>(
     versioned: &Versioned,
     clk: &Clock,
     ctx: &mut TxContext,
-)
+);
 ```
+Emits `ProtocolLiquidityAdded`.
 
-**Notes:**
-- Withdraws specified amounts from balance
-- Adds liquidity to position
-- Returns any unused amounts to balance
-- No immediate fee collection
-
-#### `protocol_remove_liquidity`
-Protocol removes liquidity.
+### `protocol_remove_liquidity`
+Removes liquidity from the position into `pm.balance`.
 
 ```move
 public fun protocol_remove_liquidity<CoinTypeA, CoinTypeB>(
@@ -297,17 +301,13 @@ public fun protocol_remove_liquidity<CoinTypeA, CoinTypeB>(
     versioned: &Versioned,
     clk: &Clock,
     ctx: &mut TxContext,
-)
+);
 ```
+Emits `ProtocolLiquidityRemoved`.
 
-**Notes:**
-- Removes liquidity from position
-- Adds returned coins to balance
-
-### 2. Fee and Reward Collection (with Protocol Fee)
-
-#### `protocol_collect_fee`
-Protocol collects fees (deducts protocol fee).
+### `protocol_collect_fee`
+Collects DLMM trading fees, takes the protocol cut into `fee_house`, puts
+the rest into `pm.fee`.
 
 ```move
 public fun protocol_collect_fee<CoinTypeA, CoinTypeB>(
@@ -317,21 +317,13 @@ public fun protocol_collect_fee<CoinTypeA, CoinTypeB>(
     pool: &mut Pool<CoinTypeA, CoinTypeB>,
     config: &GlobalConfig,
     versioned: &Versioned,
-    clk: &Clock,
     ctx: &mut TxContext,
-)
+);
 ```
+Emits `ProtocolFeeCollected`.
 
-**Fee Distribution:**
-- Protocol fee calculated based on `fee_house.fee_rate`
-- Protocol fee added to `fee_house.fee`
-- Remaining fees added to user's `pm.fee`
-
-**Events:**
-- `ProtocolFeeCollected`: Fees collected with amounts, fees, and coin types
-
-#### `protocol_collect_reward`
-Protocol collects rewards (deducts protocol fee).
+### `protocol_collect_reward`
+Same shape, for one reward type.
 
 ```move
 public fun protocol_collect_reward<CoinTypeA, CoinTypeB, RewardType>(
@@ -341,447 +333,214 @@ public fun protocol_collect_reward<CoinTypeA, CoinTypeB, RewardType>(
     pool: &mut Pool<CoinTypeA, CoinTypeB>,
     config: &GlobalConfig,
     versioned: &Versioned,
-    clk: &Clock,
     ctx: &mut TxContext,
-)
+);
 ```
+Emits `ProtocolRewardCollected`.
 
-**Events:**
-- `ProtocolRewardCollected`: Reward collected with amount, fee, and coin type
-
-### 3. Balance Transfers
-
-#### `protocol_transfer_fee_to_balance`
-Transfers fees from fee bag to balance.
+### `protocol_transfer_fee_to_balance`
+Moves `pm.fee` entries into `pm.balance` so they can be redeployed as
+liquidity. No external transfer.
 
 ```move
 public fun protocol_transfer_fee_to_balance<T>(
     access: &AccessList,
     pm: &mut PositionManager,
     amount: u64,
-    clk: &Clock,
     ctx: &mut TxContext,
-)
+);
 ```
-
-**Events:**
-- `FeeTransferredToBalance`: Fees transferred with amount and coin type
-
-### 4. Emergency Functions
-
-#### `protocol_close_position_emergency`
-Emergency position closure (no fee collection).
-
-```move
-public fun protocol_close_position_emergency<CoinTypeA, CoinTypeB>(
-    access: &AccessList,
-    pm: &mut PositionManager,
-    pool: &mut Pool<CoinTypeA, CoinTypeB>,
-    config: &GlobalConfig,
-    versioned: &Versioned,
-    clk: &Clock,
-    ctx: &mut TxContext,
-)
-```
-
-**Use Case:** Cetus DLMM contract upgrade scenarios
-
-**Events:**
-- `EmergencyPositionClosed`: Position closed via emergency
-
-#### `protocol_collect_fee_emergency`
-Emergency fee collection (no protocol fee).
-
-```move
-public fun protocol_collect_fee_emergency<CoinTypeA, CoinTypeB>(
-    access: &AccessList,
-    pm: &mut PositionManager,
-    pool: &mut Pool<CoinTypeA, CoinTypeB>,
-    config: &GlobalConfig,
-    versioned: &Versioned,
-    _clk: &Clock,
-    ctx: &mut TxContext,
-)
-```
-
-**Notes:** Adds fees directly to user's `pm.fee` without protocol cut
-
-#### `protocol_collect_reward_emergency`
-Emergency reward collection (no protocol fee).
-
-```move
-public fun protocol_collect_reward_emergency<CoinTypeA, CoinTypeB, RewardType>(
-    access: &AccessList,
-    pm: &mut PositionManager,
-    pool: &mut Pool<CoinTypeA, CoinTypeB>,
-    config: &GlobalConfig,
-    versioned: &Versioned,
-    _clk: &Clock,
-    ctx: &mut TxContext,
-)
-```
-
-## Agent Functions (Agent Permission)
-
-Functions that require the caller to be an authorized agent.
-
-### 1. Liquidity Management
-
-#### `agent_add_liquidity`
-Agent adds liquidity.
-
-```move
-public fun agent_add_liquidity<CoinTypeA, CoinTypeB>(
-    pm: &mut PositionManager,
-    pool: &mut Pool<CoinTypeA, CoinTypeB>,
-    amount_a: u64,
-    amount_b: u64,
-    bins: vector<u32>,
-    amounts_a: vector<u64>,
-    amounts_b: vector<u64>,
-    config: &GlobalConfig,
-    versioned: &Versioned,
-    clk: &Clock,
-    ctx: &mut TxContext,
-)
-```
-
-**Notes:**
-- Withdraws from balance
-- Adds liquidity to position
-- Returns unused amounts to balance
-
-#### `agent_remove_liquidity`
-Agent removes liquidity.
-
-```move
-public fun agent_remove_liquidity<CoinTypeA, CoinTypeB>(
-    pm: &mut PositionManager,
-    pool: &mut Pool<CoinTypeA, CoinTypeB>,
-    bins: vector<u32>,
-    liquidity_shares: vector<u128>,
-    config: &GlobalConfig,
-    versioned: &Versioned,
-    clk: &Clock,
-    ctx: &mut TxContext,
-)
-```
-
-**Notes:** Adds returned coins to balance
-
-### 2. Fee and Reward Collection
-
-#### `agent_collect_fee`
-Agent collects fees.
-
-```move
-public fun agent_collect_fee<CoinTypeA, CoinTypeB>(
-    pm: &mut PositionManager,
-    pool: &mut Pool<CoinTypeA, CoinTypeB>,
-    config: &GlobalConfig,
-    versioned: &Versioned,
-    _clk: &Clock,
-    ctx: &mut TxContext,
-)
-```
-
-**Notes:** Adds fees to user's `pm.fee`
-
-#### `agent_collect_reward`
-Agent collects rewards.
-
-```move
-public fun agent_collect_reward<CoinTypeA, CoinTypeB, RewardType>(
-    pm: &mut PositionManager,
-    pool: &mut Pool<CoinTypeA, CoinTypeB>,
-    config: &GlobalConfig,
-    versioned: &Versioned,
-    _clk: &Clock,
-    ctx: &mut TxContext,
-)
-```
-
-**Notes:** Adds rewards to user's `pm.fee`
-
-## Admin Functions (AdminCap Permission)
-
-Functions that require the caller to hold the AdminCap.
-
-### 1. Fee Management
-
-#### `admin_set_fee`
-Sets the protocol fee rate.
-
-```move
-public fun admin_set_fee(
-    _: &AdminCap,
-    fee_house: &mut FeeHouse,
-    fee_rate: u64,
-    clk: &Clock,
-    ctx: &TxContext,
-)
-```
-
-**Validation:** `fee_rate <= FEE_DENOMINATOR` (10000 = 100%)
-
-**Events:**
-- `FeeRateUpdated`: Old and new fee rates
-
-#### `admin_collect_fee`
-Collects accumulated protocol fees.
-
-```move
-public fun admin_collect_fee<T>(
-    _: &AdminCap,
-    fee_house: &mut FeeHouse,
-    clk: &Clock,
-    ctx: &mut TxContext,
-): Coin<T>
-```
-
-**Returns:** Collected protocol fees
-
-**Events:**
-- `AdminFeeCollected`: Fees collected with amount and coin type
-
-### 2. Access List Management
-
-#### `admin_insert_access_list`
-Adds address to AccessList.
-
-```move
-public fun admin_insert_access_list(
-    _: &AdminCap,
-    access: &mut AccessList,
-    bot: address,
-    clk: &Clock,
-    ctx: &TxContext,
-)
-```
-
-**Events:**
-- `AccessGranted`: Address added to AccessList
-
-#### `admin_remove_access_list`
-Removes address from AccessList.
-
-```move
-public fun admin_remove_access_list(
-    _: &AdminCap,
-    access: &mut AccessList,
-    bot: address,
-    clk: &Clock,
-    ctx: &TxContext,
-)
-```
-
-**Events:**
-- `AccessRevoked`: Address removed from AccessList
-
-### 3. Admin Transfer
-
-#### `admin_transfer`
-Transfers AdminCap to new address.
-
-```move
-public fun admin_transfer(
-    admin_cap: AdminCap,
-    to: address,
-    clk: &Clock,
-    ctx: &TxContext,
-)
-```
-
-**Events:**
-- `AdminTransferred`: AdminCap transferred from/to addresses
-
-## Record Management Functions
-
-### `register_and_return_record`
-Registers a new user record.
-
-```move
-public fun register_and_return_record(
-    global_record: &mut GlobalRecord,
-    ctx: &mut TxContext,
-): Record
-```
-
-**Returns:** New Record for the caller
-
-**Notes:** Called automatically when needed
-
-### `share_record`
-Shares a Record for public access.
-
-```move
-public fun share_record(
-    record: Record
-)
-```
-
-**Notes:** Makes Record accessible for position management
-
-## Event Reference
-
-### Event Structures
-
-#### FeeCollected
-```move
-public struct FeeCollected has copy, drop {
-    pm_id: ID,
-    pool_id: ID,
-    coin_type_a: String,  // Coin type of token A
-    coin_type_b: String,  // Coin type of token B
-    amount_a: u64,
-    amount_b: u64,
-    by: address,
-    timestamp: u64,
-}
-```
-
-#### RewardCollected
-```move
-public struct RewardCollected has copy, drop {
-    pm_id: ID,
-    pool_id: ID,
-    coin_type: String,  // Coin type of the reward token
-    amount: u64,
-    by: address,
-    timestamp: u64,
-}
-```
-
-#### ProtocolFeeCollected
-```move
-public struct ProtocolFeeCollected has copy, drop {
-    pm_id: ID,
-    pool_id: ID,
-    coin_type_a: String,  // Coin type of token A
-    coin_type_b: String,  // Coin type of token B
-    amount_a: u64,        // Amount after fee (user portion)
-    amount_b: u64,        // Amount after fee (user portion)
-    fee_a: u64,           // Protocol fee amount (token A)
-    fee_b: u64,           // Protocol fee amount (token B)
-    timestamp: u64,
-}
-```
-
-#### ProtocolRewardCollected
-```move
-public struct ProtocolRewardCollected has copy, drop {
-    pm_id: ID,
-    pool_id: ID,
-    coin_type: String,  // Coin type of the reward token
-    amount: u64,        // Amount after fee (user portion)
-    fee_amount: u64,    // Protocol fee amount
-    timestamp: u64,
-}
-```
-
-#### Complete Event List
-- Position management: `PositionManagerCreated`, `PositionManagerClosed`
-- Liquidity: `LiquidityAdded`, `LiquidityRemoved`
-- Fees/rewards: `FeeCollected`, `RewardCollected`, `ProtocolFeeCollected`, `ProtocolRewardCollected`, `UserFeeWithdrawn`, `AdminFeeCollected`
-- Balance: `BalanceDeposited`, `BalanceWithdrawn`, `FeeTransferredToBalance`
-- Agents: `AgentAdded`, `AgentRemoved`
-- Admin: `FeeRateUpdated`, `AccessGranted`, `AccessRevoked`, `AdminTransferred`
-- Emergency: `EmergencyPositionClosed`
-
-## Error Codes
-
-### Current Error Codes
-```move
-const ENotOwner: u64 = 1001;      // Caller is not the owner
-const ENotAllow: u64 = 1002;      // Caller not authorized (agent/protocol)
-const EInvalidFeeRate: u64 = 2001; // Fee rate exceeds FEE_DENOMINATOR
-```
-
-### Recommended Additional Error Codes
-```move
-// Proposed future error codes
-const EInvalidAmount: u64 = 2002;      // Amount must be > 0
-const EInvalidArrayLength: u64 = 2003; // Array length mismatch
-const EInsufficientBalance: u64 = 3001; // Insufficient balance
-const EPositionNotExist: u64 = 3002;   // Position does not exist
-```
-
-## Constants
-
-### `FEE_DENOMINATOR`
-```move
-const FEE_DENOMINATOR: u128 = 10000;  // 100% in basis points
-```
-
-**Usage:** `fee_amount = amount * fee_rate / FEE_DENOMINATOR`
-
-### Default Fee Rate
-Default protocol fee rate: 2000 = 20%
-
-## Type Parameters
-
-### Generic Type Parameters
-- `<CoinTypeA, CoinTypeB>`: Pool token types
-- `<RewardType>`: Reward token type
-- `<T>`: Generic token type
-
-### Common Parameters
-- `pm: &mut PositionManager`: Position manager reference
-- `pool: &mut Pool<CoinTypeA, CoinTypeB>`: Cetus DLMM pool
-- `config: &GlobalConfig`: Global configuration
-- `versioned: &Versioned`: Version compatibility
-- `clk: &Clock`: Timestamp source
-- `ctx: &mut TxContext`: Transaction context
-
-## Best Practices
-
-### 1. Error Handling
-- Check return values and error codes
-- Validate inputs before operations
-- Use appropriate error codes for different failure scenarios
-
-### 2. Event Monitoring
-- Monitor all emitted events for off-chain tracking
-- Use event data for analytics and accounting
-- Validate event consistency with operations
-
-### 3. Permission Management
-- Follow principle of least privilege
-- Regularly review agent authorizations
-- Secure AdminCap with appropriate safeguards
-
-### 4. Emergency Preparedness
-- Have emergency procedures for dependency upgrades
-- Monitor Cetus DLMM for upcoming changes
-- Test emergency functions regularly
-
-## Examples
-
-### Example 1: User Creates Position and Adds Agent
-```move
-// 1. Create position
-user_deposit<USDC, USDT>(record, pool, &mut usdc_coin, &mut usdt_coin, bins, amounts_a, amounts_b, config, versioned, clk, ctx);
-
-// 2. Authorize agent
-user_insert_agent(pm, agent_address, clk, ctx);
-```
-
-### Example 2: Protocol Collects Fees with 20% Fee
-```move
-// Protocol collects fees (20% protocol fee)
-protocol_collect_fee<USDC, USDT>(access, fee_house, pm, pool, config, versioned, clk, ctx);
-// Results: 80% to user's fee bag, 20% to protocol fee bag
-```
-
-### Example 3: Emergency Position Closure
-```move
-// Emergency closure during Cetus DLMM upgrade
-protocol_close_position_emergency<USDC, USDT>(access, pm, pool, config, versioned, clk, ctx);
-// Position closed, funds returned to balance (no fee collection)
-```
+Emits `FeeTransferredToBalance`.
 
 ---
 
-*Last Updated: 2026-02-28*
-*API Documentation Version: 1.0*
-*Contract Version: As analyzed in `sources/cdpm.move`*
+## Agent Functions (`pm.agents` allow-list)
+
+Mirror of `protocol_*` minus the protocol-fee cut. Functionally same set
+of operations; income lands in `pm.fee` directly without the AccessList
+check.
+
+| Function | Event |
+|----------|-------|
+| `agent_add_liquidity` | `AgentLiquidityAdded` |
+| `agent_remove_liquidity` | `AgentLiquidityRemoved` |
+| `agent_collect_fee` | `AgentFeeCollected` |
+| `agent_collect_reward` | `AgentRewardCollected` |
+| `agent_transfer_fee_to_balance` | `FeeTransferredToBalance` |
+
+Signatures match the corresponding `protocol_*` shape minus
+`access: &AccessList`. See `sources/cdpm.move:957-1107`.
+
+---
+
+## Lending Functions (managed-tier — owner ∨ agent ∨ protocol-and-no-agents)
+
+All four entries gate via `assert_caller_authorized(access, pm, ctx)`.
+Income from Scallop / Kai redeems lands in `pm.balance` (not `pm.fee`);
+the interest-only protocol cut is taken inline against `fee_house`.
+
+### `scallop_supply`
+Withdraws `Coin<T>` from `pm.balance`, calls `mint::mint<T>` inline,
+stores the returned `Balance<MarketCoin<T>>` into a typed `ScallopVault<T>`
+inside `pm.lending`. Principal counter accumulates by `coin.value()`.
+
+```move
+public fun scallop_supply<T>(
+    access: &AccessList,
+    pm: &mut PositionManager,
+    version: &ScallopVersion,
+    market: &mut Market,
+    amount: u64,
+    clock: &Clock,
+    ctx: &mut TxContext,
+);
+```
+Emits `ScallopSupplied`.
+
+### `scallop_redeem`
+Pulls `scoin_amount` of share tokens (or `u64::MAX` for full vault),
+calls `redeem::redeem<T>` inline, charges `fee_rate` on
+`max(0, redeemed - principal_portion)`, returns the rest to `pm.balance`.
+
+```move
+public fun scallop_redeem<T>(
+    access: &AccessList,
+    pm: &mut PositionManager,
+    fee_house: &mut FeeHouse,
+    version: &ScallopVersion,
+    market: &mut Market,
+    scoin_amount: u64,
+    clock: &Clock,
+    ctx: &mut TxContext,
+);
+```
+Emits `ScallopRedeemed`.
+
+### `kai_supply`
+Withdraws `Coin<T>` from `pm.balance`, calls `kai_vault::deposit<T, YT>`
+inline, stores the returned `Balance<YT>` into a typed `KaiVault<T, YT>`
+inside `pm.lending`.
+
+```move
+public fun kai_supply<T, YT>(
+    access: &AccessList,
+    pm: &mut PositionManager,
+    vault: &mut kai_sav::vault::Vault<T, YT>,
+    amount: u64,
+    clock: &Clock,
+    ctx: &mut TxContext,
+);
+```
+Emits `KaiSupplied`.
+
+### `kai_redeem`
+Single-shot wrapper around the three-step Kai withdraw chain
+(`vault::withdraw` → `klsp::withdraw` → `vault::redeem_withdraw_ticket`).
+Hardcoded to the `kai_leverage_supply_pool` strategy module — see
+DESIGN.md for the "why klsp-only" rationale.
+
+```move
+public fun kai_redeem<T, ST, YT>(
+    access: &AccessList,
+    pm: &mut PositionManager,
+    fee_house: &mut FeeHouse,
+    vault: &mut kai_sav::vault::Vault<T, YT>,
+    strategy: &mut klsp::Strategy<T, ST>,
+    supply_pool: &mut SupplyPool<T, ST>,
+    yt_amount: u64,
+    clock: &Clock,
+    ctx: &mut TxContext,
+);
+```
+Emits `KaiRedeemed`.
+
+---
+
+## Admin Functions (`AdminCap` capability)
+
+### `admin_transfer`
+Hands the `AdminCap` to another address.
+```move
+public fun admin_transfer(admin_cap: AdminCap, to: address, ctx: &TxContext);
+```
+Emits `AdminTransferred`.
+
+### `admin_set_fee`
+Sets `fee_house.fee_rate`. Aborts with `EInvalidFeeRate` if
+`fee_rate > MAX_FEE_RATE` (5000 / 50%).
+```move
+public fun admin_set_fee(_: &AdminCap, fee_house: &mut FeeHouse, fee_rate: u64);
+```
+Emits `FeeRateUpdated`.
+
+### `admin_collect_fee_return_coin`
+Removes the entire accumulated `Balance<T>` from `fee_house` and returns
+it as a `Coin<T>` for caller chaining.
+```move
+public fun admin_collect_fee_return_coin<T>(
+    _: &AdminCap,
+    fee_house: &mut FeeHouse,
+    ctx: &mut TxContext,
+): Coin<T>;
+```
+Emits `AdminFeeCollected`.
+
+### `admin_collect_fee`
+Same as above but transfers the coin directly to `ctx.sender()`.
+```move
+public fun admin_collect_fee<T>(_: &AdminCap, fee_house: &mut FeeHouse, ctx: &mut TxContext);
+```
+Emits `AdminFeeCollected`.
+
+### `admin_insert_access_list` / `admin_remove_access_list`
+Manage the AccessList (protocol-caller allow set).
+```move
+public fun admin_insert_access_list(_: &AdminCap, access: &mut AccessList, bot: address);
+public fun admin_remove_access_list(_: &AdminCap, access: &mut AccessList, bot: address);
+```
+Emit `AccessGranted` / `AccessRevoked`.
+
+---
+
+## Events
+
+Position lifecycle: `PositionManagerCreated`, `PositionExtract`,
+`PositionManagerClosed`, `RecordCreated`, `RecordDeleted`.
+
+Liquidity: `LiquidityAdded`, `LiquidityRemoved`, `ProtocolLiquidityAdded`,
+`ProtocolLiquidityRemoved`, `AgentLiquidityAdded`, `AgentLiquidityRemoved`.
+
+Fee / Reward: `FeeCollected`, `RewardCollected`, `ProtocolFeeCollected`,
+`ProtocolRewardCollected`, `AgentFeeCollected`, `AgentRewardCollected`,
+`FeeTransferredToBalance`, `UserFeeWithdrawn`, `AdminFeeCollected`.
+
+Balance: `BalanceDeposited`, `BalanceWithdrawn`.
+
+Agent: `AgentAdded`, `AgentRemoved`.
+
+Lending: `ScallopSupplied`, `ScallopRedeemed`, `KaiSupplied`, `KaiRedeemed`.
+
+Admin: `FeeRateUpdated`, `AccessGranted`, `AccessRevoked`,
+`AdminTransferred`.
+
+Sender address is NOT a field on any event — the transaction's `sender`
+metadata is the canonical source.
+
+---
+
+## Constants
+
+| Name | Value | Description |
+|------|-------|-------------|
+| `FEE_DENOMINATOR` | `10000` | Fee rate denominator (basis-points-ish) |
+| `MAX_FEE_RATE` | `5000` | Max admin-settable rate (50%) |
+| Default fee rate at deploy | `2000` | 20% |
+
+---
+
+## See Also
+
+- `DESIGN.md` — architecture, permission model, lending integration
+- `SPEC.md` — formal verification scope and reproducible spec run
+- `publish.md` — current deployment state and dep-upgrade procedure
+- `SECURITY.md` — security analysis (historical F-01..F-04 retained for record)
