@@ -29,6 +29,13 @@ CDPM (Cetus DLMM Position Manager) is a Sui Move smart contract that enables pro
 - **Agent Operations**: Agents can perform liquidity management operations
 - **Permission Control**: Agents have limited permissions (cannot withdraw funds)
 
+> **Building an LP agent?** [RandyPen/lp-agent](https://github.com/RandyPen/lp-agent)
+> is an open-source reference implementation of an autonomous liquidity-provider
+> agent built against this contract's agent-delegation surface (TypeScript/Bun
+> agent + Python forecasting pipeline). Third-party developers can fork it as a
+> starting point — bring your own strategies, pool profiles, and prediction
+> models, then deploy independently.
+
 ## Architecture
 
 ### Core Data Structures
@@ -545,6 +552,7 @@ Comprehensive documentation is available:
 
 1. **[DESIGN.md](DESIGN.md)** - Technical design and architecture
 2. **[API.md](API.md)** - Complete API reference
+3. **[RandyPen/lp-agent](https://github.com/RandyPen/lp-agent)** - Reference implementation of an autonomous LP agent built on this contract, for third-party agent developers to fork
 
 ## License
 
