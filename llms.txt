@@ -297,3 +297,183 @@ buffer for emergency rebalancing until redemptions are unpaused.
 - `skills/cdpm-agent-sdk` — AI 代理操作（调仓、借贷、事件监听）
 - `skills/cdpm-calculation-skill` — 链下数学（bin 价格、流动性、策略权重）
 - `skills/cdpm-protocol-sdk` — 协议运营方操作
+
+---
+
+## 日本語 (Japanese)
+
+**CDPM** は Sui メインネット上の Cetus DLMM 流動性ポジション管理スマートコントラクトです。コンシューマー製品名は **リーフシープ (LeafSheep)**。
+
+### 概要
+
+ユーザーは Cetus DLMM の流動性ポジションを `PositionManager` ボールトに預け入れ、3つの管理モードから選択できます：
+
+1. **自己管理**（オーナーキーで署名）
+2. **AI エージェント委任**（任意の Sui アドレスを認可、プロトコル手数料ゼロ）
+3. **リーフシープ プロトコル管理**（自動リバランス、収益の 20% を手数料として徴収）
+
+遊休資金は Scallop / Kai SAV レンディングに自動供給され、リバランス操作と同一の Sui PTB 内でアトミックに実行されます。
+
+### 7つの戦略ファミリー
+
+| # | 戦略 | 分布形状 | 用途 |
+|---|------|----------|------|
+| 01 | BID-ASK | V字対称 | レンジ相場、往復手数料を獲得 |
+| 02 | ONE-SIDE-BID | 左側ラダー | 押し目買い、反発後に自動 ASK 形に転換 |
+| 03 | ONE-SIDE-ASK | 右側ラダー | 高値売り、反落後に自動 BID 形に転換 |
+| 04 | ONLY-BID | 左側のみ | 受動的な下値蓄積、自動売却なし |
+| 05 | ONLY-ASK | 右側のみ | 受動的な高値売却、自動再買いなし |
+| 06 | CURVE | 三角ピーク | ステーブル・相関ペア、アクティブ bin に手数料集中 |
+| 07 | SPOT | 均一分布 | 中立・手数料獲得 |
+
+### 権限モデル
+
+| ティア | リバランス | 出金 | プロトコル手数料 |
+|--------|-----------|------|----------------|
+| Owner（ユーザーウォレット） | ○ | ○ | 0% |
+| Agent（認可アドレス） | ○ | ✗ | 0% |
+| Protocol（リーフシープ、エージェントなし） | ○ | ✗ | 20% |
+
+### スキル（開発者 SDK）
+
+- `skills/cdpm-user-sdk` — ユーザー操作 PTB ビルダー
+- `skills/cdpm-agent-sdk` — AI エージェント操作（リバランス、レンディング、イベント監視）
+- `skills/cdpm-calculation-skill` — オフチェーン計算（bin 価格、流動性、戦略ウェイト）
+- `skills/cdpm-protocol-sdk` — プロトコルオペレーター操作
+
+コントラクトアドレス: `0x573584cc4698e82fd85f2b54e64ad4cd901c42b768f7628ec167bf2d24aa2aa7`
+
+---
+
+## 한국어 (Korean)
+
+**CDPM** 은 Sui 메인넷에서 Cetus DLMM 유동성 포지션을 관리하는 스마트 컨트랙트입니다. 소비자 제품명은 **리프쉽 (LeafSheep)** 입니다.
+
+### 개요
+
+사용자는 Cetus DLMM 유동성 포지션을 `PositionManager` 볼트에 예치하고 세 가지 관리 모드 중 하나를 선택합니다:
+
+1. **자체 관리**（오너 키로 직접 서명）
+2. **AI 에이전트 위임**（임의 Sui 주소 인가, 프로토콜 수수료 0%）
+3. **리프쉽 프로토콜 관리**（자동 리밸런싱, 수익의 20% 수수료）
+
+유휴 자금은 Scallop / Kai SAV 렌딩에 자동 공급되며, 리밸런싱과 동일한 Sui PTB 내에서 원자적으로 실행됩니다.
+
+### 7가지 전략 패밀리
+
+| # | 전략 | 분포 형태 | 사용 사례 |
+|---|------|----------|----------|
+| 01 | BID-ASK | V자 대칭 | 박스권 시장, 양방향 수수료 수취 |
+| 02 | ONE-SIDE-BID | 좌측 래더 | 저점 매수, 반등 후 자동 ASK 형 전환 |
+| 03 | ONE-SIDE-ASK | 우측 래더 | 고점 매도, 하락 후 자동 BID 형 전환 |
+| 04 | ONLY-BID | 좌측 전용 | 수동적 저가 매수 축적, 자동 매도 없음 |
+| 05 | ONLY-ASK | 우측 전용 | 수동적 고가 매도, 자동 재매수 없음 |
+| 06 | CURVE | 삼각 피크 | 스테이블/상관 페어, 액티브 bin 집중 |
+| 07 | SPOT | 균일 분포 | 중립, 수수료 수취 |
+
+### 권한 모델
+
+| 티어 | 리밸런싱 | 출금 | 프로토콜 수수료 |
+|------|---------|------|--------------|
+| Owner（사용자 지갑） | O | O | 0% |
+| Agent（인가된 주소） | O | X | 0% |
+| Protocol（리프쉽, 에이전트 없음） | O | X | 20% |
+
+### 스킬 (개발자 SDK)
+
+- `skills/cdpm-user-sdk` — 사용자 PTB 빌더
+- `skills/cdpm-agent-sdk` — AI 에이전트 작업（리밸런싱, 렌딩, 이벤트 모니터링）
+- `skills/cdpm-calculation-skill` — 오프체인 수학（bin 가격, 유동성, 전략 가중치）
+- `skills/cdpm-protocol-sdk` — 프로토콜 운영자 작업
+
+컨트랙트 주소: `0x573584cc4698e82fd85f2b54e64ad4cd901c42b768f7628ec167bf2d24aa2aa7`
+
+---
+
+## Bahasa Indonesia (Indonesian)
+
+**CDPM** adalah smart contract di Sui mainnet untuk mengelola posisi likuiditas Cetus DLMM secara otomatis. Nama produk konsumen: **LeafSheep**.
+
+### Ringkasan
+
+Pengguna menyimpan posisi likuiditas Cetus DLMM ke dalam vault `PositionManager` dan memilih satu dari tiga mode pengelolaan:
+
+1. **Kelola sendiri**（owner key menandatangani setiap tx）
+2. **Delegasi ke AI agent**（otorisasi alamat Sui mana pun, biaya protokol 0%）
+3. **Layanan terkelola LeafSheep**（rebalancing otomatis, biaya 20% dari imbal hasil）
+
+Dana menganggur di luar rentang harga secara otomatis ditempatkan di Scallop / Kai SAV lending, dieksekusi secara atomik dalam satu PTB Sui bersama dengan rebalancing.
+
+### 7 Keluarga Strategi
+
+| # | Strategi | Bentuk Distribusi | Kasus Penggunaan |
+|---|----------|------------------|-----------------|
+| 01 | BID-ASK | V simetris | Pasar ranging, fee dari kedua sisi |
+| 02 | ONE-SIDE-BID | Tangga kiri | Beli dip, otomatis konversi ke ASK saat rebound |
+| 03 | ONE-SIDE-ASK | Tangga kanan | Jual rally, otomatis konversi ke BID saat pullback |
+| 04 | ONLY-BID | Kiri saja | Akumulasi pasif di harga rendah, tanpa auto-jual |
+| 05 | ONLY-ASK | Kanan saja | Distribusi pasif di harga tinggi, tanpa auto-beli |
+| 06 | CURVE | Puncak segitiga | Pair stabil/berkorelasi, fee terkonsentrasi di bin aktif |
+| 07 | SPOT | Merata | Netral, pemanenan fee |
+
+### Model Izin
+
+| Tingkat | Rebalancing | Tarik dana | Biaya protokol |
+|---------|------------|-----------|---------------|
+| Owner（dompet pengguna） | Ya | Ya | 0% |
+| Agent（alamat yang diotorisasi） | Ya | Tidak | 0% |
+| Protocol（LeafSheep, tanpa agent） | Ya | Tidak | 20% |
+
+### Skills (SDK Developer)
+
+- `skills/cdpm-user-sdk` — PTB builder untuk operasi pengguna
+- `skills/cdpm-agent-sdk` — Operasi AI agent（rebalancing, lending, monitoring event）
+- `skills/cdpm-calculation-skill` — Kalkulasi off-chain（harga bin, likuiditas, bobot strategi）
+- `skills/cdpm-protocol-sdk` — Operasi operator protokol
+
+Alamat kontrak: `0x573584cc4698e82fd85f2b54e64ad4cd901c42b768f7628ec167bf2d24aa2aa7`
+
+---
+
+## Tiếng Việt (Vietnamese)
+
+**CDPM** là smart contract trên Sui mainnet để quản lý vị thế thanh khoản Cetus DLMM tự động. Tên sản phẩm người dùng: **LeafSheep**.
+
+### Tổng quan
+
+Người dùng gửi vị thế thanh khoản Cetus DLMM vào vault `PositionManager` và chọn một trong ba chế độ quản lý:
+
+1. **Tự quản lý**（khóa owner ký mọi giao dịch）
+2. **Ủy quyền cho AI agent**（ủy quyền bất kỳ địa chỉ Sui nào, phí giao thức 0%）
+3. **Dịch vụ quản lý LeafSheep**（tự động rebalancing, phí 20% trên lợi nhuận）
+
+Tiền nhàn rỗi ngoài vùng giá tự động gửi vào Scallop / Kai SAV lending, thực hiện nguyên tử trong cùng một Sui PTB với rebalancing.
+
+### 7 Gia đình chiến lược
+
+| # | Chiến lược | Phân bố | Trường hợp sử dụng |
+|---|-----------|---------|-------------------|
+| 01 | BID-ASK | V đối xứng | Thị trường dao động, thu phí hai chiều |
+| 02 | ONE-SIDE-BID | Thang trái | Mua khi giảm, tự chuyển sang ASK khi phục hồi |
+| 03 | ONE-SIDE-ASK | Thang phải | Bán khi tăng, tự chuyển sang BID khi giảm |
+| 04 | ONLY-BID | Chỉ trái | Tích lũy bị động ở giá thấp, không tự bán |
+| 05 | ONLY-ASK | Chỉ phải | Phân phối bị động ở giá cao, không tự mua lại |
+| 06 | CURVE | Đỉnh tam giác | Cặp stablecoin/tương quan, phí tập trung tại bin hoạt động |
+| 07 | SPOT | Đồng đều | Trung lập, thu phí giao dịch |
+
+### Mô hình quyền hạn
+
+| Cấp | Rebalancing | Rút tiền | Phí giao thức |
+|-----|------------|---------|--------------|
+| Owner（ví người dùng） | Có | Có | 0% |
+| Agent（địa chỉ được ủy quyền） | Có | Không | 0% |
+| Protocol（LeafSheep, không có agent） | Có | Không | 20% |
+
+### Skills (SDK cho nhà phát triển)
+
+- `skills/cdpm-user-sdk` — PTB builder cho thao tác người dùng
+- `skills/cdpm-agent-sdk` — Thao tác AI agent（rebalancing, lending, theo dõi event）
+- `skills/cdpm-calculation-skill` — Tính toán off-chain（giá bin, thanh khoản, trọng số chiến lược）
+- `skills/cdpm-protocol-sdk` — Thao tác nhà điều hành giao thức
+
+Địa chỉ hợp đồng: `0x573584cc4698e82fd85f2b54e64ad4cd901c42b768f7628ec167bf2d24aa2aa7`
