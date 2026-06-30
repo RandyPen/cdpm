@@ -18,6 +18,13 @@ then choose who operates that vault:
 - **A custom AI agent** (any Sui address the owner authorises)
 - **The LeafSheep protocol** (built-in managed service, 20% fee on yield)
 
+**Core DeFAI use-case:** An AI agent can be authorized to fully manage a user's Cetus
+DLMM position — rebalance bins, supply/redeem idle capital to lending protocols, and
+collect fees — entirely on-chain, without holding the user's private key. The user
+retains exclusive withdrawal rights at all times; only the management plane is delegated.
+This is the DeFi + AI (DeFAI) custody pattern: human owns the assets, AI executes
+the strategy.
+
 When an agent is authorised the protocol is automatically excluded — there is no race
 between protocol and agent. The switch is enforced at the contract level via
 `agents: VecSet<address>`.
