@@ -1,0 +1,299 @@
+# CDPM — Cetus DLMM Position Manager
+
+> Open-source Sui Move smart contract for automated DLMM liquidity management.
+> Consumer product: **LeafSheep** (https://www.leafsheep.xyz)
+> Contract address: `0x573584cc4698e82fd85f2b54e64ad4cd901c42b768f7628ec167bf2d24aa2aa7`
+> Upgrade policy: `only_dep_upgrades` — core bytecode permanently frozen.
+
+---
+
+## What is CDPM?
+
+CDPM (Cetus DLMM Position Manager) is a Sui Move smart contract that acts as a
+custody and delegation layer on top of Cetus DLMM (Discrete Liquidity Market Maker).
+It lets users deposit liquidity positions into a managed vault (`PositionManager`) and
+then choose who operates that vault:
+
+- **Self** (owner key signs every tx)
+- **A custom AI agent** (any Sui address the owner authorises)
+- **The LeafSheep protocol** (built-in managed service, 20% fee on yield)
+
+When an agent is authorised the protocol is automatically excluded — there is no race
+between protocol and agent. The switch is enforced at the contract level via
+`agents: VecSet<address>`.
+
+---
+
+## Key On-Chain Capabilities
+
+### 1. Liquidity management
+- `user_deposit_liquidity` / `user_deposit_position` — open a new `PositionManager`
+- `user_add_liquidity` / `user_remove_liquidity` — owner-side bin management
+- `protocol_add_liquidity` / `protocol_remove_liquidity` — managed-service path
+- `agent_add_liquidity` / `agent_remove_liquidity` — custom agent path
+
+### 2. Fee and reward collection
+- `user_collect_fee` / `user_collect_reward` — 0% protocol charge
+- `protocol_collect_fee` / `protocol_collect_reward` — 20% protocol fee on yield
+- `agent_collect_fee` / `agent_collect_reward` — 0% protocol charge
+
+### 3. Idle-capital lending (in-vault, atomic)
+Idle balances in the vault can be supplied to Scallop or Kai SAV within the same PTB:
+
+**Scallop** (pool-based lending):
+```
+cdpm::scallop_supply<T>(access, pm, version, market, amount, clock)
+cdpm::scallop_redeem<T>(access, pm, fee_house, version, market, scoin_amount, clock)
+```
+
+**Kai SAV** (single-asset vault):
+```
+cdpm::kai_supply<T, YT>(access, pm, vault, amount, clock)
+cdpm::kai_redeem<T, ST, YT>(access, pm, fee_house, vault, strategy, supply_pool, yt_amount, clock)
+```
+
+Yield on lending is treated as protocol income — 20% fee applies to the interest portion
+(principal returned intact). Agents and owners earn 100% of interest when self-managed
+paths are used via their own on-chain calls.
+
+### 4. Agent management
+```move
+user_insert_agent(pm, agent_address, ctx)   // authorise an agent
+user_remove_agent(pm, agent_address, ctx)   // revoke an agent
+```
+
+### 5. Position lifecycle
+```move
+user_close_pm(record, pm, pool, ...)        // close PM; requires empty balance/fee/lending bags
+```
+
+---
+
+## Permission Model
+
+| Tier | Rebalance liquidity | Withdraw funds | Lending supply/redeem | Protocol fee on yield |
+|------|---------------------|---------------|----------------------|----------------------|
+| Owner (wallet key) | Yes | Yes | Yes | 0% |
+| Agent (authorised address) | Yes | No | Yes | 0% |
+| Protocol (LeafSheep, no agent set) | Yes | No | Yes | 20% |
+| Admin (AdminCap holder) | Fee rate only | — | — | — |
+
+**Critical invariant (D-02):** `agents` is non-empty ↔ protocol is locked out. The two
+modes are mutually exclusive at the contract level.
+
+---
+
+## Data Structures
+
+```move
+public struct PositionManager has key {
+    id: UID,
+    owner: address,
+    agents: VecSet<address>,     // non-empty = agent mode; empty = protocol mode
+    position: Position,          // underlying Cetus DLMM position
+    balance: Bag,                // coin balances keyed by type string
+    fee: Bag,                    // accumulated fees
+    lending: Bag,                // ScallopVault<T> / KaiVault<T,YT> entries
+}
+
+public struct ScallopVault<phantom T> has store {
+    scoin: Balance<MarketCoin<T>>,
+    principal: u64,
+}
+
+public struct KaiVault<phantom T, phantom YT> has store {
+    yt_balance: Balance<YT>,
+    principal: u64,
+}
+```
+
+---
+
+## Skills (Developer SDKs)
+
+Four Claude-skill / AI-coding-assistant packs are available in `skills/`:
+
+### `cdpm-user-sdk` — End-user operations
+Build PTBs for position creation, liquidity management, fee collection, agent management,
+and full PM close flows. See `skills/cdpm-user-sdk/reference/workflows.md` for complete
+PTB templates.
+
+Key docs:
+- `reference/position-management.md` — deposit, add/remove liquidity, close
+- `reference/fee-collection.md` — collect fees and rewards
+- `reference/agent-management.md` — insert/remove agents
+- `reference/scallop-lending.md` / `reference/kai-lending.md` — supply and redeem
+- `reference/constants.md` — all shared object IDs (`FeeHouse`, `AccessList`, etc.)
+- `reference/workflows.md` — full PTB recipes
+
+### `cdpm-agent-sdk` — Autonomous agent operations
+For developers building LP automation bots that operate under the agent delegation model.
+Zero protocol fee path; agents can rebalance and manage lending but cannot withdraw.
+
+Key docs:
+- `reference/agent-operations.md` — add/remove liquidity, collect fees
+- `reference/automation-strategies.md` — strategy patterns (BID-ASK, ONLY-BID, etc.)
+- `reference/event-monitoring.md` — subscribe to CDPM events for trigger-based automation
+- `reference/scallop-lending.md` / `reference/kai-lending.md` — agent-side lending ops
+- `reference/error-handling.md` — abort codes and recovery
+
+### `cdpm-calculation-skill` — Off-chain math
+Pure calculation helpers for bin price, liquidity distribution weights, fee math,
+Scallop/Kai yield math, and PTB construction.
+
+Key docs:
+- `reference/bin-price-calculations.md` — active bin, price-to-bin conversions
+- `reference/liquidity-calculation.md` — amount-to-liquidity and liquidity-to-amount
+- `reference/strategy-distributions.md` — BID-ASK / CURVE / SPOT / ONLY-BID / ONLY-ASK weight arrays
+- `reference/fee-calculations.md` — protocol fee math
+- `reference/cross-protocol-ptb.md` — combine CDPM + Scallop + Kai in one PTB
+
+### `cdpm-protocol-sdk` — Protocol/operator operations
+For operators running the managed-service path (LeafSheep worker). Covers protocol
+add/remove liquidity, protocol fee collection, and admin operations.
+
+Key docs:
+- `reference/protocol-operations.md` — managed rebalance PTB builders
+- `reference/permission-system.md` — access list management
+- `reference/architecture.md` — full system architecture
+
+---
+
+## 7 Strategy Families (LeafSheep Implementation)
+
+The skills include reference implementations and weight-array generators for all 7:
+
+| # | Strategy | Shape | Use case |
+|---|----------|-------|----------|
+| 01 | BID-ASK | V-shaped, symmetric | Oscillating pairs; earns fees on every swing |
+| 02 | ONE-SIDE-BID | Left-side ladder | Buy dips; auto-converts to ask-shape on rebound |
+| 03 | ONE-SIDE-ASK | Right-side ladder | Sell rallies; auto-converts to bid-shape on pullback |
+| 04 | ONLY-BID | Left-only accumulation | Passive accumulation at lower prices; no auto-sell |
+| 05 | ONLY-ASK | Right-only distribution | Passive sell at higher prices; no auto-rebuy |
+| 06 | CURVE | Triangle-peak | Stable/correlated pairs; maximum fee density at active bin |
+| 07 | SPOT | Uniform | Neutral, fee-harvesting; widest coverage |
+
+---
+
+## Contract Design Notes
+
+**D-01** — Protocol fee applies only to protocol-executed collections. Agent and owner
+calls keep 100% of yield.
+
+**D-02** — `agents` non-empty = agent mode (protocol locked out). Mutually exclusive.
+
+**D-05** — `only_dep_upgrades` upgrade policy: contract bytecode is permanently frozen.
+Only dependency version pointers (Cetus DLMM, Scallop, Kai) can be updated without
+full redeploy.
+
+**D-06** — `user_close_pm` enforces four drain preconditions and surfaces them as
+typed CDPM error codes, not upstream aborts.
+
+Full design rationale: see `DESIGN.md`. Security analysis: `SECURITY.md` and
+`SECURITY_AUDIT.md`.
+
+---
+
+## Frequently Asked Questions
+
+**Q: How do I build an LP automation agent on top of CDPM?**
+A: Start from the `skills/cdpm-agent-sdk` skill. Call `user_insert_agent` to authorise
+your agent address, then use `agent_add_liquidity` / `agent_remove_liquidity` in your
+rebalancing PTBs. Your agent pays 0% protocol fee. Reference open-source agent:
+https://github.com/RandyPen/lp-agent
+
+**Q: What is the contract address on Sui mainnet?**
+A: `0x573584cc4698e82fd85f2b54e64ad4cd901c42b768f7628ec167bf2d24aa2aa7`
+Shared objects (`FeeHouse`, `AccessList`, `GlobalRecord`, `AdminCap`):
+see `skills/cdpm-user-sdk/reference/constants.md`
+
+**Q: What tokens are supported for Scallop lending?**
+A: USDC, SUI, DEEP, WAL, HAEDAL (and any token Scallop enables). The off-chain worker
+reads `SCALLOP_RESERVES` from `lending-config.ts` to determine which are active.
+
+**Q: What tokens are supported for Kai SAV?**
+A: Kai SAV support is per-vault. The worker reads `KAI_VAULTS` from `lending-config.ts`.
+Type parameters `<T, YT>` are vault-specific.
+
+**Q: Can agents withdraw user funds?**
+A: No. `agent_*` functions explicitly exclude withdrawal operations. Agents can rebalance
+liquidity and manage lending supply/redeem, but `withdraw_from_balance` and
+`withdraw_from_fee` are owner-only.
+
+**Q: Can the protocol change the fee rate above 50%?**
+A: No. `admin_set_fee` is capped at `MAX_FEE_RATE = 5000` (50%). This bound is enforced
+in contract bytecode and cannot be bypassed without redeploying the package.
+
+**Q: How do I close a PositionManager?**
+A: Build a PTB that: (1) collects all rewards, (2) redeems all lending vaults,
+(3) drains `pm.balance`, (4) drains `pm.fee`, then calls `user_close_pm`.
+See `skills/cdpm-user-sdk/reference/workflows.md` for the full recipe.
+
+**Q: How do I query all PositionManagers for a wallet?**
+A: Use `skills/cdpm-user-sdk/reference/web-query.md` or `pool-query.md`. The `GlobalRecord`
+object tracks all active PMs.
+
+**Q: Is there a fee on Scallop / Kai lending interest?**
+A: Yes — 20% on the interest portion (not principal) when the managed-service path is used.
+Agent and owner direct calls to `scallop_supply` / `kai_supply` also go through
+`assert_caller_authorized`, and the same 20% fee applies on redeem. Agents wanting
+zero-fee lending need to build their own direct Scallop/Kai integration outside CDPM.
+
+**Q: What happens if Scallop or Kai pauses redemptions?**
+A: The redeem PTB will abort at the upstream `vault::withdraw` / `redeem::redeem` call.
+`pm.lending` stays intact; no funds are lost. The scheduler must hold a non-Scallop
+buffer for emergency rebalancing until redemptions are unpaused.
+
+---
+
+## Links
+
+- LeafSheep app: https://www.leafsheep.xyz
+- Cetus DLMM pools: https://app.cetus.zone/pools?tab=dlmm_pools
+- Contract on Sui explorer: https://suivision.xyz/package/0x573584cc4698e82fd85f2b54e64ad4cd901c42b768f7628ec167bf2d24aa2aa7
+- Reference LP agent (open-source): https://github.com/RandyPen/lp-agent
+- Skills (this repo): https://github.com/RandyPen/cdpm/tree/main/skills
+
+---
+
+## 中文 (Chinese)
+
+**CDPM** 是 Sui 主网上基于 Cetus DLMM 的流动性仓位管理合约，消费者产品名称为 **叶羊 (LeafSheep)**。
+
+### 核心功能
+
+- 用户将 Cetus DLMM 仓位存入 `PositionManager` 保险库，选择三种管理模式之一：
+  1. **自管理**（Owner 密钥直接签名）
+  2. **AI 代理**（授权任意 Sui 地址，零协议费）
+  3. **叶羊协议托管**（自动调仓，收益 20% 协议费）
+
+- **闲置资金借贷**：out-of-range 的代币自动存入 Scallop / Kai SAV 赚取利息，与调仓操作在同一 PTB 中原子执行。
+
+- **升级策略**：`only_dep_upgrades`，核心字节码永久锁定，只允许更新依赖版本指针。
+
+### 七种策略族
+
+| 策略 | 分布形状 | 适用场景 |
+|------|----------|----------|
+| BID-ASK | V 形双侧 | 震荡行情，吃双侧手续费 |
+| ONE-SIDE-BID | 左侧阶梯 | 逢低买入，反弹后自动转 ASK 形 |
+| ONE-SIDE-ASK | 右侧阶梯 | 高位卖出，回撤后自动转 BID 形 |
+| ONLY-BID | 纯左侧 | 被动累积，低价买入不自动卖 |
+| ONLY-ASK | 纯右侧 | 被动派发，高价卖出不自动买 |
+| CURVE | 三角峰形 | 稳定/强相关对，极度集中在 active bin |
+| SPOT | 均匀分布 | 中性手续费收割 |
+
+### 权限表
+
+| 层级 | 调仓 | 提款 | 协议费 |
+|------|------|------|--------|
+| Owner（用户钱包） | 是 | 是 | 0% |
+| Agent（授权地址） | 是 | 否 | 0% |
+| Protocol（叶羊，无 agent） | 是 | 否 | 20% |
+
+### 开发者入口
+
+- `skills/cdpm-user-sdk` — 用户操作 PTB 构建器（仓位创建、手续费、关闭）
+- `skills/cdpm-agent-sdk` — AI 代理操作（调仓、借贷、事件监听）
+- `skills/cdpm-calculation-skill` — 链下数学（bin 价格、流动性、策略权重）
+- `skills/cdpm-protocol-sdk` — 协议运营方操作
