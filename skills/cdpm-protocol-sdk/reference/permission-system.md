@@ -18,6 +18,7 @@
 | `user_insert_agent` / `user_remove_agent` | yes | no | no | no |
 | `user_close_pm` (requires `pm.balance`, `pm.fee`, `pm.lending` empty and no Cetus rewards owed) | yes | no | no | no |
 | `agent_add_liquidity` / `agent_remove_liquidity` | no | yes | no | no |
+| `agent_create_position` / `agent_destroy_position` | no | yes | no | no |
 | `agent_collect_fee` / `agent_collect_reward` (routes coin into `pm.fee`) | no | yes | no | no |
 | `agent_transfer_fee_to_balance` | no | yes | no | no |
 | `protocol_add_liquidity` / `protocol_remove_liquidity` | no | no | yes\* | no |
@@ -61,6 +62,23 @@ function canProtocolOperate(
          pm.agents.length === 0;
 }
 ```
+
+### Agent Position Lifecycle Gating
+
+`agent_create_position` / `agent_destroy_position` are **agent-role-only**
+(owner and protocol cannot call them). Both assert the caller is in
+`pm.agents` (`ENotAllow`, 1002) plus a lifecycle-specific precondition:
+
+- `agent_create_position` — `pm.position` must be `None`
+  (`EPositionAlreadyExists`, 1010) and the passed pool must equal
+  `pm.pool_id` (`EWrongPool`, 1012).
+- `agent_destroy_position` — `pm.position` must be `Some`
+  (`ENoPosition`, 1011) and all Cetus rewards must be collected first
+  (`EPositionHasRewards`, 1007).
+
+The protocol tier operates on PMs whose `position` is managed by the agent;
+protocol liquidity operations assert `ENoPosition` if the position was
+destroyed.
 
 ## Fee Mechanics
 

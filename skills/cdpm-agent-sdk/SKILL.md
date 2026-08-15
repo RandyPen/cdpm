@@ -22,6 +22,8 @@ import { SuiGrpcClient } from '@mysten/sui/grpc';
 
 | Operation | Description |
 |-----------|-------------|
+| Create Position (`agent_create_position`) | Open a fresh Cetus position from `pm.balance` (PM must currently hold no position) |
+| Destroy Position (`agent_destroy_position`) | Close the Cetus position; underlying assets return to `pm.balance` |
 | Add Liquidity | Add liquidity using PositionManager balance |
 | Remove Liquidity | Remove liquidity and return to balance |
 | Collect Fees | Collect fees from position (goes to fee bag) |
@@ -31,6 +33,26 @@ import { SuiGrpcClient } from '@mysten/sui/grpc';
 | Scallop `scallop_redeem` | Pull underlying back; yield fee deducted from interest portion |
 | Kai SAV `kai_supply` | Park idle balance into a Kai `Vault<T, YT>` |
 | Kai SAV `kai_redeem` | Pull underlying back via the strategy walk; same yield fee on interest |
+
+### Agent Position Lifecycle
+
+Since the `position` field is now `Option<Position>`, the agent controls the
+Cetus position lifecycle independently of the owner:
+
+- **`agent_create_position<CoinTypeA, CoinTypeB>`** — opens a fresh Cetus
+  position from `pm.balance`. Asserts the PM currently holds no position
+  (`EPositionAlreadyExists`, 1010), that the passed pool matches the PM's
+  bound `pool_id` (`EWrongPool`, 1012), and that the caller is in `pm.agents`
+  (`ENotAllow`, 1002). Unused coin remainder is returned to `pm.balance`.
+  Emits `AgentPositionCreated`.
+- **`agent_destroy_position<CoinTypeA, CoinTypeB>`** — closes the Cetus
+  position and routes the underlying assets back into `pm.balance`. Asserts
+  the PM currently holds a position (`ENoPosition`, 1011) and that all Cetus
+  rewards have been collected first (`EPositionHasRewards`, 1007). Emits
+  `AgentPositionDestroyed`.
+
+Agents **cannot** move funds out of the PM — both lifecycle functions keep
+assets inside `pm.balance`. Withdrawal to the owner remains owner-only.
 
 ### What Agents CANNOT Do
 
@@ -60,7 +82,7 @@ const isAuthorized = agents.includes(agentAddress);
 ## Topics
 
 ### Core Operations
-- **[Agent Operations](reference/agent-operations.md)** - Add/remove liquidity, collect fees, transfer fees
+- **[Agent Operations](reference/agent-operations.md)** - Position lifecycle (create/destroy), add/remove liquidity, collect fees, transfer fees
 - **[Scallop Lending](reference/scallop-lending.md)** - Agent-driven `scallop_supply` / `scallop_redeem` (one `tx.moveCall` each); yield fee shares `fee_house.fee_rate` with Kai
 - **[Kai SAV Lending](reference/kai-lending.md)** - Agent-driven `kai_supply` / `kai_redeem` (one `tx.moveCall` each); yield fee shares `fee_house.fee_rate` with Scallop
 - **[Automation Strategies](reference/automation-strategies.md)** - Auto-compounding, rebalancing, fee collection scheduler

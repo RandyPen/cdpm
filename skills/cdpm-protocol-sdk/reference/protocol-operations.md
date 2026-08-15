@@ -13,6 +13,8 @@
 
 ## Helper: Get Pool ID from PositionManager
 
+`pool_id` is a top-level field on `PositionManager` (binds the PM to its Cetus pool; no longer nested in `position`):
+
 ```typescript
 async function getPoolIdFromPositionManager(
   client: SuiGrpcClient,
@@ -23,8 +25,8 @@ async function getPoolIdFromPositionManager(
     include: { content: true },
   });
 
-  // Read pool_id from PositionManager's position field
-  return pm?.content?.fields?.position?.fields?.pool_id || null;
+  // pool_id is a top-level field on PositionManager
+  return pm?.content?.fields?.pool_id || null;
 }
 ```
 

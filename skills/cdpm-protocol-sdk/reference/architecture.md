@@ -62,8 +62,9 @@ interface AdminCap {
 interface PositionManager {
   id: string;
   owner: string;
-  agents: string[];        // VecSet<address> — authorized agent addresses
-  position: string | null; // Optional Cetus DLMM Position handle
+  agents: string[];            // VecSet<address> — authorized agent addresses
+  pool_id: string;             // The Cetus pool this PM is bound to (set at creation)
+  position: string | null;     // Option<Position> — the Cetus DLMM Position, or null when destroyed/never created
   balance: Map<string, string>;  // type_name<T> -> Balance<T>: spendable funds
   fee: Map<string, string>;      // type_name<T> -> Balance<T>: yield bookkeeping
   // Unified lending bag — holds both Scallop and Kai SAV entries:
@@ -77,6 +78,20 @@ interface PositionManager {
   lending: Map<string, { scoin?: string; yt_balance?: string; principal: string }>;
 }
 ```
+
+`position` is `Option<Position>` in the Move struct. Agents control the Cetus
+position lifecycle independently of the owner:
+
+- `agent_create_position<A, B>` opens a fresh position from `pm.balance`
+  (asserts the PM holds no position — `EPositionAlreadyExists` 1010 — and
+  that the passed pool matches `pm.pool_id` — `EWrongPool` 1012).
+- `agent_destroy_position<A, B>` closes the position and routes underlying
+  assets back to `pm.balance` (asserts a position exists — `ENoPosition`
+  1011 — and all Cetus rewards were collected — `EPositionHasRewards` 1007).
+
+All position-accessing functions (`user_*_from_position`,
+`protocol_remove_liquidity` / `protocol_collect_*`, and the agent
+equivalents) assert `ENoPosition` when `position` is `None`.
 
 ### ScallopVault
 

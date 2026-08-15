@@ -77,6 +77,10 @@ export interface FeesAndRewards {
 
 ### Fetch PositionManager Basic Data
 
+`PositionManager` stores only the bound `pool_id` (top-level field) and an
+`Option<Position>` handle. Coin types are not stored on the PM — read them
+from the bound Cetus pool object (`token_x_type` / `token_y_type`).
+
 ```typescript
 export async function fetchPositionManagerData(
   client: SuiGrpcClient,
@@ -93,14 +97,29 @@ export async function fetchPositionManagerData(
   }
 
   const owner = content.owner;
+  // pool_id is a TOP-LEVEL field on PositionManager
+  const poolId = content.pool_id;
+  // position is Option<Position> — null when destroyed / never created
   const positionId = content.position?.id;
-  const poolId = content.position?.pool_id;
-  let coinTypeA = content.position?.coin_type_a;
-  let coinTypeB = content.position?.coin_type_b;
 
-  if (!positionId || !poolId || !coinTypeA || !coinTypeB) {
-    throw new Error(`Failed to extract position info from PositionManager ${pmId}`);
+  if (!poolId) {
+    throw new Error(`Failed to extract pool_id from PositionManager ${pmId}`);
   }
+  if (!positionId) {
+    throw new Error(`PositionManager ${pmId} holds no active position (position is None)`);
+  }
+
+  // Coin types are not on the PM — fetch from the bound pool object
+  const poolObject = await client.getObject({
+    objectId: poolId,
+    include: { json: true },
+  });
+  const poolContent = poolObject.object?.json as any;
+  if (!poolContent) {
+    throw new Error(`Failed to read pool ${poolId}`);
+  }
+  const coinTypeA = poolContent.token_x_type;
+  const coinTypeB = poolContent.token_y_type;
 
   // Helper function to extract base coin type from possibly full coin type
   const getBaseCoinType = (type: string): string => {

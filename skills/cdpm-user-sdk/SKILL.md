@@ -121,6 +121,12 @@ try {
     console.error('user_close_pm aborted: drain every pm.balance[T] with user_remove_liquidity_from_balance<T>(u64::MAX)');
   } else if (e.message.includes('EFeeNotEmpty')) {    // 1009
     console.error('user_close_pm aborted: drain every pm.fee[T] with user_withdraw_fee<T>(u64::MAX)');
+  } else if (e.message.includes('EPositionAlreadyExists')) { // 1010
+    console.error('agent_create_position aborted: pm.position is already Some. Destroy the current position first.');
+  } else if (e.message.includes('ENoPosition')) {     // 1011
+    console.error('Operation requires an active position but pm.position is None. Create one via agent_create_position (agent) or user_deposit_liquidity (owner).');
+  } else if (e.message.includes('EWrongPool')) {      // 1012
+    console.error('agent_create_position aborted: pool does not match PositionManager.pool_id.');
   } else {
     console.error('Transaction failed:', e);
   }

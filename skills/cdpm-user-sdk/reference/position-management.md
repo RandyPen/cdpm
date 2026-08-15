@@ -10,7 +10,12 @@
 
 ## Helper: Get Pool ID from PositionManager
 
-When working with a PositionManager, you can read the associated pool ID from its `position` field:
+`pool_id` is a top-level field on `PositionManager` — it binds the PM to a
+specific Cetus pool at creation time (`user_deposit_liquidity` /
+`user_deposit_position`) and no longer lives inside the `position` field.
+The `position` field itself is now `Option<Position>`: it is `null` when an
+agent destroyed the position (`agent_destroy_position`) or when no position
+has been created yet.
 
 ```typescript
 async function getPoolIdFromPositionManager(
@@ -22,8 +27,8 @@ async function getPoolIdFromPositionManager(
     include: { content: true },
   });
   
-  // Read pool_id from PositionManager's position field
-  const poolId = pm?.content?.fields?.position?.fields?.pool_id;
+  // pool_id is a top-level field on PositionManager
+  const poolId = pm?.content?.fields?.pool_id;
   return poolId || null;
 }
 
@@ -31,9 +36,9 @@ async function getPoolIdFromPositionManager(
 interface PositionManagerInfo {
   id: string;
   owner: string;
-  position?: {
+  pool_id: string;  // top-level: pool the PM is bound to
+  position?: {      // Option<Position> — null if destroyed / never created
     id: string;
-    poolId: string;
   };
   agents: string[];
   balance: Record<string, string>;
@@ -73,9 +78,9 @@ async function getPositionManagerInfo(
   return {
     id: pmId,
     owner: pmData.owner,
+    pool_id: pmData.pool_id,
     position: pmData.position ? {
       id: pmData.position.id,
-      poolId: pmData.position.pool_id,
     } : undefined,
     agents: pmData.agents || [],
     balance: pmData.balance || {},
@@ -86,16 +91,17 @@ async function getPositionManagerInfo(
 
 // Usage
 const pmInfo = await getPositionManagerInfo(graphqlClient, pmId);
-if (pmInfo?.position?.poolId) {
-  console.log(`Pool ID: ${pmInfo.position.poolId}`);
+if (pmInfo?.pool_id) {
+  console.log(`Pool ID: ${pmInfo.pool_id}`);
 }
+console.log(`Position active: ${Boolean(pmInfo?.position)}`);
 ```
 
 ## Add Liquidity
 
 When adding liquidity, you can either:
 - Pass the `poolId` directly (if you already know it)
-- Or read it from the PositionManager's `position` field
+- Or read it from the PositionManager's top-level `pool_id` field
 
 ```typescript
 async function addLiquidity(
@@ -145,7 +151,7 @@ async function addLiquidityWithAutoPoolId(
   // Read pool_id from PositionManager
   const poolId = await getPoolIdFromPositionManager(client, pmId);
   if (!poolId) {
-    throw new Error('PositionManager has no associated pool');
+    throw new Error('PositionManager has no bound pool');
   }
   
   return addLiquidity(
@@ -201,7 +207,7 @@ async function removeLiquidityWithAutoPoolId(
   // Read pool_id from PositionManager
   const poolId = await getPoolIdFromPositionManager(client, pmId);
   if (!poolId) {
-    throw new Error('PositionManager has no associated pool');
+    throw new Error('PositionManager has no bound pool');
   }
   
   return removeLiquidity(
@@ -215,9 +221,10 @@ async function removeLiquidityWithAutoPoolId(
 
 `user_deposit_position` wraps a `Position` object the caller already owns
 (e.g. one obtained directly from a Cetus DLMM call) into a fresh
-`PositionManager`. The owner is set to `ctx.sender()`, the `position`
-field is filled with the supplied `Position`, and all three bags
-(`balance`, `fee`, `lending`) start empty.
+`PositionManager`. The owner is set to `ctx.sender()`, the `pool_id` is read
+from the wrapped `Position` (`position::pool_id`), the `position` field is
+filled with `option::some(position)`, and all three bags (`balance`, `fee`,
+`lending`) start empty.
 
 ```move
 public fun user_deposit_position(record: &mut Record, position: Position, ctx: &mut TxContext);

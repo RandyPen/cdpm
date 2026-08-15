@@ -61,9 +61,9 @@ async function queryPositionManagersByRecord(
 interface PositionManagerInfo {
   id: string;
   owner: string;
-  position?: {
+  pool_id: string;  // top-level: the Cetus pool the PM is bound to
+  position?: {      // Option<Position> — null when destroyed / never created
     id: string;
-    poolId: string;
   };
   agents: string[];
   balance: Record<string, string>;
@@ -107,9 +107,9 @@ async function getPositionManagerDetails(
   return {
     id: pmId,
     owner: pmData.owner,
+    pool_id: pmData.pool_id,
     position: pmData.position ? {
       id: pmData.position.id,
-      poolId: pmData.position.pool_id,
     } : undefined,
     agents: pmData.agents || [],
     balance: pmData.balance || {},
@@ -184,7 +184,7 @@ async function queryPositionManagersWithPool(
   // Fetch pool details for each PositionManager
   const withPoolInfo = await Promise.all(
     pms.map(async pm => {
-      if (!pm.position?.poolId) return pm;
+      if (!pm.pool_id) return pm;
       
       const poolQuery = `
         query GetPool($poolId: SuiAddress!) {
@@ -200,7 +200,7 @@ async function queryPositionManagersWithPool(
       
       const poolResult = await graphqlClient.query({
         query: poolQuery,
-        variables: { poolId: pm.position.poolId },
+        variables: { poolId: pm.pool_id },
       });
       
       const poolData = poolResult.object?.asMoveObject?.contents?.json;

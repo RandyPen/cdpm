@@ -22,20 +22,36 @@ These are the abort codes from the `cdpm::cdpm` module. They are **shared** betw
 | 1004 | `ELendingNotEmpty` | `user_close_pm` while `pm.lending` is non-empty (any Scallop or Kai entry) | Drain every `ScallopVault<T>` via `scallop_redeem` and every `KaiVault<T, YT>` via `kai_redeem` first |
 | 1005 | `ENoSuchVault` | `scallop_redeem` for an absent `T` entry, or `kai_redeem` for an absent `(T, YT)` entry | Confirm the requested vault entry exists in `pm.lending` (Scallop key = `type_name<T>`, Kai key = `type_name<YT>`) |
 | 1006 | `ENoSuchBalance` | `withdraw_from_balance` / `withdraw_from_fee` for an absent type key (e.g. `user_remove_liquidity_from_balance`, `user_withdraw_fee`, `protocol_transfer_fee_to_balance`, `agent_transfer_fee_to_balance`, or any path that pulls a `Coin<T>` from `pm.balance` / `pm.fee` when no such entry exists) | Confirm the bag entry for the requested type exists before signing |
-| 1007 | `EPositionHasRewards` | `user_close_pm` while the Cetus `PositionInfo.rewards_owned` vector has a non-zero entry | Call `user_collect_reward<…, RewardType>` for each reward type until all entries are 0 before closing |
+| 1007 | `EPositionHasRewards` | `user_close_pm` / `agent_destroy_position` while the Cetus `PositionInfo.rewards_owned` vector has a non-zero entry | Call `user_collect_reward<…, RewardType>` for each reward type until all entries are 0 before closing |
 | 1008 | `EBalanceNotEmpty` | `user_close_pm` while `pm.balance` is non-empty | Withdraw every `Balance<T>` entry via `user_remove_liquidity_from_balance<T>` first |
 | 1009 | `EFeeNotEmpty` | `user_close_pm` while `pm.fee` is non-empty | Withdraw every `Balance<T>` entry from `pm.fee` via `user_withdraw_fee<T>` (or transfer to balance via `protocol_transfer_fee_to_balance` / `agent_transfer_fee_to_balance` and then drain) first |
+| 1010 | `EPositionAlreadyExists` | `agent_create_position` while `pm.position` is already `Some` | Destroy the current position (`agent_destroy_position`) before creating a new one |
+| 1011 | `ENoPosition` | Any position-accessing operation (`user_*_from_position`, `protocol_remove_liquidity` / `protocol_collect_*`, agent equivalents, `agent_destroy_position`) while `pm.position` is `None` | Create a position first (`agent_create_position` / `user_deposit_liquidity`), or read `pm.pool_id` to confirm the PM is bound to the expected pool |
+| 1012 | `EWrongPool` | `agent_create_position` called with a pool that does not match the PM's bound `pool_id` | Read `pm.pool_id` (top-level field) and pass exactly that pool |
 
 ## `user_close_pm` preconditions
 
-`user_close_pm` enforces four drain conditions before destructuring the PM:
+`user_close_pm` enforces drain conditions before destructuring the PM. Its
+behavior is **dual-mode** depending on `pm.position` (`Option<Position>`):
+
+- **`Some` (position active)** — the reward-residual check below applies,
+  then `pool::close_position` + `pool::destroy_close_position_cert` run and
+  the residual `Balance<CoinTypeA>` / `Balance<CoinTypeB>` are transferred to
+  the sender.
+- **`None` (position already destroyed)** — the Cetus close is skipped; the
+  PM is drained and closed as-is.
+
+The four drain conditions:
 
 1. `pm.balance` is empty (`EBalanceNotEmpty = 1008`).
 2. `pm.fee` is empty (`EFeeNotEmpty = 1009`).
 3. `pm.lending` is empty (`ELendingNotEmpty = 1004`).
-4. Every entry in the Cetus `PositionInfo.rewards_owned` vector is zero (`EPositionHasRewards = 1007`).
+4. Every entry in the Cetus `PositionInfo.rewards_owned` vector is zero
+   (`EPositionHasRewards = 1007`) — only checked when `pm.position` is
+   `Some`.
 
-The diagnostics fire in that order. After all four assertions pass, `user_close_pm` calls `pool::close_position` and `pool::destroy_close_position_cert`, transfers the residual `Balance<CoinTypeA>` and `Balance<CoinTypeB>` from the closed Cetus position to the sender, and emits `PositionManagerClosed`.
+The diagnostics fire in that order. After all four assertions pass,
+`user_close_pm` emits `PositionManagerClosed`.
 
 ## Caller-side dust handling in `*_redeem`
 

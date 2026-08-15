@@ -54,6 +54,25 @@ interface FeeTransferredToBalance {
   amount: string;
 }
 
+// Emitted by agent_create_position — agent opened a fresh Cetus position from pm.balance
+interface AgentPositionCreated {
+  pm_id: string;
+  pool_id: string;
+  lower_bin_id: { bits: number };
+  upper_bin_id: { bits: number };
+  liquidity_shares: string[];
+}
+
+// Emitted by agent_destroy_position — agent closed the Cetus position, assets back to pm.balance
+interface AgentPositionDestroyed {
+  pm_id: string;
+  pool_id: string;
+  coin_type_a: string;
+  coin_type_b: string;
+  amount_a: string;  // Underlying A returned to pm.balance
+  amount_b: string;  // Underlying B returned to pm.balance
+}
+
 // Emitted by scallop_supply, regardless of caller.
 interface ScallopSupplied {
   pm_id: string;

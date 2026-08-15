@@ -25,10 +25,10 @@ async function preOperationChecks(
     return { canProceed: false, reason: 'Not authorized' };
   }
 
-  // 2. Check position exists
+  // 2. Check position exists (Option<Position> — absent when destroyed / never created)
   const position = pm?.content?.fields?.position;
   if (!position) {
-    return { canProceed: false, reason: 'No position' };
+    return { canProceed: false, reason: 'No active position — call agent_create_position first' };
   }
 
   // 3. Check sufficient balance (for add liquidity)

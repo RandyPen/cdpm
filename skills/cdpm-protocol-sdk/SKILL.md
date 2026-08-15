@@ -161,9 +161,12 @@ const ERROR_CODES = {
   ELendingNotEmpty:    1004, // user_close_pm called with non-empty lending Bag (any Scallop or Kai entry)
   ENoSuchVault:        1005, // pull_from_scallop_lending or pull_from_kai_lending for an absent vault entry
   ENoSuchBalance:      1006, // withdraw_from_balance / withdraw_from_fee for an absent type key
-  EPositionHasRewards: 1007, // user_close_pm called with unclaimed Cetus pool rewards on PositionInfo.rewards_owned
+  EPositionHasRewards: 1007, // user_close_pm / agent_destroy_position called with unclaimed Cetus pool rewards on PositionInfo.rewards_owned
   EBalanceNotEmpty:    1008, // user_close_pm called with non-empty balance Bag
   EFeeNotEmpty:        1009, // user_close_pm called with non-empty fee Bag
+  EPositionAlreadyExists: 1010, // agent_create_position called when position is already Some
+  ENoPosition:         1011, // operation requires an active position but position is None
+  EWrongPool:          1012, // agent_create_position called with a pool that doesn't match pm.pool_id
 };
 
 function parseError(error: string): string {
@@ -185,6 +188,12 @@ function parseError(error: string): string {
     return 'user_close_pm aborted because pm.balance still holds at least one coin type — drain via user_remove_liquidity_from_balance first';
   } else if (error.includes('EFeeNotEmpty')) {
     return 'user_close_pm aborted because pm.fee still holds at least one coin type — drain via user_withdraw_fee first';
+  } else if (error.includes('EPositionAlreadyExists')) {
+    return 'agent_create_position aborted because pm.position is already Some — destroy the current position first (agent_destroy_position)';
+  } else if (error.includes('ENoPosition')) {
+    return 'Operation aborted because pm.position is None — create a position first (agent_create_position / user_deposit_liquidity)';
+  } else if (error.includes('EWrongPool')) {
+    return 'agent_create_position aborted because the pool does not match pm.pool_id';
   }
   return 'Unknown error';
 }

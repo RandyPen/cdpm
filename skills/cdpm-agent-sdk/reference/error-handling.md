@@ -16,9 +16,12 @@ const CDPM_ERROR_CODES = {
   ELendingNotEmpty:    1004, // user_close_pm called with non-empty pm.lending (any Scallop or Kai entry)
   ENoSuchVault:        1005, // scallop_redeem / kai_redeem called for an absent vault entry
   ENoSuchBalance:      1006, // withdraw_from_balance / withdraw_from_fee for an absent type key
-  EPositionHasRewards: 1007, // user_close_pm called with unclaimed Cetus pool rewards
+  EPositionHasRewards: 1007, // user_close_pm / agent_destroy_position called with unclaimed Cetus pool rewards
   EBalanceNotEmpty:    1008, // user_close_pm called with non-empty pm.balance
   EFeeNotEmpty:        1009, // user_close_pm called with non-empty pm.fee
+  EPositionAlreadyExists: 1010, // agent_create_position called when position is already Some
+  ENoPosition:         1011, // operation requires position but position is None
+  EWrongPool:          1012, // agent_create_position called with mismatched pool
 };
 
 async function handleAgentError(error: any): Promise<string> {
@@ -42,6 +45,12 @@ async function handleAgentError(error: any): Promise<string> {
     return 'user_close_pm called with non-empty pm.fee. Drain via user_withdraw_fee<T> for each entry before closing.';
   } else if (errorStr.includes('EInvalidFeeRate')) {
     return 'admin_set_fee given a rate above MAX_FEE_RATE = 5000 (50% cap). Choose a rate <= 5000.';
+  } else if (errorStr.includes('EPositionAlreadyExists')) {
+    return 'agent_create_position called but pm.position is already Some. Destroy the current position (agent_destroy_position) before creating a new one.';
+  } else if (errorStr.includes('ENoPosition')) {
+    return 'Operation requires an active position but pm.position is None. Call agent_create_position to open one first, or check the PM was not already destroyed.';
+  } else if (errorStr.includes('EWrongPool')) {
+    return 'agent_create_position called with a pool that does not match PositionManager.pool_id. Use the pool bound to the PM (read pm.pool_id).';
   }
 
   return `Unknown error: ${errorStr}`;

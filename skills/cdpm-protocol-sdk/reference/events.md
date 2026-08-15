@@ -98,6 +98,33 @@ interface FeeTransferredToBalance {
 }
 ```
 
+## Agent Position Lifecycle Events
+
+Emitted by the agent-controlled position lifecycle functions
+(`agent_create_position` / `agent_destroy_position`). No `by` field — use
+`event.sender` from the envelope to attribute the actor.
+
+```typescript
+// Emitted by agent_create_position
+interface AgentPositionCreated {
+  pm_id: string;
+  pool_id: string;
+  lower_bin_id: { bits: number };
+  upper_bin_id: { bits: number };
+  liquidity_shares: string[];
+}
+
+// Emitted by agent_destroy_position
+interface AgentPositionDestroyed {
+  pm_id: string;
+  pool_id: string;
+  coin_type_a: string;  // type_name<CoinTypeA>
+  coin_type_b: string;  // type_name<CoinTypeB>
+  amount_a: string;     // Underlying A returned to pm.balance
+  amount_b: string;     // Underlying B returned to pm.balance
+}
+```
+
 ## Scallop Lending Events
 
 These events fire from `scallop_supply<T>` and `scallop_redeem<T>` regardless of which caller initiated the PTB (owner / agent / protocol). They omit a `by` field — use the Sui event envelope's `event.sender` to attribute the action.
@@ -180,6 +207,10 @@ const unsubscribe = await client.subscribeEvent({
       case `${CDPM_PACKAGE}::cdpm::KaiSupplied`:
       case `${CDPM_PACKAGE}::cdpm::KaiRedeemed`:
         console.log('Lending event:', event.type, event.parsedJson);
+        break;
+      case `${CDPM_PACKAGE}::cdpm::AgentPositionCreated`:
+      case `${CDPM_PACKAGE}::cdpm::AgentPositionDestroyed`:
+        console.log('Agent position lifecycle event:', event.type, event.parsedJson);
         break;
     }
   },

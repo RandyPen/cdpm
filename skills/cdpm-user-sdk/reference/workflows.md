@@ -155,15 +155,24 @@ async function createPositionSmart(
 
 > **IMPORTANT — `user_close_pm` preconditions**
 >
-> Before `user_close_pm` can succeed it asserts (each surfaces as a cdpm
+> `user_close_pm` is **dual-mode** depending on whether the PM currently holds
+> a Cetus position (`position: Option<Position>`):
+>
+> - **`Some` (position active)** — the underlying Cetus position is closed
+>   and the returned `Coin<CoinTypeA>` / `Coin<CoinTypeB>` are transferred to
+>   the sender inside the call.
+> - **`None` (position already destroyed, e.g. by `agent_destroy_position`)** —
+>   no `pool::close_position` is executed; the PM is drained and closed as-is.
+>
+> In both modes the following preconditions apply (each surfaces as a cdpm
 > error code, not a generic framework abort):
 >
 > - Every reward type on the pool has been collected via
 >   `user_collect_reward<CoinTypeA, CoinTypeB, RewardType>` — otherwise
->   `EPositionHasRewards (1007)` fires. `pool::close_position` (called
->   internally) destroys any leftover reward balances together with the
->   `ClosePositionCert`, so calling close without collecting first burns
->   the rewards.
+>   `EPositionHasRewards (1007)` fires (only relevant when `position` is
+>   `Some`). `pool::close_position` (called internally) destroys any leftover
+>   reward balances together with the `ClosePositionCert`, so calling close
+>   without collecting first burns the rewards.
 > - Every Scallop and Kai vault entry in `pm.lending` has been redeemed
 >   — otherwise `ELendingNotEmpty (1004)` fires. The same `lending: Bag`
 >   holds both `ScallopVault<T>` (key = `type_name<T>`) and
@@ -306,7 +315,7 @@ async function closePositionSafe(
   }
 
   // Step 5: close (consumes pm; asserts pm.balance / pm.fee / pm.lending all empty
-  // and PositionInfo.rewards_owned all zero).
+  // and — when a position is still active — PositionInfo.rewards_owned all zero).
   tx.moveCall({
     target: `${CDPM_PACKAGE}::cdpm::user_close_pm`,
     typeArguments: [coinTypeA, coinTypeB],
@@ -329,7 +338,7 @@ async function closePositionSafe(
 }
 ```
 
-> The LP underlying (`Coin<CoinTypeA>` / `Coin<CoinTypeB>` from `pool::close_position`) is transferred to the sender **inside** `user_close_pm` via Move-side `transfer::public_transfer` — those two coins do not pass through the client and are not part of `toTransfer`.
+> The LP underlying (`Coin<CoinTypeA>` / `Coin<CoinTypeB>` from `pool::close_position`) is transferred to the sender **inside** `user_close_pm` via Move-side `transfer::public_transfer` — but only when `pm.position` is `Some`. If the PM's position was already destroyed (e.g. `agent_destroy_position` routed assets back to `pm.balance`, which Step 4 already drained), `user_close_pm` skips the Cetus close entirely. Those two coins therefore pass through `pm.balance` instead and are part of `toTransfer`.
 
 ## Return Record to GlobalRecord (`unregister_record`)
 
