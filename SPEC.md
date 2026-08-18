@@ -2,23 +2,36 @@
 
 ## Status
 
-**5 specifications, all passing** (`sui-prover` 2.8.5 bottle).
+**1 specification, passing** (`sui-prover` 2.8.5 bottle).
 `Verification successful`.
+
+> **2026-08-18 security advisory:** the four lending-helper specs
+> (`spec_call_add_to_*_lending_spec` / `spec_call_pull_from_*_lending_spec`)
+> were **removed** together with the `#[spec_only] public fun spec_call_*`
+> wrappers they targeted. Those wrappers compiled into production bytecode
+> as unauthenticated `&mut PositionManager` entry points (Critical). The
+> accumulation / conservation properties they proved are now enforced by
+> `#[test_only]` unit tests in `tests/cdpm_tests.move` (see below).
 
 ```
 ✅ admin_set_fee_spec                       (fee-rate cap + post-state)
-✅ spec_call_add_to_scallop_lending_spec    (accumulation)
-✅ spec_call_pull_from_scallop_lending_spec (conservation)
-✅ spec_call_add_to_kai_lending_spec        (accumulation)
-✅ spec_call_pull_from_kai_lending_spec     (conservation)
 ```
 
 ## Scope
 
 Specifications live in a sibling package [`specs/`](./specs/) consumed only by
 `sui-prover`. Regular `sui move build` ignores the `#[spec_only]` /
-`#[spec(...)]` attributes (with a warning) and ships byte-identical
-production code.
+`#[spec(...)]` attributes (with a warning).
+
+> **IMPORTANT — do not trust the "stripped like `#[test_only]`" claim.**
+> `#[spec_only]` is a **custom attribute**, not a Move primitive. The regular
+> compiler tolerates it as an unknown-attribute warning and compiles the
+> annotated items into production bytecode **verbatim**. Only `#[test_only]`
+> is stripped from non-test builds. Every `#[spec_only]` item must therefore
+> be read-only (`&` references only); any mutating accessor must use
+> `#[test_only]` instead. The 2026-08-18 advisory confirmed this via bytecode
+> disassembly: the `spec_call_*` wrappers were present in the deployed
+> bytecode as ordinary `public` functions.
 
 cdpm calls `protocol::mint::mint` / `protocol::redeem::redeem` /
 `kai_vault::deposit` / `kai_vault::withdraw` /
@@ -42,12 +55,18 @@ fee-rate cap. These together pin the worst-case skim and the fee model.
 | **P-FeeRateBound** | `admin_set_fee_spec` | `admin_set_fee` aborts iff `(fee_rate as u128) > 5000` (`EInvalidFeeRate`). |
 | **P-FeeCap** | `admin_set_fee_spec` | On successful return, `fee_house.fee_rate == fee_rate`, hence `<= 5000`. |
 
-### B. Lending helpers — accumulation & conservation
+### B. Lending helpers — accumulation & conservation (moved to unit tests)
 
-| Spec | Statement |
+> **Removed from prover scope on 2026-08-18.** The `spec_call_*` wrappers
+> that made the private helpers targetable cross-package were `#[spec_only]`
+> `public` functions and shipped in production bytecode unauthenticated.
+> The properties below are now asserted by `#[test_only]` unit tests in
+> `tests/cdpm_tests.move` (which the compiler strips from production).
+
+| Test | Statement |
 |------|-----------|
-| `spec_call_add_to_scallop_lending_spec` / `spec_call_add_to_kai_lending_spec` | Post-state: `vault.principal_after == pre + principal_added`; `vault.scoin/yt_after == pre + balance.value()`. **No silent skim of either coordinate.** |
-| `spec_call_pull_from_scallop_lending_spec` / `spec_call_pull_from_kai_lending_spec` | **Conservation**: returned `principal_portion <= vault.principal_before`. Returned balance value `== min(want_amount, total_before)`. |
+| `test_call_add_to_*_lending` | Post-state: `vault.principal_after == pre + principal_added`; `vault.scoin/yt_after == pre + balance.value()`. **No silent skim of either coordinate.** |
+| `test_call_pull_from_*_lending` | **Conservation**: returned `principal_portion <= vault.principal_before`. Returned balance value `== min(want_amount, total_before)`. |
 
 ## End-to-End Composition
 
@@ -57,7 +76,7 @@ Read the matrix in context of the four public lending entries:
    from `pm.balance`, calls `mint::mint` / `kai_vault::deposit` with it, gets
    `Balance<MarketCoin<T>>` / `Balance<YT>` back, and inlines
    `add_to_*_lending(pm, balance, actual_coin_value)`.
-   - The verified `add_to_*_lending` accumulation property guarantees the
+   - The unit-tested `add_to_*_lending` accumulation property guarantees the
      vault's principal grows by exactly the actual coin withdrawn from PM,
      and the share-token balance grows by exactly what the external call
      returned. No silent skim of either coordinate at the storage boundary.
@@ -68,10 +87,10 @@ Read the matrix in context of the four public lending entries:
    `kai_vault::withdraw + klsp::withdraw + redeem_withdraw_ticket` to get
    `Balance<T>`. The fee carve uses the `principal_portion` returned from
    `pull_from_*_lending`.
-   - The verified `pull_from_*_lending` conservation property bounds the
+   - The unit-tested `pull_from_*_lending` conservation property bounds the
      principal_portion: `principal_portion <= pre_principal`. Together with
      the inline fee formula `interest = max(0, redeemed - principal_portion)`,
-     this gives the spec-mandated upper bound on skimmable interest.
+     this gives the upper bound on skimmable interest.
 
 3. **Fee rate cap** — `admin_set_fee_spec` guarantees `fee_rate <= 5000` for
    any `FeeHouse` that ever existed. The fee formula in `scallop_redeem` /
@@ -84,6 +103,7 @@ Read the matrix in context of the four public lending entries:
 | Surface | Why | Mitigation |
 |---------|-----|------------|
 | **Inline fee/balance arithmetic** in `scallop_redeem` / `kai_redeem` | The fee formula is the spec; we'd need a separate axiomatic statement of "the documented fee model" to verify it, which is circular. | Unit-test coverage + code inspection. Blast radius is bounded by `pull_from_*_lending` conservation: any skim is `<= principal_portion <= pre_principal`. |
+| **Lending helper accumulation / conservation** (`add_to_*_lending` / `pull_from_*_lending`) | Cross-package verification required `#[spec_only] public` wrappers, which shipped in production bytecode (Critical, 2026-08-18). Removed. | `#[test_only]` unit tests in `tests/cdpm_tests.move`. |
 | **External call returns** (`mint::mint`, `redeem::redeem`, `kai_vault::deposit`, `kai_vault::withdraw`, `klsp::withdraw`, `redeem_withdraw_ticket`) | External packages outside cdpm's prover scope. | Trust boundary acknowledged. Scallop / Kai are upstream-audited; cdpm faithfully forwards their returns. |
 | **Kai strategy loss** (`StrategyLossEvent` in `redeem_withdraw_ticket`) | Kai vault internal. | The cdpm fee carve gives `interest = 0` if `redeemed < principal_portion`, so a strategy-loss redeem charges no fee. |
 | **ACL** (`assert_caller_authorized`) | Standard `vec_set::contains` membership check; low intrinsic risk. | Not a money-flow property. |
@@ -97,7 +117,8 @@ The `requires(...)` clauses encode assumptions the prover takes for granted.
 ### Balance non-overflow
 - **Assumption**: `pre + delta <= u64::MAX` for `vault.principal`,
   `vault.scoin/yt_balance`.
-- **Used in**: `spec_call_add_to_*_lending_spec`.
+- **Used in**: the removed `spec_call_add_to_*_lending_spec` proofs (now
+  unit-tested in `tests/cdpm_tests.move`).
 - **Justification**: cross-protocol PTBs always source the delta from a
   clamped coin value (see
   `skills/cdpm-calculation-skill/reference/cross-protocol-ptb.md`), never
@@ -106,14 +127,16 @@ The `requires(...)` clauses encode assumptions the prover takes for granted.
 
 ### Bag size bound
 - **Assumption**: `pm.lending.size < u64::MAX`.
-- **Used in**: `spec_call_add_to_*_lending_spec`.
+- **Used in**: the removed `spec_call_add_to_*_lending_spec` proofs (now
+  unit-tested).
 - **Justification**: the prover doesn't model the bag invariant
   `size = #entries`. Real bags are bounded by the number of distinct
   `coin_type` strings — finite by Move's type system.
 
 ### Vault exists for pull
 - **Assumption**: `spec_pm_scallop_vault_exists<T>(pm)` (resp. Kai).
-- **Used in**: `spec_call_pull_from_*_lending_spec`.
+- **Used in**: the removed `spec_call_pull_from_*_lending_spec` proofs (now
+  unit-tested).
 - **Justification**: `pull_from_*_lending` asserts the vault exists
   (`ENoSuchVault`). All real call sites (`scallop_redeem` / `kai_redeem`)
   reach this only after a successful prior supply.
@@ -144,8 +167,9 @@ sui move build
 ```
 
 (The compiler emits `unknown attribute 'spec_only'` warnings — intentional.
-`sui-prover` consumes the attributes; `sui move build` ignores them like
-`#[test_only]`.)
+`#[spec_only]` is a **custom attribute**: the regular compiler tolerates it
+and keeps the annotated items in production bytecode. It is NOT stripped
+like `#[test_only]`. Read-only usage only — see the advisory note above.)
 
 ### Required upstream patches
 
@@ -173,15 +197,18 @@ them. They are documented here so the verification chain is reproducible.
 
 ## Prover-Only Code in `cdpm.move`
 
-`sources/cdpm.move` contains `#[spec_only]` items (accessors, wrappers for
-private helpers). All are stripped from production bytecode by the
-asymptotic toolchain — same mechanism as `#[test_only]`. Categories:
+`sources/cdpm.move` contains `#[spec_only]` items. **Important: these are
+NOT stripped from production bytecode** — `#[spec_only]` is a custom
+attribute, not a Move primitive. Every item below is therefore read-only
+(`&` references), which is the invariant that keeps them safe. Mutating
+test-only wrappers use `#[test_only]` instead (which the compiler does
+strip).
 
 | Category | Purpose |
 |----------|---------|
 | **PositionManager / FeeHouse state probes** (`spec_pm_*`, `spec_fee_house_*`) | Read internal bag entries for pre/post-state comparisons in ensures. The `_exists` / `_size` variants support `requires(...)` for abort soundness. |
-| **Function call wrappers** (`spec_call_add_to_*_lending`, `spec_call_pull_from_*_lending`) | Thin `public fun` forwarders around private `fun`s so the cross-module spec package can target them. |
 | **Constants** (`spec_max_fee_rate`) | Expose internal `MAX_FEE_RATE` to the spec. |
+| **Test-only lending wrappers** (`test_call_add_to_*_lending`, `test_call_pull_from_*_lending`) | `#[test_only]` 1:1 forwarders around private lending helpers for unit tests. Stripped from production by the compiler. |
 
 ## Production Code Changes for Verification
 
@@ -203,7 +230,11 @@ One production-code change was carried over from the pre-refactor spec:
 ## Files
 
 - `specs/Move.toml` — spec package manifest (prover-only).
-- `specs/sources/cdpm_spec.move` — 5 spec functions targeting `cdpm::*`.
-- `sources/cdpm.move` — production source + `#[spec_only]` scaffolding.
+- `specs/sources/cdpm_spec.move` — 1 spec function targeting `cdpm::*`
+  (admin fee-rate gate; lending-helper proofs removed 2026-08-18).
+- `sources/cdpm.move` — production source + read-only `#[spec_only]`
+  accessors + `#[test_only]` lending wrappers.
+- `tests/cdpm_tests.move` — unit tests for the lending helpers
+  (accumulation / conservation) via the `#[test_only]` wrappers.
 - `Move.toml` — production manifest. Deps use PascalCase + `rename-from`
   for sui-prover compatibility (stricter than `sui` CLI on dep keys).

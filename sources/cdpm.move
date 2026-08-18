@@ -1821,6 +1821,74 @@ public fun test_only_balance_value<T>(pm: &PositionManager): u64 {
     } else { 0 }
 }
 
+// Test-only PositionManager factory/destructor so `tests/*` can drive the
+// lending helpers without going through the full Cetus deposit flow.
+// `position` is `option::none()` — the lending tests never touch it.
+
+#[test_only]
+public fun test_only_new_pm(ctx: &mut TxContext): PositionManager {
+    PositionManager {
+        id: object::new(ctx),
+        owner: ctx.sender(),
+        agents: vec_set::empty(),
+        pool_id: object::id_from_address(@0x0),
+        position: option::none(),
+        balance: bag::new(ctx),
+        fee: bag::new(ctx),
+        lending: bag::new(ctx),
+    }
+}
+
+#[test_only]
+public fun test_only_destroy_pm(pm: PositionManager) {
+    let PositionManager {
+        id,
+        owner: _,
+        agents: _,
+        pool_id: _,
+        position,
+        balance,
+        fee,
+        lending,
+    } = pm;
+    option::destroy_none(position);
+    bag::destroy_empty(balance);
+    bag::destroy_empty(fee);
+    bag::destroy_empty(lending);
+    object::delete(id);
+}
+
+// SECURITY NOTE (2026-08-18 advisory): these `#[test_only]` wrappers are the
+// only test reach path into the private Kai lending helpers. The former
+// `#[spec_only] public fun spec_call_*` forwarders leaked into production
+// bytecode as unauthenticated `&mut PositionManager` entry points and were
+// removed. `#[test_only]` is a Move primitive — the compiler strips these
+// from non-test builds.
+
+#[test_only]
+public fun test_only_add_to_kai_lending<T, YT>(
+    pm: &mut PositionManager,
+    yt_balance: Balance<YT>,
+    principal_added: u64,
+) {
+    add_to_kai_lending<T, YT>(pm, yt_balance, principal_added)
+}
+
+#[test_only]
+public fun test_only_pull_from_kai_lending<T, YT>(
+    pm: &mut PositionManager,
+    want_amount: u64,
+): (Balance<YT>, u64) {
+    pull_from_kai_lending<T, YT>(pm, want_amount)
+}
+
+#[test_only]
+public fun test_only_kai_lending_state<T, YT>(pm: &PositionManager): (u64, u64) {
+    let key = type_name::with_defining_ids<YT>().into_string();
+    let v = bag::borrow<String, KaiVault<T, YT>>(&pm.lending, key);
+    (balance::value<YT>(&v.yt_balance), v.principal)
+}
+
 #[test_only]
 public fun test_only_fee_value<T>(pm: &PositionManager): u64 {
     let coin_type = type_name::with_defining_ids<T>().into_string();
@@ -1867,11 +1935,19 @@ public fun test_only_principal_portion(p: u64, s: u64, w: u64): u64 {
 }
 
 // ============ Prover-Only Accessors ============
-// `#[spec_only]` items are visible only to `sui-prover` (asymptotic.tech).
-// Regular `sui move build` ignores the attribute (the Move compiler tolerates
-// unknown attributes as warnings) but the asymptotic toolchain strips them
-// from production bytecode just like `#[test_only]`. They expose private
-// fields so the spec package (`specs/`) can state postconditions. See SPEC.md.
+// `#[spec_only]` is a CUSTOM attribute understood only by `sui-prover`
+// (asymptotic.tech). It is NOT a Move language primitive: regular `sui move
+// build` tolerates it as an unknown-attribute warning and compiles the
+// annotated items into production bytecode VERBATIM. Only `#[test_only]`
+// (a Move primitive) is stripped from non-test builds.
+//
+// SECURITY RULE (see SECURITY_ADVISORY 2026-08-18): every `#[spec_only]`
+// item in this file MUST be read-only — take `&` (immutable) references and
+// never mutate shared state. Mutating wrappers around private helpers MUST
+// use `#[test_only]` instead so they never ship in production bytecode.
+//
+// The read-only accessors below expose private fields so the spec package
+// (`specs/`) can state postconditions. See SPEC.md.
 
 #[spec_only]
 public fun spec_fee_house_rate(fee_house: &FeeHouse): u64 {
@@ -1977,44 +2053,5 @@ public fun spec_pm_fee_size(pm: &PositionManager): u64 {
 #[spec_only]
 public fun spec_fee_house_size(fee_house: &FeeHouse): u64 {
     bag::length(&fee_house.fee)
-}
-
-// Thin `#[spec_only] public fun` wrappers around the private lending helpers
-// so the cross-module spec package can verify them. Each is a 1:1 forwarder;
-// the prover proves properties of the wrapper, which transfer trivially to
-// the wrapped private fn.
-
-#[spec_only]
-public fun spec_call_add_to_scallop_lending<T>(
-    pm: &mut PositionManager,
-    scoin: Balance<MarketCoin<T>>,
-    principal_added: u64,
-) {
-    add_to_scallop_lending<T>(pm, scoin, principal_added)
-}
-
-#[spec_only]
-public fun spec_call_pull_from_scallop_lending<T>(
-    pm: &mut PositionManager,
-    want_amount: u64,
-): (Balance<MarketCoin<T>>, u64) {
-    pull_from_scallop_lending<T>(pm, want_amount)
-}
-
-#[spec_only]
-public fun spec_call_add_to_kai_lending<T, YT>(
-    pm: &mut PositionManager,
-    yt_balance: Balance<YT>,
-    principal_added: u64,
-) {
-    add_to_kai_lending<T, YT>(pm, yt_balance, principal_added)
-}
-
-#[spec_only]
-public fun spec_call_pull_from_kai_lending<T, YT>(
-    pm: &mut PositionManager,
-    want_amount: u64,
-): (Balance<YT>, u64) {
-    pull_from_kai_lending<T, YT>(pm, want_amount)
 }
 

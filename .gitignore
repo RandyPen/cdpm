@@ -3,7 +3,6 @@ traces/*
 .trace
 .coverage*
 Pub.*.toml
-/tests
 *.md
 deck/
 sui-prover.log.*
