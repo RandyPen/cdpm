@@ -20,18 +20,18 @@
 ## Scope
 
 Specifications live in a sibling package [`specs/`](./specs/) consumed only by
-`sui-prover`. Regular `sui move build` ignores the `#[spec_only]` /
-`#[spec(...)]` attributes (with a warning).
+`sui-prover`. The chain package (`sources/cdpm.move`) contains **no**
+`#[spec_only]` items — spec support uses `#[test_only]` getters only (see
+"Spec Support in `cdpm.move`" below).
 
 > **IMPORTANT — do not trust the "stripped like `#[test_only]`" claim.**
 > `#[spec_only]` is a **custom attribute**, not a Move primitive. The regular
 > compiler tolerates it as an unknown-attribute warning and compiles the
 > annotated items into production bytecode **verbatim**. Only `#[test_only]`
-> is stripped from non-test builds. Every `#[spec_only]` item must therefore
-> be read-only (`&` references only); any mutating accessor must use
-> `#[test_only]` instead. The 2026-08-18 advisory confirmed this via bytecode
-> disassembly: the `spec_call_*` wrappers were present in the deployed
-> bytecode as ordinary `public` functions.
+> is stripped from non-test builds. The 2026-08-18 advisory confirmed this via
+> bytecode disassembly: the `spec_call_*` wrappers were present in the
+> deployed bytecode as ordinary `public` functions. Any future spec support
+> must therefore use `#[test_only]` getters, never `#[spec_only]`.
 
 cdpm calls `protocol::mint::mint` / `protocol::redeem::redeem` /
 `kai_vault::deposit` / `kai_vault::withdraw` /
@@ -166,10 +166,8 @@ cd /path/to/cdpm
 sui move build
 ```
 
-(The compiler emits `unknown attribute 'spec_only'` warnings — intentional.
-`#[spec_only]` is a **custom attribute**: the regular compiler tolerates it
-and keeps the annotated items in production bytecode. It is NOT stripped
-like `#[test_only]`. Read-only usage only — see the advisory note above.)
+(The chain package contains **no** `#[spec_only]` items — no warnings. All
+spec support uses `#[test_only]` getters, which the compiler strips.)
 
 ### Required upstream patches
 
@@ -195,20 +193,18 @@ them. They are documented here so the verification chain is reproducible.
    call to let sui-prover finish model building. Production `sui move build`
    skips upstream `tests/` and is unaffected.
 
-## Prover-Only Code in `cdpm.move`
+## Spec Support in `cdpm.move`
 
-`sources/cdpm.move` contains `#[spec_only]` items. **Important: these are
-NOT stripped from production bytecode** — `#[spec_only]` is a custom
-attribute, not a Move primitive. Every item below is therefore read-only
-(`&` references), which is the invariant that keeps them safe. Mutating
-test-only wrappers use `#[test_only]` instead (which the compiler does
-strip).
+`sources/cdpm.move` contains **no** `#[spec_only]` items. `#[spec_only]` is a
+custom attribute that the regular compiler tolerates but does **not** strip —
+the 2026-08-18 advisory showed the former `spec_call_*` wrappers shipping in
+production bytecode unauthenticated. Spec support uses only `#[test_only]`
+(Move primitive, compiler-stripped):
 
 | Category | Purpose |
 |----------|---------|
-| **PositionManager / FeeHouse state probes** (`spec_pm_*`, `spec_fee_house_*`) | Read internal bag entries for pre/post-state comparisons in ensures. The `_exists` / `_size` variants support `requires(...)` for abort soundness. |
-| **Constants** (`spec_max_fee_rate`) | Expose internal `MAX_FEE_RATE` to the spec. |
-| **Test-only lending wrappers** (`test_call_add_to_*_lending`, `test_call_pull_from_*_lending`) | `#[test_only]` 1:1 forwarders around private lending helpers for unit tests. Stripped from production by the compiler. |
+| **Private-field getters** (`test_only_fee_house_rate`, `test_only_scallop_lending_state`, etc.) | Let the spec package read private fields cross-module — the sui-prover SKILL.md "Private struct field access" pattern. Stripped from production by the compiler. |
+| **Test-only lending wrappers** (`test_only_add_to_*_lending`, `test_only_pull_from_*_lending`) | `#[test_only]` 1:1 forwarders around private lending helpers for unit tests. Stripped from production by the compiler. |
 
 ## Production Code Changes for Verification
 
@@ -232,8 +228,8 @@ One production-code change was carried over from the pre-refactor spec:
 - `specs/Move.toml` — spec package manifest (prover-only).
 - `specs/sources/cdpm_spec.move` — 1 spec function targeting `cdpm::*`
   (admin fee-rate gate; lending-helper proofs removed 2026-08-18).
-- `sources/cdpm.move` — production source + read-only `#[spec_only]`
-  accessors + `#[test_only]` lending wrappers.
+- `sources/cdpm.move` — production source. No `#[spec_only]` items;
+  spec support uses `#[test_only]` getters only.
 - `tests/cdpm_tests.move` — unit tests for the lending helpers
   (accumulation / conservation) via the `#[test_only]` wrappers.
 - `Move.toml` — production manifest. Deps use PascalCase + `rename-from`

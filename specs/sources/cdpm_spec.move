@@ -6,7 +6,11 @@
 // instructions.
 //
 // All specs target functions in `cdpm::cdpm`. Private-field reads route
-// through `#[spec_only]` accessors defined at the bottom of `cdpm.move`.
+// through `#[test_only]` accessors in `cdpm.move` — the official pattern
+// (sui-prover SKILL.md "Private struct field access"). The chain package
+// contains NO `#[spec_only]` items: that custom attribute is not stripped
+// by the regular compiler, so shipping it would leak functions into
+// production bytecode (see the 2026-08-18 advisory).
 //
 // Scope: the admin fee-rate gate.
 //
@@ -54,6 +58,6 @@ public fun admin_set_fee_spec(
     cdpm::admin_set_fee(admin_cap, fee_house, fee_rate);
 
     // P-FeeCap: stored rate equals the input rate (and thus <= MAX).
-    ensures(cdpm::spec_fee_house_rate(fee_house) == fee_rate);
-    ensures((cdpm::spec_fee_house_rate(fee_house) as u128) <= SPEC_MAX_FEE_RATE);
+    ensures(cdpm::test_only_fee_house_rate(fee_house) == fee_rate);
+    ensures((cdpm::test_only_fee_house_rate(fee_house) as u128) <= SPEC_MAX_FEE_RATE);
 }
