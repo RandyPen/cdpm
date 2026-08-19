@@ -41,9 +41,11 @@ const ENoSuchBalance: u64         = 1006;     // withdraw_from_balance/_fee call
 const EPositionHasRewards: u64    = 1007;     // user_close_pm called with unclaimed Cetus pool rewards
 const EBalanceNotEmpty: u64       = 1008;     // user_close_pm called with non-empty balance Bag
 const EFeeNotEmpty: u64           = 1009;     // user_close_pm called with non-empty fee Bag
-const EPositionAlreadyExists: u64 = 1010;  // agent_create_position called when position is Some
-const ENoPosition: u64            = 1011;  // operation requires position but position is None
-const EWrongPool: u64             = 1012;  // agent_create_position called with mismatched pool
+const EPositionAlreadyExists: u64 = 1010;     // agent_create_position called when position is Some
+const ENoPosition: u64            = 1011;     // operation requires position but position is None
+const EWrongPool: u64             = 1012;     // agent_create_position called with mismatched pool
+const EPositionStillActive: u64   = 1013;     // admin_force_close_pm called with position still Some
+const ENoSuchRecordEntry: u64     = 1014;     // user_remove_record_entry called for an absent pm_id
 
 // ============ Data Structures ============
 public struct AccessList has key {
@@ -251,6 +253,23 @@ public struct RecordCreated has copy, drop {
 public struct RecordDeleted has copy, drop {
     record_id: ID,
     owner: address,
+}
+
+public struct AdminAssetReturned has copy, drop {
+    pm_id: ID,
+    coin_type: String,
+    amount: u64,
+    to: address,
+}
+
+public struct AdminPositionReturned has copy, drop {
+    pm_id: ID,
+    to: address,
+}
+
+public struct RecordEntryRemoved has copy, drop {
+    record_id: ID,
+    pm_id: ID,
 }
 
 public struct ProtocolLiquidityAdded has copy, drop {
@@ -1309,6 +1328,193 @@ public fun admin_remove_access_list(
     });
 }
 
+// ============ Admin Emergency Return (asset evacuation) ============
+//
+// Escape hatch for the "upgrade incompatible" scenario: when a dependency
+// (Cetus DLMM / Scallop / Kai) ships a breaking upgrade, the admin can force
+// raw stored assets out of any PositionManager and back to `pm.owner`.
+//
+//   - Assets ALWAYS route to `pm.owner` (never the admin / ctx.sender), so
+//     these functions can only "un-stick" funds, never steal them.
+//   - They bypass the owner==sender / assert_caller_authorized gates and are
+//     the sole admin lever beyond admin_set_fee / admin_transfer.
+//   - Because `balance` / `fee` / `lending` are non-iterable `Bag`s, each
+//     call drains exactly ONE coin type `<T>` (identified off-chain via the
+//     PM object's dynamic fields — the same pre-scan the user-sdk close flow
+//     uses). The admin drives one call per present type, then closes.
+//
+// Scallop and Kai positions are both redeemed to the underlying `Coin<T>`
+// and returned to `pm.owner`, charging the protocol fee on the interest
+// portion exactly like `scallop_redeem` / `kai_redeem`. The `principal`
+// counter feeds the interest/fee carve and is discarded with the vault.
+
+public fun admin_force_return_balance<T>(
+    _: &AdminCap,
+    pm: &mut PositionManager,
+    ctx: &mut TxContext,
+) {
+    let coin_type = type_name::with_defining_ids<T>().into_string();
+    assert!(bag::contains_with_type<String, Balance<T>>(&pm.balance, coin_type), ENoSuchBalance);
+    let coin: Coin<T> = bag::remove<String, Balance<T>>(&mut pm.balance, coin_type).into_coin(ctx);
+    let amount = coin.value();
+    transfer::public_transfer(coin, pm.owner);
+
+    event::emit(AdminAssetReturned {
+        pm_id: object::id(pm),
+        coin_type,
+        amount,
+        to: pm.owner,
+    });
+}
+
+public fun admin_force_return_fee<T>(
+    _: &AdminCap,
+    pm: &mut PositionManager,
+    ctx: &mut TxContext,
+) {
+    let coin_type = type_name::with_defining_ids<T>().into_string();
+    assert!(bag::contains_with_type<String, Balance<T>>(&pm.fee, coin_type), ENoSuchBalance);
+    let coin: Coin<T> = bag::remove<String, Balance<T>>(&mut pm.fee, coin_type).into_coin(ctx);
+    let amount = coin.value();
+    transfer::public_transfer(coin, pm.owner);
+
+    event::emit(AdminAssetReturned {
+        pm_id: object::id(pm),
+        coin_type,
+        amount,
+        to: pm.owner,
+    });
+}
+
+public fun admin_force_return_position(
+    _: &AdminCap,
+    pm: &mut PositionManager,
+) {
+    assert!(option::is_some(&pm.position), ENoPosition);
+    let pos = option::extract(&mut pm.position);
+    transfer::public_transfer(pos, pm.owner);
+
+    event::emit(AdminPositionReturned {
+        pm_id: object::id(pm),
+        to: pm.owner,
+    });
+}
+
+public fun admin_force_return_scallop<T>(
+    _: &AdminCap,
+    pm: &mut PositionManager,
+    fee_house: &mut FeeHouse,
+    version: &ScallopVersion,
+    market: &mut Market,
+    clock: &Clock,
+    ctx: &mut TxContext,
+) {
+    let key = type_name::with_defining_ids<T>().into_string();
+    assert!(bag::contains_with_type<String, ScallopVault<T>>(&pm.lending, key), ENoSuchVault);
+    let ScallopVault { scoin, principal } =
+        bag::remove<String, ScallopVault<T>>(&mut pm.lending, key);
+    let underlying = redeem::redeem<T>(version, market, scoin.into_coin(ctx), clock, ctx);
+    let redeemed_amount = underlying.value();
+    let mut underlying_balance = underlying.into_balance();
+
+    if (redeemed_amount > principal) {
+        let interest = redeemed_amount - principal;
+        let fee_amount = (((interest as u128) * (fee_house.fee_rate as u128)
+            / FEE_DENOMINATOR) as u64);
+        if (fee_amount > 0) {
+            let fee_balance = balance::split<T>(&mut underlying_balance, fee_amount);
+            deposit_into_fee_house<T>(fee_house, fee_balance);
+        };
+    };
+
+    let amount = balance::value<T>(&underlying_balance);
+    transfer::public_transfer(underlying_balance.into_coin(ctx), pm.owner);
+
+    event::emit(AdminAssetReturned {
+        pm_id: object::id(pm),
+        coin_type: key,
+        amount,
+        to: pm.owner,
+    });
+}
+
+public fun admin_force_return_kai<T, ST, YT>(
+    _: &AdminCap,
+    pm: &mut PositionManager,
+    fee_house: &mut FeeHouse,
+    vault: &mut kai_vault::Vault<T, YT>,
+    strategy: &mut klsp::Strategy<T, ST>,
+    supply_pool: &mut SupplyPool<T, ST>,
+    clock: &Clock,
+    ctx: &mut TxContext,
+) {
+    let key = type_name::with_defining_ids<YT>().into_string();
+    assert!(bag::contains_with_type<String, KaiVault<T, YT>>(&pm.lending, key), ENoSuchVault);
+    let KaiVault { yt_balance, principal } =
+        bag::remove<String, KaiVault<T, YT>>(&mut pm.lending, key);
+    let mut ticket = kai_vault::withdraw<T, YT>(vault, yt_balance, clock);
+    klsp::withdraw<T, ST, YT>(strategy, &mut ticket, supply_pool, clock);
+    let underlying_balance = kai_vault::redeem_withdraw_ticket<T, YT>(vault, ticket);
+    let redeemed_amount = balance::value<T>(&underlying_balance);
+    let mut underlying_balance = underlying_balance;
+
+    if (redeemed_amount > principal) {
+        let interest = redeemed_amount - principal;
+        let fee_amount = (((interest as u128) * (fee_house.fee_rate as u128)
+            / FEE_DENOMINATOR) as u64);
+        if (fee_amount > 0) {
+            let fee_balance = balance::split<T>(&mut underlying_balance, fee_amount);
+            deposit_into_fee_house<T>(fee_house, fee_balance);
+        };
+    };
+
+    let amount = balance::value<T>(&underlying_balance);
+    transfer::public_transfer(underlying_balance.into_coin(ctx), pm.owner);
+
+    event::emit(AdminAssetReturned {
+        pm_id: object::id(pm),
+        coin_type: type_name::with_defining_ids<T>().into_string(),
+        amount,
+        to: pm.owner,
+    });
+}
+
+public fun admin_force_close_pm(
+    _: &AdminCap,
+    pm: PositionManager,
+) {
+    assert!(option::is_none(&pm.position), EPositionStillActive);
+    assert!(bag::is_empty(&pm.balance), EBalanceNotEmpty);
+    assert!(bag::is_empty(&pm.fee), EFeeNotEmpty);
+    assert!(bag::is_empty(&pm.lending), ELendingNotEmpty);
+
+    let pm_id = object::id(&pm);
+    let PositionManager { id, owner, agents: _, pool_id: _, position, balance, fee, lending } = pm;
+    option::destroy_none(position);
+    balance.destroy_empty();
+    fee.destroy_empty();
+    lending.destroy_empty();
+    id.delete();
+
+    event::emit(PositionManagerClosed {
+        pm_id,
+        owner,
+    });
+}
+
+public fun user_remove_record_entry(
+    record: &mut Record,
+    pm_id: ID,
+) {
+    assert!(table::contains<ID, bool>(&record.record, pm_id), ENoSuchRecordEntry);
+    table::remove<ID, bool>(&mut record.record, pm_id);
+
+    event::emit(RecordEntryRemoved {
+        record_id: object::id(record),
+        pm_id,
+    });
+}
+
 fun open_position_private<CoinTypeA, CoinTypeB>(
     pool: &mut Pool<CoinTypeA, CoinTypeB>,
     coin_a: &mut Coin<CoinTypeA>,
@@ -1856,6 +2062,46 @@ public fun test_only_destroy_pm(pm: PositionManager) {
     bag::destroy_empty(fee);
     bag::destroy_empty(lending);
     object::delete(id);
+}
+
+// Test-only AdminCap / Record factories and accessors for the admin
+// escape-hatch tests. `AdminCap` / `Record` have module-private fields
+// (Move 2024 field visibility), so tests reach them through these
+// `#[test_only]` helpers rather than constructing / reading them directly.
+#[test_only]
+public fun test_only_new_admin_cap(ctx: &mut TxContext): AdminCap {
+    AdminCap { id: object::new(ctx) }
+}
+
+#[test_only]
+public fun test_only_destroy_admin_cap(cap: AdminCap) {
+    let AdminCap { id } = cap;
+    id.delete();
+}
+
+#[test_only]
+public fun test_only_new_record(ctx: &mut TxContext): Record {
+    Record {
+        id: object::new(ctx),
+        record: table::new<ID, bool>(ctx),
+    }
+}
+
+#[test_only]
+public fun test_only_destroy_record(record: Record) {
+    let Record { id, record } = record;
+    record.destroy_empty();
+    id.delete();
+}
+
+#[test_only]
+public fun test_only_add_record_entry(record: &mut Record, pm_id: ID) {
+    table::add(&mut record.record, pm_id, true);
+}
+
+#[test_only]
+public fun test_only_record_contains(record: &Record, pm_id: ID): bool {
+    table::contains<ID, bool>(&record.record, pm_id)
 }
 
 // SECURITY NOTE (2026-08-18 advisory): these `#[test_only]` wrappers are the

@@ -173,6 +173,7 @@ public struct Record has key {
 - Collect accumulated protocol fees
 - Manage AccessList (add/remove protocol addresses)
 - Transfer admin capability
+- Force-return raw stored assets to `pm.owner` (emergency escape hatch — see §Upgrade Considerations)
 
 **Functions:** All `admin_*` functions
 
@@ -182,7 +183,7 @@ public struct Record has key {
 | Create Position | ✓ | ✗ | ✗ | ✗ |
 | Add/Remove Liquidity | ✓ | ✓ | ✓* | ✗ |
 | Collect Fees/Rewards | ✓ | ✓† | ✓* | ✗ |
-| Withdraw Funds | ✓ | ✗ | ✗ | ✗ |
+| Withdraw Funds | ✓ | ✗ | ✗ | ✓§ |
 | Manage Agents | ✓ | ✗ | ✗ | ✗ |
 | Set Fee Rate | ✗ | ✗ | ✗ | ✓ |
 | Collect Protocol Fees | ✗ | ✗ | ✗ | ✓ |
@@ -190,6 +191,7 @@ public struct Record has key {
 *With protocol fee deduction
 †To fee bag only
 ‡Without fee collection
+§Emergency escape hatch only — returned to `pm.owner`, never the admin
 
 ### Permission Boundaries — Operational Notes
 
@@ -419,9 +421,12 @@ dependency-only upgrades:
    `user_get_and_return_position` for the rare case where an upstream
    protocol publishes a breaking new package and dep-only upgrade is
    insufficient (a fresh cdpm deploy is then needed).
-4. **No admin emergency switch** beyond `admin_set_fee` (capped at 50%)
-   and `admin_transfer`. There is no pause function or fund-recovery
-   admin call.
+4. **Admin emergency return (asset evacuation)** — the `admin_force_return_*`
+   / `admin_force_close_pm` escape hatch lets the `AdminCap` holder force raw
+   stored assets (balance, fee, raw `Position`, raw sCoin / YT) out of any PM
+   and back to `pm.owner` when a dependency ships a breaking upgrade. It can
+   only "un-stick" funds, never steal them (recipient is hard-coded to
+   `pm.owner`). There is no pause function.
 
 ## Performance Considerations
 
@@ -499,8 +504,11 @@ Balance<MarketCoin<T>>` uses it as a type pin.
 ### Caller authorization
 `scallop_supply` and `scallop_redeem` each call `assert_caller_authorized`
 at entry. The three managed-tier callers (owner / agent / (protocol & no
-agents)) are accepted. No owner-only bypass; the only exit path remains
-`scallop_redeem` → `pm.balance` → `user_remove_liquidity_from_balance`.
+agents)) are accepted. The owner-only exit path remains
+`scallop_redeem` → `pm.balance` → `user_remove_liquidity_from_balance`; the
+admin emergency path is `admin_force_return_scallop<T>` (redeems to underlying
+`Coin<T>` to `pm.owner`, same interest-only fee as `scallop_redeem` — see
+§Upgrade Considerations).
 
 ### Freshness
 `protocol::mint::mint` and `protocol::redeem::redeem` both call
@@ -580,14 +588,16 @@ User mitigations:
   integration is opt-in per-strategy.
 - **Bound per-PM Scallop exposure** via the off-chain scheduler.
 
-### No escape hatch for lending
-cdpm exposes **no** owner-only function that hands raw
-`Coin<MarketCoin<T>>` back to the user. The only exit is the normal
-`scallop_redeem` → `pm.balance` → `user_remove_liquidity_from_balance`
-flow, which preserves the principal-counter accounting that protocol-fee
-math depends on. The Cetus DLMM `Position` is the only object that
-escapes through a different path (`user_get_position` /
-`user_get_and_return_position`) because it's held inside the PM struct.
+### Admin escape hatch for lending (D-12)
+The *owner*-only exit for lending remains the normal `scallop_redeem` →
+`pm.balance` → `user_remove_liquidity_from_balance` flow, which preserves the
+principal-counter accounting that protocol-fee math depends on. The *admin*
+emergency path is `admin_force_return_scallop<T>` — it redeems the vault to
+the underlying `Coin<T>` via `redeem::redeem` (charging the same interest-only
+protocol fee as `scallop_redeem`) and returns it to `pm.owner`, for the
+"upgrade incompatible" scenario. The Cetus `Position`
+likewise has an admin emergency exit: `admin_force_return_position` returns
+the raw `Position` object to `pm.owner` (see §Upgrade Considerations).
 
 ### Events (no `by` field; tx metadata records the sender)
 ```move

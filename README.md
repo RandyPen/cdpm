@@ -256,7 +256,9 @@ The CDPM package is published with the `only_dep_upgrades` upgrade policy
 `cdpm.move` bytecode is locked — no admin can change protocol logic — but
 dependency-version upgrades are permitted so the package can track new
 versions of Cetus DLMM, Scallop, and Kai SAV without a fresh deploy. The
-only admin levers remain `admin_set_fee` (capped at 50%) and `admin_transfer`.
+admin levers are `admin_set_fee` (capped at 50%), `admin_transfer`, and the
+`admin_force_return_*` / `admin_force_close_pm` asset-evacuation escape hatch
+(D-12), which can only ever route assets to `pm.owner` — never to the admin.
 
 Rationale: users get guaranteed semantics on the cdpm side, and the contract
 can keep working when one of its dependency packages publishes a non-breaking
@@ -384,12 +386,15 @@ existing `Reserve` shared object. cdpm inherits exactly the same
 Scallop-trust assumption every other Scallop consumer takes — no more, no
 less.
 
-**No escape hatch for lending.** cdpm exposes no owner-only function that
-hands raw `Coin<MarketCoin<T>>` back to the user. The only exit is the
+**Admin escape hatch (D-12).** The *owner*-only exit for lending remains the
 normal `scallop_redeem` → `pm.balance` → `user_remove_liquidity_from_balance`
-flow, which preserves the principal-counter accounting that protocol-fee
-math depends on. User mitigations are purely off-chain (don't supply if you
-don't trust Scallop; bound per-PM exposure via the scheduler).
+flow, which preserves the principal-counter accounting that protocol-fee math
+depends on. In the "upgrade incompatible" emergency, the admin can redeem the
+position to the underlying via `admin_force_return_scallop<T>` (calling
+Scallop's `redeem::redeem` and charging the same interest-only protocol fee as
+`scallop_redeem`, `Coin<T>` straight to `pm.owner`). See
+D-12. User mitigations are purely off-chain (don't supply if you don't trust
+Scallop; bound per-PM exposure via the scheduler).
 
 `user_close_pm` asserts `lending` is empty (`ELendingNotEmpty = 1004`).
 Callers must redeem every vault before closing the PM.
@@ -482,8 +487,39 @@ Operational caveats:
 and their custody of the `kai_sav` / `kai_leverage` upgrade-caps. No
 admin-curated YT whitelist; the type-system suffices.
 
-**No escape hatch** for Kai lending either — same as Scallop. Only exit is
-`kai_redeem` → `pm.balance` → `user_remove_liquidity_from_balance`.
+For Kai lending the *owner*-only exit is `kai_redeem` → `pm.balance` →
+`user_remove_liquidity_from_balance`; the admin emergency path is
+`admin_force_return_kai<T, ST, YT>` (redeem to underlying `Coin<T>` with the
+same interest-only fee as `kai_redeem`, to `pm.owner` — see D-12).
+
+### D-12: Admin Emergency Return — Asset Evacuation Escape Hatch
+
+For the "upgrade incompatible" scenario (a dependency ships a breaking
+type-identity change), the admin — and only the holder of the `AdminCap`
+multisig — can force raw stored assets out of any PM back to `pm.owner`:
+
+- `admin_force_return_balance<T>` / `admin_force_return_fee<T>` — drain
+  `pm.balance[T]` / `pm.fee[T]` to `pm.owner`.
+- `admin_force_return_position` — hand the raw Cetus `Position` object back to
+  `pm.owner` (no close, no reward collect).
+- `admin_force_return_scallop<T>` — redeem the Scallop position to the
+  underlying `Coin<T>` (via `redeem::redeem`, protocol fee on the interest
+  portion) and return it to `pm.owner`.
+- `admin_force_return_kai<T, ST, YT>` — redeem the Kai vault to the underlying
+  `Coin<T>` (full `withdraw` → `klsp::withdraw` → `redeem_withdraw_ticket`
+  chain, protocol fee on interest) and return it to `pm.owner`.
+- `admin_force_close_pm` — delete a fully drained PM (aborts with
+  `EPositionStillActive`/`EBalanceNotEmpty`/`EFeeNotEmpty`/`ELendingNotEmpty`
+  if anything remains).
+- `user_remove_record_entry` — owner clears the stale `Record` index entry
+  pointing at an admin-closed PM.
+
+Every `admin_force_return_*` hard-codes the recipient to `pm.owner`, so the
+admin can only "un-stick" funds, never steal them. Because `Bag` is
+non-iterable, each call drains one coin type; the admin enumerates present
+types off-chain from the PM's dynamic fields and calls once per type, then
+closes. This is a forward-looking guarantee for the next deploy: a fresh
+package cannot rescue assets already stranded in a prior package's PMs.
 
 ## Security Features
 
