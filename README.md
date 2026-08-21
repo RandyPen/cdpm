@@ -1,6 +1,6 @@
 # CDPM - Cetus DLMM Position Manager
 
-contract address: `-`  
+contract address: `0x07e37c7e54cc8c8a00d2db99070a49eb681dd4ae38b084d91a126903a645acb4`  
 package only_dep_upgrades: `HTCg6aiPebA1ifCVo7KYcxHvGWK7a4nuCpfBvLX8bRo7`
 
 > Shared object IDs (`FeeHouse`, `AccessList`, `AdminCap`, `GlobalRecord`) and the `Record` object type live in each skill's `reference/constants.md` so SDK callers can import them directly. See `skills/cdpm-user-sdk/reference/constants.md` for the canonical list.
