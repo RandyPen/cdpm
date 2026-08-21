@@ -9,7 +9,7 @@ description: TypeScript SDK guide for CDPM protocol integration and management. 
 
 CDPM (Cetus DLMM Position Manager) protocol layer provides managed liquidity services with fee extraction. This guide covers protocol integration, admin operations, and architecture details.
 
-**Package Address**: `0x573584cc4698e82fd85f2b54e64ad4cd901c42b768f7628ec167bf2d24aa2aa7` (only-dep-upgrades digest: `F5kVa3YDSHoBvJvYJFH9y5dANCJScEdyZoxZLLy6qd15` — `cdpm.move` bytecode is locked; only dependency-version upgrades are allowed). Other shared object IDs live in [`../cdpm-user-sdk/reference/constants.md`](../cdpm-user-sdk/reference/constants.md).
+**Package Address**: `0x07e37c7e54cc8c8a00d2db99070a49eb681dd4ae38b084d91a126903a645acb4` (OnlyDep digest: `HTCg6aiPebA1ifCVo7KYcxHvGWK7a4nuCpfBvLX8bRo7` — `cdpm.move` bytecode is locked; only dependency-version upgrades are allowed). Publish details and created object IDs live in [`../cdpm-user-sdk/reference/constants.md`](../cdpm-user-sdk/reference/constants.md).
 
 ```typescript
 import { Transaction } from '@mysten/sui/transactions';
@@ -198,4 +198,3 @@ function parseError(error: string): string {
   return 'Unknown error';
 }
 ```
-
