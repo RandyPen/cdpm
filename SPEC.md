@@ -108,7 +108,7 @@ Read the matrix in context of the four public lending entries:
 | **Kai strategy loss** (`StrategyLossEvent` in `redeem_withdraw_ticket`) | Kai vault internal. | The cdpm fee carve gives `interest = 0` if `redeemed < principal_portion`, so a strategy-loss redeem charges no fee. |
 | **ACL** (`assert_caller_authorized`) | Standard `vec_set::contains` membership check; low intrinsic risk. | Not a money-flow property. |
 | **Cetus DLMM integration** (`protocol_*` / `agent_*`) | Crosses into Cetus's contracts. | Cetus is independently audited. |
-| **DEP_ONLY upgrade policy** | Off-chain (`only_dep_upgrades` is invoked post-publish). | Recorded in `publish.md` with the tx digest. |
+| **DEP_ONLY upgrade policy** | Off-chain package governance. | The current deployment uses OnlyDep policy `192`; transaction recorded in `publish.md`. |
 
 ## Spec Preconditions (Audit-Visible Assumptions)
 
@@ -171,12 +171,12 @@ spec support uses `#[test_only]` getters, which the compiler strips.)
 
 ### Required upstream patches
 
-These patches are external to the cdpm repo but the prover run depends on
-them. They are documented here so the verification chain is reproducible.
+These patches are documented here so the verification chain is reproducible.
 
-1. **`cetusdlmm`** — local patch at `/tmp/cetus-dlmm-patched/packages/dlmm`
-   adding a missing `use sui::vec_map;` in a `#[test_only]` helper. See
-   `Move.toml` comment for the diff scope.
+1. **`CetusDlmm`** — vendored at `vendor/cetus-dlmm` from official
+   `mainnet-v0.9.0` commit `6667446c458506df0e63966477d73a29633a6867`,
+   with one missing `use sui::vec_map;` added in a `#[test_only]` helper.
+   The official `Published.toml` is retained so builds resolve mainnet v9.
 
 2. **`kai_sav`** — patched copy at
    `../kai-contracts/kai/sav/core-prover-patched` that drops `rename-from`

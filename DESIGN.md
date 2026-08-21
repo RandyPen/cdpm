@@ -405,13 +405,12 @@ require a fresh deploy.
 
 ### Upgrade Considerations
 
-The cdpm source in this repo is designed to be published with
-`UpgradePolicy::DEP_ONLY (192)` via `sui::package::only_dep_upgrades`
-immediately after publish (see `publish.md` for the procedure and the
-deploy-state record). The policy locks cdpm bytecode but permits
-dependency-only upgrades:
+The current deployment uses the irreversible `UpgradePolicy::DEP_ONLY (192)`
+and the publisher retains the restricted UpgradeCap (see `publish.md`). This
+means:
 
-1. **Bytecode immutable** — no path can rewrite the published `cdpm.move`.
+1. **Bytecode locked** — the published `cdpm.move` implementation cannot be
+   changed.
 2. **Dependency upgrades allowed** — a follow-up `sui client upgrade` with
    the same source but a newer `cetusdlmm` / `protocol` / `kai_sav` /
    `kai_leverage` version is accepted. Use case: Scallop bumps its

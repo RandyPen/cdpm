@@ -3,7 +3,7 @@
 ## CDPM Package
 
 ```typescript
-const CDPM_PACKAGE = '0x07e37c7e54cc8c8a00d2db99070a49eb681dd4ae38b084d91a126903a645acb4';
+const CDPM_PACKAGE = '0x612dfd45a2e350995d492a59b595e64ec07a2253912f9eb22c2fd5947c6135d6';
 const FEE_DENOMINATOR = 10000;
 const DEFAULT_FEE_RATE = 2000; // 20%
 const MAX_FEE_RATE = 5000;     // 50% — enforced cap in admin_set_fee
@@ -11,33 +11,34 @@ const MAX_FEE_RATE = 5000;     // 50% — enforced cap in admin_set_fee
 
 Deployment references:
 
-- publish tx digest: `7cw9wjCDhFPgtSDBt5HSXiNUEzQpwsz8mpC7JbAis2sZ`
-- OnlyDep policy tx digest: `HTCg6aiPebA1ifCVo7KYcxHvGWK7a4nuCpfBvLX8bRo7` (`cdpm.move` bytecode is locked; only dependency-version upgrades are allowed)
+- publish tx digest: `7EEna8x2u9HtcRXg66P2neDgwpugYEpGrykGHAgfVE92`
+- OnlyDep tx digest: `DUxRzUA7g5c8ahixdgXMhb3kSHfwvkUSZU8h7wcSAPUu`
+- upgrade policy: `OnlyDep` (policy `192`)
 
 The publish transaction created the following top-level objects:
 
 | Object | ID | Ownership |
 |---|---|---|
-| Package | `0x07e37c7e54cc8c8a00d2db99070a49eb681dd4ae38b084d91a126903a645acb4` | Immutable |
-| UpgradeCap | `0x0d18b2ff581183e64d18277c71ca8e0d914e3c32895053418d9724b0c2fc1e64` | Address-owned; OnlyDep policy `192` |
-| AdminCap | `0x69c336f364e0261f60727c3b932bed7a40e2061fcf891b3b96c3bd9d9e2b1384` | Address-owned |
-| FeeHouse | `0x6a12b98759f487dd276013afbd402924768f8537eadfd7882c70152abb2d1668` | Shared; initial shared version `966838623` |
-| AccessList | `0xd0853b5193964b76df670938f14e23095fe4fedd3096cd762b933cadc4b71968` | Shared; initial shared version `966838623` |
-| GlobalRecord | `0x761ca7d22fa3b55d92b1b8792a8c4ba108402c0096097e59bb1267d8742c5d49` | Shared; initial shared version `966838623` |
+| Package | `0x612dfd45a2e350995d492a59b595e64ec07a2253912f9eb22c2fd5947c6135d6` | Immutable |
+| UpgradeCap | `0x1911fd176418f917d5f052f04e3dc5c8f4bca9aa8da60fe52001c8e4bb44b6b0` | Address-owned; OnlyDep policy `192` |
+| AdminCap | `0xbd562a1faf253105f57fee2248c41c7117691b73e9be93c0fe7fc2b5be13d484` | Address-owned |
+| FeeHouse | `0x6b0eee9fd3cc4ffbc9aaab3cbac7e0613314b13e3ca0aad20db90f61d157d43e` | Shared; initial shared version `970148035` |
+| AccessList | `0x07e2be66038a86dde7430e22f57c6d1e34ba3badd9323bd4bbec568554eb4fe0` | Shared; initial shared version `970148035` |
+| GlobalRecord | `0xd084326ff85a03dac0de7316f7e4b56c26e80694a1908ed43336a19802681059` | Shared; initial shared version `970148035` |
 
-The transaction also created embedded `Bag` UIDs `0x852fc5ecf3ab1e78d5e36b43e60412ffe0eb4bd07d3b0261417862ef8491e1c4` (`FeeHouse.fee`) and `0x8711a608907d09b5f751cc7edbc9bf7bc20fd898760e12a749f3059d7d735d34` (`GlobalRecord.record`). They are child UIDs, not standalone object arguments.
+The transaction also created embedded `Bag` UIDs `0x517bb6a3f7cc9012d0ace21208086dd98c34acbdf4275062837a3698c5c50a38` (`FeeHouse.fee`) and `0xefad90a9675745d1cb4426a52dd126d4e1d7cd26ec592b5bffbe06480bc92142` (`GlobalRecord.record`). They are child UIDs, not standalone object arguments.
 
 ## CDPM Object IDs (Mainnet)
 
 ```typescript
 const CDPM_MAINNET = {
-  PACKAGE_ID:        '0x07e37c7e54cc8c8a00d2db99070a49eb681dd4ae38b084d91a126903a645acb4',
-  UPGRADE_CAP_ID:    '0x0d18b2ff581183e64d18277c71ca8e0d914e3c32895053418d9724b0c2fc1e64',
-  FEE_HOUSE_ID:      '0x6a12b98759f487dd276013afbd402924768f8537eadfd7882c70152abb2d1668',
-  ACCESS_LIST_ID:    '0xd0853b5193964b76df670938f14e23095fe4fedd3096cd762b933cadc4b71968',
-  ADMIN_CAP_ID:      '0x69c336f364e0261f60727c3b932bed7a40e2061fcf891b3b96c3bd9d9e2b1384',
-  GLOBAL_RECORD_ID:  '0x761ca7d22fa3b55d92b1b8792a8c4ba108402c0096097e59bb1267d8742c5d49',
-  RECORD_TYPE:       '0x07e37c7e54cc8c8a00d2db99070a49eb681dd4ae38b084d91a126903a645acb4::cdpm::Record',
+  PACKAGE_ID:        '0x612dfd45a2e350995d492a59b595e64ec07a2253912f9eb22c2fd5947c6135d6',
+  UPGRADE_CAP_ID:    '0x1911fd176418f917d5f052f04e3dc5c8f4bca9aa8da60fe52001c8e4bb44b6b0',
+  FEE_HOUSE_ID:      '0x6b0eee9fd3cc4ffbc9aaab3cbac7e0613314b13e3ca0aad20db90f61d157d43e',
+  ACCESS_LIST_ID:    '0x07e2be66038a86dde7430e22f57c6d1e34ba3badd9323bd4bbec568554eb4fe0',
+  ADMIN_CAP_ID:      '0xbd562a1faf253105f57fee2248c41c7117691b73e9be93c0fe7fc2b5be13d484',
+  GLOBAL_RECORD_ID:  '0xd084326ff85a03dac0de7316f7e4b56c26e80694a1908ed43336a19802681059',
+  RECORD_TYPE:       '0x612dfd45a2e350995d492a59b595e64ec07a2253912f9eb22c2fd5947c6135d6::cdpm::Record',
 };
 ```
 

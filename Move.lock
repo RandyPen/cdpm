@@ -4,6 +4,12 @@
 [move]
 version = 4
 
+[pinned.mainnet.CetusDlmm]
+source = { local = "vendor/cetus-dlmm" }
+use_environment = "mainnet"
+manifest_digest = "1E932E9C4C15B3E671C5AACEE3107A26421CD5F431977EB48BE64EF5BE1AD9CA"
+deps = { IntegerMate = "IntegerMate", MoveSTL = "MoveSTL", std = "MoveStdlib", sui = "Sui" }
+
 [pinned.mainnet.CoinDecimalsRegistry]
 source = { local = "../sui-lending-protocol/contracts/libs/coin_decimals_registry" }
 use_environment = "mainnet"
@@ -35,13 +41,13 @@ manifest_digest = "E41BBD67BE8940D26C79D78B028477EF5B33BA217A1282C78ACB344CF8A5E
 deps = { std = "MoveStdlib", sui = "Sui" }
 
 [pinned.mainnet.MoveStdlib]
-source = { git = "https://github.com/MystenLabs/sui.git", subdir = "crates/sui-framework/packages/move-stdlib", rev = "367fd808279bed26f7c64fc63160062a2ee29ab7" }
+source = { git = "https://github.com/MystenLabs/sui.git", subdir = "crates/sui-framework/packages/move-stdlib", rev = "06734f6ff0af45d8632a14a4dc4b100197f6b1a2" }
 use_environment = "mainnet"
 manifest_digest = "C4FE4C91DE74CBF223B2E380AE40F592177D21870DC2D7EB6227D2D694E05363"
 deps = {}
 
 [pinned.mainnet.MoveStdlib_1]
-source = { git = "https://github.com/MystenLabs/sui.git", subdir = "crates/sui-framework/packages/move-stdlib", rev = "d10b7db79a6634acbc483ad8633a7d27fe3bc7c8" }
+source = { git = "https://github.com/MystenLabs/sui.git", subdir = "crates/sui-framework/packages/move-stdlib", rev = "51d177ad7d65102fc368b582408f466d97b31548" }
 use_environment = "mainnet"
 manifest_digest = "C4FE4C91DE74CBF223B2E380AE40F592177D21870DC2D7EB6227D2D694E05363"
 deps = {}
@@ -53,13 +59,13 @@ manifest_digest = "A91D5B1E1A8E663F005C45833346765F113FED7FFCC93A0E938717DEB8DE0
 deps = { CoinDecimalsRegistry = "CoinDecimalsRegistry", Decimal = "Decimal", Math = "Math", Sui = "Sui_1", TestCoin = "TestCoin", Whitelist = "Whitelist", X = "X", XOracle = "XOracle" }
 
 [pinned.mainnet.Sui]
-source = { git = "https://github.com/MystenLabs/sui.git", subdir = "crates/sui-framework/packages/sui-framework", rev = "367fd808279bed26f7c64fc63160062a2ee29ab7" }
+source = { git = "https://github.com/MystenLabs/sui.git", subdir = "crates/sui-framework/packages/sui-framework", rev = "06734f6ff0af45d8632a14a4dc4b100197f6b1a2" }
 use_environment = "mainnet"
 manifest_digest = "CD547CB1ACCE0880C835DAED2D8FFCB91D56C833AE5240D3AA5B918398263195"
 deps = { MoveStdlib = "MoveStdlib" }
 
 [pinned.mainnet.Sui_1]
-source = { git = "https://github.com/MystenLabs/sui.git", subdir = "crates/sui-framework/packages/sui-framework", rev = "d10b7db79a6634acbc483ad8633a7d27fe3bc7c8" }
+source = { git = "https://github.com/MystenLabs/sui.git", subdir = "crates/sui-framework/packages/sui-framework", rev = "51d177ad7d65102fc368b582408f466d97b31548" }
 use_environment = "mainnet"
 manifest_digest = "CD547CB1ACCE0880C835DAED2D8FFCB91D56C833AE5240D3AA5B918398263195"
 deps = { MoveStdlib = "MoveStdlib_1" }
@@ -103,20 +109,14 @@ deps = { integer_library = "integer_library", integer_mate = "integer_mate", std
 [pinned.mainnet.cdpm]
 source = { root = true }
 use_environment = "mainnet"
-manifest_digest = "E88B6BD8B2C1859D58E0BD43F9E1A761F943F9E623F83D5112FD2FDE87D18E28"
-deps = { IntegerMate = "IntegerMate", MoveSTL = "MoveSTL", ScallopProtocol = "ScallopProtocol", X = "X", cetusdlmm = "cetusdlmm", kai_sav = "kai_sav", std = "MoveStdlib", sui = "Sui" }
+manifest_digest = "1C40AD2FF19110C31015DBE6B73344920ADCA89DBA09B6CF9CD4905EFAB68E6E"
+deps = { CetusDlmm = "CetusDlmm", IntegerMate = "IntegerMate", MoveSTL = "MoveSTL", ScallopProtocol = "ScallopProtocol", X = "X", kai_sav = "kai_sav", std = "MoveStdlib", sui = "Sui" }
 
 [pinned.mainnet.cetus_clmm]
 source = { local = "../kai-contracts/_vendor/Cetus/clmm-v13" }
 use_environment = "mainnet"
 manifest_digest = "F7C63F1ECF575145EBED2E2DBEEDFDFA65654D819BFD3482A0E92BF63E87668A"
 deps = { integer_mate = "integer_mate_1", move_stl = "move_stl", std = "MoveStdlib", sui = "Sui" }
-
-[pinned.mainnet.cetusdlmm]
-source = { local = "/tmp/cetus-dlmm-patched/packages/dlmm" }
-use_environment = "mainnet"
-manifest_digest = "1E932E9C4C15B3E671C5AACEE3107A26421CD5F431977EB48BE64EF5BE1AD9CA"
-deps = { IntegerMate = "IntegerMate", MoveSTL = "MoveSTL", std = "MoveStdlib", sui = "Sui" }
 
 [pinned.mainnet.deep]
 source = { local = "../kai-contracts/_vendor/coins/DEEP" }

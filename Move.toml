@@ -14,33 +14,19 @@ edition = "2024"         # edition = "legacy" to use legacy (pre-2024) Move
 # identifiers it already uses without an explicit `[addresses]` block
 # here.
 #
-# Patched cetusdlmm: identical to upstream `mainnet-v0.9.0` except for
-# one missing `use sui::vec_map;` import inside a `#[test_only]` helper
-# (`partner.move:193`) that breaks `sui move test`. Its `[package].name`
-# is also lowercased to `cetusdlmm` (see the patched Move.toml header)
-# so `sui-prover` accepts the lowercase dep key.
-cetusdlmm = { local = "/tmp/cetus-dlmm-patched/packages/dlmm", override = true }
+# Vendored from CetusProtocol/cetus-dlmm-interface mainnet-v0.9.0 at commit
+# 6667446c458506df0e63966477d73a29633a6867. The committed Published.toml
+# maps the stable original ID (0x5664...) to v9 (0x0489...). The only source
+# patch adds a missing test-only vec_map module import in partner.move.
+CetusDlmm = { local = "vendor/cetus-dlmm", override = true }
 IntegerMate = { git = "https://github.com/CetusProtocol/integer-mate.git", rev = "mainnet-v1.3.0", override = true, rename-from = "integer_mate" }
 MoveSTL = { git = "https://github.com/CetusProtocol/move-stl.git", rev = "mainnet-v1.3.0", override = true, rename-from = "move_stl" }
 ScallopProtocol = { local = "../sui-lending-protocol/contracts/protocol", override = true, rename-from = "protocol" }
 X = { local = "../sui-lending-protocol/contracts/libs/x", override = true, rename-from = "x" }
-# Patched kai_sav (sibling of upstream `kai/sav/core`). Upstream's Move.toml
-# uses `rename-from` on its Scallop deps, which `sui-prover` refuses; the
-# patched copy drops `rename-from` and renames the matching `use scallop_*`
-# imports in source files. Code is otherwise byte-identical to upstream.
-# Used for both `sui move build` and `sui-prover`. See the patched directory's
-# Move.toml header for the full diff scope.
 kai_sav = { local = "../kai-contracts/kai/sav/core-prover-patched" }
 
 [addresses]
-# Lowercased identifiers used by `use ...::` paths in `sources/cdpm.move`.
-# `protocol` and `x` are exported by the Scallop deps' own `[addresses]`
-# tables, but cdpm declares them again so the local source compiles
-# without relying on inherited address propagation. `kai_sav` is sourced
-# from the patched copy whose `[package].name` matches; the address below
-# is the upstream `published-at` of `kai/sav/core` (`0x909ad5...8474`).
+# Named addresses required by the current old-style dependency graph.
 protocol = "0xefe8b36d5b2e43728cc323298626b83177803521d195cfb11e15b910e892fddf"
 x = "0x779b5c547976899f5474f3a5bc0db36ddf4697ad7e5a901db0415c2281d28162"
 integer_mate = "0x714a63a0dba6da4f017b42d5d0fb78867f18bcde904868e51d951a5a6f5b7f57"
-# `kai_sav` is sourced as a named-address from the patched kai_sav
-# package itself (its `[package].name = "kai_sav"`); no entry here.

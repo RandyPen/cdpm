@@ -1,7 +1,7 @@
 # CDPM - Cetus DLMM Position Manager
 
-contract address: `0x07e37c7e54cc8c8a00d2db99070a49eb681dd4ae38b084d91a126903a645acb4`  
-package only_dep_upgrades: `HTCg6aiPebA1ifCVo7KYcxHvGWK7a4nuCpfBvLX8bRo7`
+contract address: `0x612dfd45a2e350995d492a59b595e64ec07a2253912f9eb22c2fd5947c6135d6`
+upgrade policy: `OnlyDep` (policy `192`; core bytecode permanently locked; tx digest `DUxRzUA7g5c8ahixdgXMhb3kSHfwvkUSZU8h7wcSAPUu`)
 
 > Shared object IDs (`FeeHouse`, `AccessList`, `AdminCap`, `GlobalRecord`) and the `Record` object type live in each skill's `reference/constants.md` so SDK callers can import them directly. See `skills/cdpm-user-sdk/reference/constants.md` for the canonical list.
 
@@ -250,20 +250,17 @@ example `u64::MAX` for "withdraw everything") and guarantees that dust from
 rounding never strands a bag entry. Downstream functions that require an exact
 amount (e.g. `pool::add_liquidity`) will still abort, so no funds can be lost.
 
-### D-05: Contract Is Locked to Dependency-Version Upgrades Only
-The CDPM package is published with the `only_dep_upgrades` upgrade policy
-(see the `package only_dep_upgrades:` line near the top of this README).
-`cdpm.move` bytecode is locked — no admin can change protocol logic — but
-dependency-version upgrades are permitted so the package can track new
-versions of Cetus DLMM, Scallop, and Kai SAV without a fresh deploy. The
+### D-05: Upgrade Policy
+The current CDPM package uses the irreversible `OnlyDep` upgrade policy
+(see the `upgrade policy:` line near the top of this README).
+The core `cdpm.move` bytecode cannot be changed; only dependency-version
+updates needed to track Cetus DLMM, Scallop, and Kai SAV remain possible. The
 admin levers are `admin_set_fee` (capped at 50%), `admin_transfer`, and the
 `admin_force_return_*` / `admin_force_close_pm` asset-evacuation escape hatch
 (D-12), which can only ever route assets to `pm.owner` — never to the admin.
 
-Rationale: users get guaranteed semantics on the cdpm side, and the contract
-can keep working when one of its dependency packages publishes a non-breaking
-upgrade. If a dependency ships a breaking type-identity change, a fresh cdpm
-deploy is still required.
+If a dependency ships a breaking type-identity change, a fresh cdpm deploy is
+still required.
 
 ### D-06: `user_close_pm` Drain-Preconditions Surface as cdpm Error Codes
 `user_close_pm` validates four drain-preconditions up front so the abort

@@ -18,7 +18,7 @@ dev-dependencies = [
   { id = "MoveSTL", name = "MoveSTL" },
   { id = "ScallopProtocol", name = "ScallopProtocol" },
   { id = "X", name = "X" },
-  { id = "cetusdlmm", name = "CetusDlmm" },
+  { id = "CetusDlmm", name = "CetusDlmm" },
 ]
 
 [[move.package]]
@@ -215,7 +215,7 @@ dependencies = [
   { id = "SuiProver", name = "SuiProver" },
   { id = "SuiSystem", name = "SuiSystem" },
   { id = "X", name = "X" },
-  { id = "cetusdlmm", name = "cetusdlmm" },
+  { id = "CetusDlmm", name = "CetusDlmm" },
   { id = "kai_sav", name = "kai_sav" },
 ]
 
@@ -234,8 +234,8 @@ dependencies = [
 ]
 
 [[move.package]]
-id = "cetusdlmm"
-source = { local = "/tmp/cetus-dlmm-patched/packages/dlmm" }
+id = "CetusDlmm"
+source = { local = "../vendor/cetus-dlmm" }
 
 dependencies = [
   { id = "DeepBook", name = "DeepBook" },

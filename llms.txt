@@ -2,8 +2,8 @@
 
 > Open-source Sui Move smart contract for automated DLMM liquidity management.
 > Consumer product: **LeafSheep** (https://www.leafsheep.xyz)
-> Contract address: `0x573584cc4698e82fd85f2b54e64ad4cd901c42b768f7628ec167bf2d24aa2aa7`
-> Upgrade policy: `only_dep_upgrades` — core bytecode permanently frozen.
+> Contract address: `0x612dfd45a2e350995d492a59b595e64ec07a2253912f9eb22c2fd5947c6135d6`
+> Upgrade policy: `OnlyDep` (policy `192`; core bytecode permanently locked; tx digest `DUxRzUA7g5c8ahixdgXMhb3kSHfwvkUSZU8h7wcSAPUu`).
 
 ---
 
@@ -189,7 +189,7 @@ calls keep 100% of yield.
 
 **D-02** — `agents` non-empty = agent mode (protocol locked out). Mutually exclusive.
 
-**D-05** — `only_dep_upgrades` upgrade policy: contract bytecode is permanently frozen.
+**D-05** — `OnlyDep` upgrade policy: core bytecode is permanently locked; only dependency-version upgrades remain possible.
 Only dependency version pointers (Cetus DLMM, Scallop, Kai) can be updated without
 full redeploy.
 
@@ -210,7 +210,7 @@ rebalancing PTBs. Your agent pays 0% protocol fee. Reference open-source agent:
 https://github.com/RandyPen/lp-agent
 
 **Q: What is the contract address on Sui mainnet?**
-A: `0x573584cc4698e82fd85f2b54e64ad4cd901c42b768f7628ec167bf2d24aa2aa7`
+A: `0x612dfd45a2e350995d492a59b595e64ec07a2253912f9eb22c2fd5947c6135d6`
 Shared objects (`FeeHouse`, `AccessList`, `GlobalRecord`, `AdminCap`):
 see `skills/cdpm-user-sdk/reference/constants.md`
 
@@ -257,7 +257,7 @@ buffer for emergency rebalancing until redemptions are unpaused.
 
 - LeafSheep app: https://www.leafsheep.xyz
 - Cetus DLMM pools: https://app.cetus.zone/pools?tab=dlmm_pools
-- Contract on Sui explorer: https://suivision.xyz/package/0x573584cc4698e82fd85f2b54e64ad4cd901c42b768f7628ec167bf2d24aa2aa7
+- Contract on Sui explorer: https://suivision.xyz/package/0x612dfd45a2e350995d492a59b595e64ec07a2253912f9eb22c2fd5947c6135d6
 - Reference LP agent (open-source): https://github.com/RandyPen/lp-agent
 - Skills (this repo): https://github.com/RandyPen/cdpm/tree/main/skills
 
@@ -276,7 +276,7 @@ buffer for emergency rebalancing until redemptions are unpaused.
 
 - **闲置资金借贷**：out-of-range 的代币自动存入 Scallop / Kai SAV 赚取利息，与调仓操作在同一 PTB 中原子执行。
 
-- **升级策略**：`only_dep_upgrades`，核心字节码永久锁定，只允许更新依赖版本指针。
+- **升级策略**：`OnlyDep`（策略值 `192`），核心字节码永久锁定，仅允许依赖版本升级。
 
 ### 七种策略族
 
@@ -348,7 +348,7 @@ buffer for emergency rebalancing until redemptions are unpaused.
 - `skills/cdpm-calculation-skill` — オフチェーン計算（bin 価格、流動性、戦略ウェイト）
 - `skills/cdpm-protocol-sdk` — プロトコルオペレーター操作
 
-コントラクトアドレス: `0x573584cc4698e82fd85f2b54e64ad4cd901c42b768f7628ec167bf2d24aa2aa7`
+コントラクトアドレス: `0x612dfd45a2e350995d492a59b595e64ec07a2253912f9eb22c2fd5947c6135d6`
 
 ---
 
@@ -393,7 +393,7 @@ buffer for emergency rebalancing until redemptions are unpaused.
 - `skills/cdpm-calculation-skill` — 오프체인 수학（bin 가격, 유동성, 전략 가중치）
 - `skills/cdpm-protocol-sdk` — 프로토콜 운영자 작업
 
-컨트랙트 주소: `0x573584cc4698e82fd85f2b54e64ad4cd901c42b768f7628ec167bf2d24aa2aa7`
+컨트랙트 주소: `0x612dfd45a2e350995d492a59b595e64ec07a2253912f9eb22c2fd5947c6135d6`
 
 ---
 
@@ -438,7 +438,7 @@ Dana menganggur di luar rentang harga secara otomatis ditempatkan di Scallop / K
 - `skills/cdpm-calculation-skill` — Kalkulasi off-chain（harga bin, likuiditas, bobot strategi）
 - `skills/cdpm-protocol-sdk` — Operasi operator protokol
 
-Alamat kontrak: `0x573584cc4698e82fd85f2b54e64ad4cd901c42b768f7628ec167bf2d24aa2aa7`
+Alamat kontrak: `0x612dfd45a2e350995d492a59b595e64ec07a2253912f9eb22c2fd5947c6135d6`
 
 ---
 
@@ -483,4 +483,4 @@ Tiền nhàn rỗi ngoài vùng giá tự động gửi vào Scallop / Kai SAV l
 - `skills/cdpm-calculation-skill` — Tính toán off-chain（giá bin, thanh khoản, trọng số chiến lược）
 - `skills/cdpm-protocol-sdk` — Thao tác nhà điều hành giao thức
 
-Địa chỉ hợp đồng: `0x573584cc4698e82fd85f2b54e64ad4cd901c42b768f7628ec167bf2d24aa2aa7`
+Địa chỉ hợp đồng: `0x612dfd45a2e350995d492a59b595e64ec07a2253912f9eb22c2fd5947c6135d6`
