@@ -119,7 +119,7 @@ async function getUserRecordId(
     const records = await client.listOwnedObjects({
       owner: userAddress,
       filter: {
-        StructType: `${CDPM_PACKAGE}::cdpm::Record`,
+        StructType: `${CDPM_ORIGINAL_PACKAGE}::cdpm::Record`,
       },
       include: { content: false },
     });
@@ -414,7 +414,7 @@ interface LiquidityRemoved {
 const unsubscribe = await client.subscribeEvent({
   filter: {
     MoveModule: {
-      package: CDPM_PACKAGE,
+      package: CDPM_ORIGINAL_PACKAGE,
       module: 'cdpm',
     },
   },

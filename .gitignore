@@ -6,3 +6,9 @@ Pub.*.toml
 *.md
 deck/
 sui-prover.log.*
+
+# Local deployment tooling and vendored protocol interfaces.
+.env
+.env.*
+/scripts/
+/vendor/

@@ -35,7 +35,7 @@ async function setFeeRate(
 
   const adminCaps = await client.listOwnedObjects({
     owner: signer.getPublicKey().toSuiAddress(),
-    filter: { StructType: `${CDPM_PACKAGE}::cdpm::AdminCap` },
+    filter: { StructType: `${CDPM_ORIGINAL_PACKAGE}::cdpm::AdminCap` },
   });
   const adminCapId = adminCaps.data[0].data?.objectId;
 
@@ -79,7 +79,7 @@ async function addProtocolAddress(
 
   const adminCaps = await client.listOwnedObjects({
     owner: signer.getPublicKey().toSuiAddress(),
-    filter: { StructType: `${CDPM_PACKAGE}::cdpm::AdminCap` },
+    filter: { StructType: `${CDPM_ORIGINAL_PACKAGE}::cdpm::AdminCap` },
   });
   const adminCapId = adminCaps.data[0].data?.objectId;
 
@@ -121,7 +121,7 @@ async function removeProtocolAddress(
 
   const adminCaps = await client.listOwnedObjects({
     owner: signer.getPublicKey().toSuiAddress(),
-    filter: { StructType: `${CDPM_PACKAGE}::cdpm::AdminCap` },
+    filter: { StructType: `${CDPM_ORIGINAL_PACKAGE}::cdpm::AdminCap` },
   });
   const adminCapId = adminCaps.data[0].data?.objectId;
 
@@ -168,7 +168,7 @@ async function collectProtocolFeesPTB(
 
   const adminCaps = await client.listOwnedObjects({
     owner: signer.getPublicKey().toSuiAddress(),
-    filter: { StructType: `${CDPM_PACKAGE}::cdpm::AdminCap` },
+    filter: { StructType: `${CDPM_ORIGINAL_PACKAGE}::cdpm::AdminCap` },
   });
   const adminCapId = adminCaps.data[0].data?.objectId;
 
@@ -210,7 +210,7 @@ async function collectProtocolFeesToAdmin(
 
   const adminCaps = await client.listOwnedObjects({
     owner: signer.getPublicKey().toSuiAddress(),
-    filter: { StructType: `${CDPM_PACKAGE}::cdpm::AdminCap` },
+    filter: { StructType: `${CDPM_ORIGINAL_PACKAGE}::cdpm::AdminCap` },
   });
   const adminCapId = adminCaps.data[0].data?.objectId;
 

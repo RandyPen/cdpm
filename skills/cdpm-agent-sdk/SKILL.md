@@ -9,7 +9,7 @@ description: TypeScript SDK guide for AI agents managing CDPM positions. Defines
 
 This guide is for AI agents authorized to manage CDPM positions on behalf of users. Agents have limited permissions and operate within specific boundaries.
 
-**Package Address**: `0x612dfd45a2e350995d492a59b595e64ec07a2253912f9eb22c2fd5947c6135d6` (OnlyDep upgrade policy, policy `192`; core bytecode locked; tx digest `DUxRzUA7g5c8ahixdgXMhb3kSHfwvkUSZU8h7wcSAPUu`). Publish details and created object IDs live in [`reference/constants.md`](reference/constants.md).
+**Latest Package Address (v2)**: `0x70bd7eee646217a77502985113eec7a1d9c02ce09a187e5e5f50078ad36a13dc`. Use this address for every `moveCall`. The original package/type address remains `0x612dfd45a2e350995d492a59b595e64ec07a2253912f9eb22c2fd5947c6135d6`; use it for object and event type filters. The v2 upgrade transaction is `Af6UArK3NcLXNWX5fNeitYBiAKdozHCuUh3qpMdUMevz` and links Cetus DLMM v10. The UpgradeCap retains the dependency-only policy (`192`). Full deployment details live in [`reference/constants.md`](reference/constants.md).
 
 ```typescript
 import { Transaction } from '@mysten/sui/transactions';

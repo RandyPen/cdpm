@@ -126,7 +126,7 @@ class AgentEventMonitor {
     this.unsubscribe = this.client.subscribeEvent({
       filter: {
         MoveEventModule: {
-          package: CDPM_PACKAGE,
+          package: CDPM_ORIGINAL_PACKAGE,
           module: 'cdpm',
         },
       },

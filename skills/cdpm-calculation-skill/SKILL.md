@@ -7,7 +7,7 @@ description: CDPM calculation utilities using Cetus DLMM SDK plus the Scallop an
 
 ## Overview
 
-This skill provides calculation utilities for CDPM (Cetus DLMM Position Manager) using the **Cetus DLMM SDK**, plus off-chain twins of **both** lending integrations' upstream math — Scallop (`scallop_*`) and Kai SAV (`kai_*`). All Cetus calculations should use the SDK for accuracy and to handle edge cases properly; the Scallop and Kai formulas mirror the upstream `protocol::mint` / `protocol::redeem` and `kai_vault::deposit` / `kai_vault::withdraw` math that cdpm composes into single-call entries. The two integrations share `pm.lending: Bag`, the same `fee_house.fee_rate` knob, and the same principal-amortization shape — only the predictors differ (Scallop reads `balance_sheet`, Kai reads `total_available_balance` + `total_yt_supply`).
+This skill provides calculation utilities for CDPM (Cetus DLMM Position Manager) using the **Cetus DLMM SDK**, plus off-chain twins of **both** lending integrations' upstream math — Scallop (`scallop_*`) and Kai SAV (`kai_*`). CDPM v2 (`0x70bd7eee646217a77502985113eec7a1d9c02ce09a187e5e5f50078ad36a13dc`) is built against Cetus DLMM v10 (`mainnet-v0.10.0`). All Cetus calculations should use the SDK for accuracy and to handle edge cases properly; the Scallop and Kai formulas mirror the upstream `protocol::mint` / `protocol::redeem` and `kai_vault::deposit` / `kai_vault::withdraw` math that cdpm composes into single-call entries. The two integrations share `pm.lending: Bag`, the same `fee_house.fee_rate` knob, and the same principal-amortization shape — only the predictors differ (Scallop reads `balance_sheet`, Kai reads `total_available_balance` + `total_yt_supply`).
 
 ## Installation
 

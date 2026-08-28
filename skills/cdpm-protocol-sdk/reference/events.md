@@ -184,32 +184,32 @@ interface KaiRedeemed {
 const unsubscribe = await client.subscribeEvent({
   filter: {
     MoveEventModule: {
-      package: CDPM_PACKAGE,
+      package: CDPM_ORIGINAL_PACKAGE,
       module: 'cdpm',
     },
   },
   onMessage: (event) => {
     switch (event.type) {
-      case `${CDPM_PACKAGE}::cdpm::FeeRateUpdated`:
+      case `${CDPM_ORIGINAL_PACKAGE}::cdpm::FeeRateUpdated`:
         console.log('Fee rate updated:', event.parsedJson);
         break;
-      case `${CDPM_PACKAGE}::cdpm::AccessGranted`:
+      case `${CDPM_ORIGINAL_PACKAGE}::cdpm::AccessGranted`:
         console.log('Access granted:', event.parsedJson);
         break;
-      case `${CDPM_PACKAGE}::cdpm::ProtocolFeeCollected`:
+      case `${CDPM_ORIGINAL_PACKAGE}::cdpm::ProtocolFeeCollected`:
         console.log('Protocol fees collected:', event.parsedJson);
         break;
-      case `${CDPM_PACKAGE}::cdpm::ProtocolRewardCollected`:
+      case `${CDPM_ORIGINAL_PACKAGE}::cdpm::ProtocolRewardCollected`:
         console.log('Protocol reward collected:', event.parsedJson);
         break;
-      case `${CDPM_PACKAGE}::cdpm::ScallopSupplied`:
-      case `${CDPM_PACKAGE}::cdpm::ScallopRedeemed`:
-      case `${CDPM_PACKAGE}::cdpm::KaiSupplied`:
-      case `${CDPM_PACKAGE}::cdpm::KaiRedeemed`:
+      case `${CDPM_ORIGINAL_PACKAGE}::cdpm::ScallopSupplied`:
+      case `${CDPM_ORIGINAL_PACKAGE}::cdpm::ScallopRedeemed`:
+      case `${CDPM_ORIGINAL_PACKAGE}::cdpm::KaiSupplied`:
+      case `${CDPM_ORIGINAL_PACKAGE}::cdpm::KaiRedeemed`:
         console.log('Lending event:', event.type, event.parsedJson);
         break;
-      case `${CDPM_PACKAGE}::cdpm::AgentPositionCreated`:
-      case `${CDPM_PACKAGE}::cdpm::AgentPositionDestroyed`:
+      case `${CDPM_ORIGINAL_PACKAGE}::cdpm::AgentPositionCreated`:
+      case `${CDPM_ORIGINAL_PACKAGE}::cdpm::AgentPositionDestroyed`:
         console.log('Agent position lifecycle event:', event.type, event.parsedJson);
         break;
     }

@@ -110,7 +110,7 @@ interface FeeCollected {
 // Subscribe to fee events
 const unsubscribe = await client.subscribeEvent({
   filter: {
-    MoveEventType: `${CDPM_PACKAGE}::cdpm::FeeCollected`,
+    MoveEventType: `${CDPM_ORIGINAL_PACKAGE}::cdpm::FeeCollected`,
   },
   onMessage: (event) => {
     console.log('Fees collected:', event.parsedJson);

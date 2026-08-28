@@ -14,10 +14,9 @@ edition = "2024"         # edition = "legacy" to use legacy (pre-2024) Move
 # identifiers it already uses without an explicit `[addresses]` block
 # here.
 #
-# Vendored from CetusProtocol/cetus-dlmm-interface mainnet-v0.9.0 at commit
-# 6667446c458506df0e63966477d73a29633a6867. The committed Published.toml
-# maps the stable original ID (0x5664...) to v9 (0x0489...). The only source
-# patch adds a missing test-only vec_map module import in partner.move.
+# Vendored from CetusProtocol/cetus-dlmm-interface mainnet-v0.10.0 at commit
+# 25c24f091faf3de0b515a04b5f5af061ca364f89. The committed Published.toml
+# maps the stable original ID (0x5664...) to v10 (0x6b98...).
 CetusDlmm = { local = "vendor/cetus-dlmm", override = true }
 IntegerMate = { git = "https://github.com/CetusProtocol/integer-mate.git", rev = "mainnet-v1.3.0", override = true, rename-from = "integer_mate" }
 MoveSTL = { git = "https://github.com/CetusProtocol/move-stl.git", rev = "mainnet-v1.3.0", override = true, rename-from = "move_stl" }
