@@ -4,6 +4,8 @@
 
 CDPM (Cetus DLMM Position Manager) is a proxy contract that sits between users and the Cetus DLMM protocol, providing additional functionality for liquidity management delegation, fee collection.
 
+Mainnet currently uses CDPM v3. [Deployment and type IDs](README.md#sui-mainnet) · [Dependency linkage](skills/cdpm-user-sdk/reference/constants.md#cdpm-v3-dependency-linkage)
+
 ### System Architecture
 ```
 ┌─────────────┐    ┌─────────────┐    ┌─────────────┐
@@ -40,15 +42,21 @@ public struct PositionManager has key {
     id: UID,                    // Unique identifier
     owner: address,             // Position owner (creator)
     agents: VecSet<address>,    // Authorized agent addresses
+    pool_id: ID,                // Cetus pool bound to this manager
     position: Option<Position>, // Underlying Cetus DLMM position
     balance: Bag,               // Token balances (String -> Balance<T>)
     fee: Bag,                   // Accumulated fees (String -> Balance<T>)
-    lending: Bag,               // Scallop sCoin holdings (String -> ScallopVault<T>)
+    lending: Bag,               // Scallop and Kai SAV vault entries
 }
 
 public struct ScallopVault<phantom T> has store {
     scoin: Balance<MarketCoin<T>>,   // Scallop sCoin, type-pinned to MarketCoin<T>
     principal: u64,                  // Underlying principal supplied (net of redemptions)
+}
+
+public struct KaiVault<phantom T, phantom YT> has store {
+    yt_balance: Balance<YT>,
+    principal: u64,
 }
 ```
 
@@ -201,7 +209,7 @@ These are intentional design choices. Front-ends and SDKs MUST surface them:
 
 2. **`user_close_pm` requires zero pending pool rewards (and empty bags).** Caller responsibility: invoke `user_collect_reward<CoinTypeA, CoinTypeB, R>` for **every** reward type the underlying pool emits, in the same PTB or earlier transactions, before calling `user_close_pm`. SDKs should query the pool's reward types and emit the matching collect calls automatically. cdpm reads the Cetus `PositionInfo.rewards_owned` vector via `pool::position_manager` → `position::borrow_position_info` → `position::info_rewards` and aborts with `EPositionHasRewards` (1007) if any entry is non-zero — so the abort surfaces as a cdpm error code rather than Cetus's `EPositionRewardNotZero`. The same up-front check applies to `pm.lending` (`ELendingNotEmpty`, 1004), `pm.balance` (`EBalanceNotEmpty`, 1008), and `pm.fee` (`EFeeNotEmpty`, 1009) — owners must drain all three bags before close.
 
-3. **`withdraw_from_balance` / `withdraw_from_fee` short-circuit `amount == 0` to `coin::zero<T>(ctx)`** (no Bag access). Single-sided `protocol_/agent_add_liquidity` therefore works without seeding the unused side. Callers requesting `amount > 0` of a type the PM has never held still abort with `ENoSuchBalance` (1010); SDKs should query the bag before requesting a positive withdraw.
+3. **`withdraw_from_balance` / `withdraw_from_fee` short-circuit `amount == 0` to `coin::zero<T>(ctx)`** (no Bag access). Single-sided `protocol_/agent_add_liquidity` therefore works without seeding the unused side. A positive amount for an absent type aborts with `ENoSuchBalance` (1006).
 
 ## Fee Mechanism
 
@@ -326,22 +334,18 @@ User/Agent/Protocol collects fees:
 ## Dependencies
 
 ### External Dependencies
-1. **CetusDlmm**: Patched mainnet-v0.9.0 (local path; one missing
-   `use sui::vec_map;` import added inside a `#[test_only]` helper at
-   `partner.move:193` to unblock `sui move test`. Production bytecode is
-   identical to upstream `mainnet-v0.9.0`. See `Move.toml` for the
-   patched path.)
+1. **Cetus DLMM core v10** uses the `mainnet-v0.10.1` interface.
    - `pool::` module for liquidity operations
    - `position::Position` structure + `position::borrow_position_info` /
      `position::info_rewards` for the in-contract reward-residual check
      used by `user_close_pm`
    - `versioned::Versioned` for upgrade compatibility
 
-2. **IntegerMate**: Mainnet-v1.3.0
-   - Integer utilities
+2. **IntegerMate** and **MoveSTL** provide integer and collection utilities.
+3. **Scallop Lending v20** and **X v2** use vendored interfaces with explicit mainnet package addresses.
+4. **Kai SAV v17** and **Kai Leverage v21** use the pinned Kunalabs source commit.
 
-3. **MoveSTL**: Mainnet-v1.3.0
-   - Standard template library
+See [Move.toml](Move.toml) and [Move.lock](Move.lock) for source pins.
 
 ### Sui Framework Dependencies
 - `sui::vec_set`: Address set management
@@ -406,20 +410,20 @@ require a fresh deploy.
 ### Upgrade Considerations
 
 The current deployment uses the irreversible `UpgradePolicy::DEP_ONLY (192)`
-and the publisher retains the restricted UpgradeCap (see `publish.md`). This
+and the publisher retains the restricted UpgradeCap (see [Published.toml](Published.toml)). This
 means:
 
 1. **Bytecode locked** — the published `cdpm.move` implementation cannot be
    changed.
 2. **Dependency upgrades allowed** — a follow-up `sui client upgrade` with
    the same source but a newer `cetusdlmm` / `protocol` / `kai_sav` /
-   `kai_leverage` version is accepted. Use case: Scallop bumps its
+   `kai_leverage` version can succeed when package and type compatibility checks pass. Use case: Scallop bumps its
    `Version`, or Cetus DLMM ships a non-breaking SDK update — neither
    requires touching cdpm source.
-3. **Position migration**: still supported via `user_get_position` /
-   `user_get_and_return_position` for the rare case where an upstream
-   protocol publishes a breaking new package and dep-only upgrade is
-   insufficient (a fresh cdpm deploy is then needed).
+3. **Position migration** — the owner can close their manager and redeploy
+   the returned coins. If an upstream change blocks closure, an admin can
+   return the raw Cetus position directly to the owner with
+   `admin_force_return_position`.
 4. **Admin emergency return (asset evacuation)** — the `admin_force_return_*`
    / `admin_force_close_pm` escape hatch lets the `AdminCap` holder force raw
    stored assets (balance, fee, raw `Position`, raw sCoin / YT) out of any PM
@@ -448,9 +452,8 @@ means:
 4. **Edge Case Tests**: Fee boundaries, empty states, error conditions
 
 ### Test Environment
-- Sui testnet/mainnet simulation
-- Mock Cetus DLMM dependencies
-- Comprehensive event validation
+- Local Move tests cover admin operations and lending bookkeeping. [Build and test commands](README.md#build-and-verify)
+- `sui-prover` verifies the admin fee-rate specification against the staged mainnet dependency graph. [Formal verification setup and scope](SPEC.md)
 
 ## Scallop Lending Integration (D-08 / D-09)
 
@@ -579,7 +582,7 @@ every other Scallop consumer takes — no more, no less.
 
 The cdpm DEP_ONLY policy adds a *new* trust assumption: the holder of cdpm's
 UpgradeCap can upgrade cdpm's dependency set. The cap should be transferred
-to a multisig (see `publish.md`) so dep upgrades require collective action.
+to a multisig so dependency upgrades require collective approval. [UpgradeCap ID](Published.toml)
 
 User mitigations:
 - **Don't trust Scallop? Don't supply.** Choose an agent / protocol bot
@@ -747,12 +750,10 @@ public struct KaiRedeemed      { pm_id, coin_type, yt_type, yt_burned,
 
 ## D-11: Scallop unification across cdpm and Kai
 
-cdpm and Kai both depend on Scallop's `protocol` package. The patched Kai
-source (`kai-contracts/kai/sav/core-prover-patched/Move.toml`) points its
-`protocol` dep at `../../../../sui-lending-protocol/contracts/protocol` —
-the same path cdpm uses. `sui move build` resolves a single `protocol`
-package; the on-chain deployment has a single Scallop `Version` shared
-object that both cdpm and Kai reference.
+CDPM and Kai both depend on Scallop's `protocol` package. The root Move
+manifest overrides the Scallop package and X library by package identity.
+The v3 linkage resolves one Scallop Lending v20 package and one X v2 package.
+The original type addresses are used for the shared objects and market coin types.
 
 `spool` remains at its `_vendor/Scallop/spool-v2` location because the
 standalone Scallop tree does not include a `spool` sub-package. Kai's
@@ -778,6 +779,4 @@ code.
 
 ---
 
-*Last Updated: 2026-02-28*
-*Design Document Version: 1.0*
-*Contract Version: As analyzed in `sources/cdpm.move`*
+*Last updated November 19, 2026 for CDPM mainnet v3*

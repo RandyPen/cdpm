@@ -103,13 +103,13 @@ Read the matrix in context of the four public lending entries:
 
 | Surface | Why | Mitigation |
 |---------|-----|------------|
-| **Inline fee/balance arithmetic** in `scallop_redeem` / `kai_redeem` | The fee formula is the spec; we'd need a separate axiomatic statement of "the documented fee model" to verify it, which is circular. | Unit-test coverage + code inspection. Blast radius is bounded by `pull_from_*_lending` conservation: any skim is `<= principal_portion <= pre_principal`. |
+| **Inline fee/balance arithmetic** in `scallop_redeem` / `kai_redeem` | The fee formula is the spec; we'd need a separate axiomatic statement of "the documented fee model" to verify it, which is circular. | Unit tests cover principal bookkeeping. The inline fee calculation is reviewed separately from the proof. |
 | **Lending helper accumulation / conservation** (`add_to_*_lending` / `pull_from_*_lending`) | Cross-package verification required `#[spec_only] public` wrappers, which shipped in production bytecode (Critical, 2026-08-18). Removed. | `#[test_only]` unit tests in `tests/cdpm_tests.move`. |
 | **External call returns** (`mint::mint`, `redeem::redeem`, `kai_vault::deposit`, `kai_vault::withdraw`, `klsp::withdraw`, `redeem_withdraw_ticket`) | External packages outside cdpm's prover scope. | Trust boundary acknowledged. Scallop / Kai are upstream-audited; cdpm faithfully forwards their returns. |
 | **Kai strategy loss** (`StrategyLossEvent` in `redeem_withdraw_ticket`) | Kai vault internal. | The cdpm fee carve gives `interest = 0` if `redeemed < principal_portion`, so a strategy-loss redeem charges no fee. |
 | **ACL** (`assert_caller_authorized`) | Standard `vec_set::contains` membership check; low intrinsic risk. | Not a money-flow property. |
 | **Cetus DLMM integration** (`protocol_*` / `agent_*`) | Crosses into Cetus's contracts. | Cetus is independently audited. |
-| **DEP_ONLY upgrade policy** | Off-chain package governance. | The current deployment uses OnlyDep policy `192`; transaction recorded in `publish.md`. |
+| **DEP_ONLY upgrade policy** | Off-chain package governance. | The current deployment uses OnlyDep policy `192`. [Mainnet deployment](README.md#sui-mainnet) |
 
 ## Spec Preconditions (Audit-Visible Assumptions)
 

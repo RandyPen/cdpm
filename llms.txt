@@ -2,7 +2,9 @@
 
 > Open-source Sui Move smart contract for automated DLMM liquidity management.
 > Consumer product: **LeafSheep** (https://www.leafsheep.xyz)
-> Contract address: `0x70bd7eee646217a77502985113eec7a1d9c02ce09a187e5e5f50078ad36a13dc`
+> Sui mainnet v3 Move call target `0xfd1832dffed42597f3237df3c43a1c88208ce6a65d8af7fc85c6df69229dcaae`
+> Original package ID for object and event type filters `0x612dfd45a2e350995d492a59b595e64ec07a2253912f9eb22c2fd5947c6135d6`
+> [Mainnet v3 upgrade transaction](https://suiscan.xyz/mainnet/tx/FsogpYwdxKERXMhF74HMhsGMtujND8PuR1cwza6z69ZA)
 > Upgrade policy: `OnlyDep` (policy `192`; core bytecode permanently locked; tx digest `DUxRzUA7g5c8ahixdgXMhb3kSHfwvkUSZU8h7wcSAPUu`).
 
 ---
@@ -16,7 +18,7 @@ then choose who operates that vault:
 
 - **Self** (owner key signs every tx)
 - **A custom AI agent** (any Sui address the owner authorises)
-- **The LeafSheep protocol** (built-in managed service, 20% fee on yield)
+- **The LeafSheep protocol** (built-in managed service with a configurable fee on DLMM collections)
 
 **Core DeFAI use-case:** An AI agent can be authorized to fully manage a user's Cetus
 DLMM position — rebalance bins, supply/redeem idle capital to lending protocols, and
@@ -35,13 +37,13 @@ between protocol and agent. The switch is enforced at the contract level via
 
 ### 1. Liquidity management
 - `user_deposit_liquidity` / `user_deposit_position` — open a new `PositionManager`
-- `user_add_liquidity` / `user_remove_liquidity` — owner-side bin management
+- `user_add_liquidity_to_position` / `user_remove_liquidity_from_position` — owner-side bin management
 - `protocol_add_liquidity` / `protocol_remove_liquidity` — managed-service path
 - `agent_add_liquidity` / `agent_remove_liquidity` — custom agent path
 
 ### 2. Fee and reward collection
 - `user_collect_fee` / `user_collect_reward` — 0% protocol charge
-- `protocol_collect_fee` / `protocol_collect_reward` — 20% protocol fee on yield
+- `protocol_collect_fee` / `protocol_collect_reward` — configured protocol fee on the collected amount
 - `agent_collect_fee` / `agent_collect_reward` — 0% protocol charge
 
 ### 3. Idle-capital lending (in-vault, atomic)
@@ -59,9 +61,9 @@ cdpm::kai_supply<T, YT>(access, pm, vault, amount, clock)
 cdpm::kai_redeem<T, ST, YT>(access, pm, fee_house, vault, strategy, supply_pool, yt_amount, clock)
 ```
 
-Yield on lending is treated as protocol income — 20% fee applies to the interest portion
-(principal returned intact). Agents and owners earn 100% of interest when self-managed
-paths are used via their own on-chain calls.
+Every Scallop or Kai redemption applies the current `FeeHouse.fee_rate` to positive
+interest, regardless of the caller. The initial rate is 20% and the maximum is 50%.
+Check the live `FeeHouse` before estimating proceeds.
 
 ### 4. Agent management
 ```move
@@ -78,11 +80,11 @@ user_close_pm(record, pm, pool, ...)        // close PM; requires empty balance/
 
 ## Permission Model
 
-| Tier | Rebalance liquidity | Withdraw funds | Lending supply/redeem | Protocol fee on yield |
+| Tier | Rebalance liquidity | Withdraw funds | Lending supply/redeem | Protocol fee on DLMM collections |
 |------|---------------------|---------------|----------------------|----------------------|
 | Owner (wallet key) | Yes | Yes | Yes | 0% |
 | Agent (authorised address) | Yes | No | Yes | 0% |
-| Protocol (LeafSheep, no agent set) | Yes | No | Yes | 20% |
+| Protocol (LeafSheep, no agent set) | Yes | No | Yes | Configured rate, initially 20% |
 | Admin (AdminCap holder) | Fee rate only | — | — | — |
 
 **Critical invariant (D-02):** `agents` is non-empty ↔ protocol is locked out. The two
@@ -97,7 +99,8 @@ public struct PositionManager has key {
     id: UID,
     owner: address,
     agents: VecSet<address>,     // non-empty = agent mode; empty = protocol mode
-    position: Position,          // underlying Cetus DLMM position
+    pool_id: ID,                 // Cetus pool bound to this manager
+    position: Option<Position>,  // underlying Cetus DLMM position, when open
     balance: Bag,                // coin balances keyed by type string
     fee: Bag,                    // accumulated fees
     lending: Bag,                // ScallopVault<T> / KaiVault<T,YT> entries
@@ -135,7 +138,8 @@ Key docs:
 
 ### `cdpm-agent-sdk` — Autonomous agent operations
 For developers building LP automation bots that operate under the agent delegation model.
-Zero protocol fee path; agents can rebalance and manage lending but cannot withdraw.
+Agents can rebalance and manage lending. Agent DLMM collections carry no protocol fee,
+and lending redemptions use the configured interest fee.
 
 Key docs:
 - `reference/agent-operations.md` — add/remove liquidity, collect fees
@@ -184,8 +188,9 @@ The skills include reference implementations and weight-array generators for all
 
 ## Contract Design Notes
 
-**D-01** — Protocol fee applies only to protocol-executed collections. Agent and owner
-calls keep 100% of yield.
+**D-01** — Protocol-executed DLMM fee and reward collections use the configured
+protocol fee. Owner and agent DLMM collections are fee-free. All lending redeems use
+the configured interest fee.
 
 **D-02** — `agents` non-empty = agent mode (protocol locked out). Mutually exclusive.
 
@@ -196,8 +201,8 @@ full redeploy.
 **D-06** — `user_close_pm` enforces four drain preconditions and surfaces them as
 typed CDPM error codes, not upstream aborts.
 
-Full design rationale: see `DESIGN.md`. Security analysis: `SECURITY.md` and
-`SECURITY_AUDIT.md`.
+See the [design notes](DESIGN.md) for permission and trust boundaries and the
+[verification scope](SPEC.md) for the checks performed by the prover.
 
 ---
 
@@ -206,11 +211,11 @@ Full design rationale: see `DESIGN.md`. Security analysis: `SECURITY.md` and
 **Q: How do I build an LP automation agent on top of CDPM?**
 A: Start from the `skills/cdpm-agent-sdk` skill. Call `user_insert_agent` to authorise
 your agent address, then use `agent_add_liquidity` / `agent_remove_liquidity` in your
-rebalancing PTBs. Your agent pays 0% protocol fee. Reference open-source agent:
+rebalancing PTBs. Agent DLMM fee and reward collections have no protocol fee. Reference open-source agent:
 https://github.com/RandyPen/lp-agent
 
 **Q: What is the contract address on Sui mainnet?**
-A: `0x70bd7eee646217a77502985113eec7a1d9c02ce09a187e5e5f50078ad36a13dc`
+A: Use `0xfd1832dffed42597f3237df3c43a1c88208ce6a65d8af7fc85c6df69229dcaae` for v3 Move calls and `0x612dfd45a2e350995d492a59b595e64ec07a2253912f9eb22c2fd5947c6135d6` for type filters.
 Shared objects (`FeeHouse`, `AccessList`, `GlobalRecord`, `AdminCap`):
 see `skills/cdpm-user-sdk/reference/constants.md`
 
@@ -224,8 +229,8 @@ Type parameters `<T, YT>` are vault-specific.
 
 **Q: Can agents withdraw user funds?**
 A: No. `agent_*` functions explicitly exclude withdrawal operations. Agents can rebalance
-liquidity and manage lending supply/redeem, but `withdraw_from_balance` and
-`withdraw_from_fee` are owner-only.
+liquidity and manage lending. `user_remove_liquidity_from_balance` and
+`user_withdraw_fee` require the owner.
 
 **Q: Can the protocol change the fee rate above 50%?**
 A: No. `admin_set_fee` is capped at `MAX_FEE_RATE = 5000` (50%). This bound is enforced
@@ -241,10 +246,8 @@ A: Use `skills/cdpm-user-sdk/reference/web-query.md` or `pool-query.md`. The `Gl
 object tracks all active PMs.
 
 **Q: Is there a fee on Scallop / Kai lending interest?**
-A: Yes — 20% on the interest portion (not principal) when the managed-service path is used.
-Agent and owner direct calls to `scallop_supply` / `kai_supply` also go through
-`assert_caller_authorized`, and the same 20% fee applies on redeem. Agents wanting
-zero-fee lending need to build their own direct Scallop/Kai integration outside CDPM.
+A: Yes. The configured `FeeHouse.fee_rate` applies to positive interest for owner,
+agent, and protocol redeems. The initial rate is 20%, capped at 50%.
 
 **Q: What happens if Scallop or Kai pauses redemptions?**
 A: The redeem PTB will abort at the upstream `vault::withdraw` / `redeem::redeem` call.
@@ -253,11 +256,26 @@ buffer for emergency rebalancing until redemptions are unpaused.
 
 ---
 
+## Build and verify CDPM v3
+
+The published v3 package links Cetus DLMM core v10 (interface tag
+`mainnet-v0.10.1`), Scallop Lending v20, Kai SAV v17, and Kai Leverage v21.
+See the [linked dependency package IDs](skills/cdpm-user-sdk/reference/constants.md#cdpm-v3-dependency-linkage).
+
+- Production build with `sui move build --build-env mainnet`.
+- Unit tests with `sui move test --build-env mainnet --package-size 64`.
+- Production bytecode check with `bash scripts/check_no_spec_symbols.sh`.
+- Administrative fee specification with `bun --no-env-file specs/verify.ts`. [Formal verification setup and scope](SPEC.md#how-to-reproduce)
+
 ## Links
+
+- [README](README.md) — deployment, build tools, and usage.
+- [API reference](API.md) — Move functions and event types.
+- [Design](DESIGN.md) — permission model, upgrade policy, and lending integration.
 
 - LeafSheep app: https://www.leafsheep.xyz
 - Cetus DLMM pools: https://app.cetus.zone/pools?tab=dlmm_pools
-- Contract on Sui explorer: https://suivision.xyz/package/0x70bd7eee646217a77502985113eec7a1d9c02ce09a187e5e5f50078ad36a13dc
+- Contract on Sui explorer: https://suivision.xyz/package/0xfd1832dffed42597f3237df3c43a1c88208ce6a65d8af7fc85c6df69229dcaae
 - Reference LP agent (open-source): https://github.com/RandyPen/lp-agent
 - Skills (this repo): https://github.com/RandyPen/cdpm/tree/main/skills
 
@@ -271,12 +289,14 @@ buffer for emergency rebalancing until redemptions are unpaused.
 
 - 用户将 Cetus DLMM 仓位存入 `PositionManager` 保险库，选择三种管理模式之一：
   1. **自管理**（Owner 密钥直接签名）
-  2. **AI 代理**（授权任意 Sui 地址，零协议费）
-  3. **叶羊协议托管**（自动调仓，收益 20% 协议费）
+  2. **AI 代理**（授权任意 Sui 地址，DLMM 收益领取免协议费）
+  3. **叶羊协议托管**（自动调仓，DLMM 手续费和奖励按配置收费，初始费率 20%）
 
 - **闲置资金借贷**：out-of-range 的代币自动存入 Scallop / Kai SAV 赚取利息，与调仓操作在同一 PTB 中原子执行。
 
 - **升级策略**：`OnlyDep`（策略值 `192`），核心字节码永久锁定，仅允许依赖版本升级。
+
+借贷赎回均按 `FeeHouse.fee_rate` 对正利息收费。Sui 主网 v3 调用地址为 `0xfd1832dffed42597f3237df3c43a1c88208ce6a65d8af7fc85c6df69229dcaae`。
 
 ### 七种策略族
 
@@ -292,11 +312,11 @@ buffer for emergency rebalancing until redemptions are unpaused.
 
 ### 权限表
 
-| 层级 | 调仓 | 提款 | 协议费 |
+| 层级 | 调仓 | 提款 | DLMM 收益领取协议费 |
 |------|------|------|--------|
 | Owner（用户钱包） | 是 | 是 | 0% |
 | Agent（授权地址） | 是 | 否 | 0% |
-| Protocol（叶羊，无 agent） | 是 | 否 | 20% |
+| Protocol（叶羊，无 agent） | 是 | 否 | 20% (default) |
 
 ### 开发者入口
 
@@ -316,10 +336,12 @@ buffer for emergency rebalancing until redemptions are unpaused.
 ユーザーは Cetus DLMM の流動性ポジションを `PositionManager` ボールトに預け入れ、3つの管理モードから選択できます：
 
 1. **自己管理**（オーナーキーで署名）
-2. **AI エージェント委任**（任意の Sui アドレスを認可、プロトコル手数料ゼロ）
-3. **リーフシープ プロトコル管理**（自動リバランス、収益の 20% を手数料として徴収）
+2. **AI エージェント委任**（任意の Sui アドレスを認可、DLMM の手数料・報酬の回収に対するプロトコル手数料はゼロ）
+3. **リーフシープ プロトコル管理**（自動リバランス、DLMM の回収に設定済みの手数料率を適用。初期値は 20%）
 
 遊休資金は Scallop / Kai SAV レンディングに自動供給され、リバランス操作と同一の Sui PTB 内でアトミックに実行されます。
+
+レンディングの償還では、すべての利用者に `FeeHouse.fee_rate` が正の利息に適用されます。
 
 ### 7つの戦略ファミリー
 
@@ -335,11 +357,11 @@ buffer for emergency rebalancing until redemptions are unpaused.
 
 ### 権限モデル
 
-| ティア | リバランス | 出金 | プロトコル手数料 |
+| ティア | リバランス | 出金 | DLMM の回収に対するプロトコル手数料 |
 |--------|-----------|------|----------------|
 | Owner（ユーザーウォレット） | ○ | ○ | 0% |
 | Agent（認可アドレス） | ○ | ✗ | 0% |
-| Protocol（リーフシープ、エージェントなし） | ○ | ✗ | 20% |
+| Protocol（リーフシープ、エージェントなし） | ○ | ✗ | 20% (default) |
 
 ### スキル（開発者 SDK）
 
@@ -348,7 +370,7 @@ buffer for emergency rebalancing until redemptions are unpaused.
 - `skills/cdpm-calculation-skill` — オフチェーン計算（bin 価格、流動性、戦略ウェイト）
 - `skills/cdpm-protocol-sdk` — プロトコルオペレーター操作
 
-コントラクトアドレス: `0x70bd7eee646217a77502985113eec7a1d9c02ce09a187e5e5f50078ad36a13dc`
+メインネット v3 の呼び出し先 `0xfd1832dffed42597f3237df3c43a1c88208ce6a65d8af7fc85c6df69229dcaae`
 
 ---
 
@@ -361,10 +383,12 @@ buffer for emergency rebalancing until redemptions are unpaused.
 사용자는 Cetus DLMM 유동성 포지션을 `PositionManager` 볼트에 예치하고 세 가지 관리 모드 중 하나를 선택합니다:
 
 1. **자체 관리**（오너 키로 직접 서명）
-2. **AI 에이전트 위임**（임의 Sui 주소 인가, 프로토콜 수수료 0%）
-3. **리프쉽 프로토콜 관리**（자동 리밸런싱, 수익의 20% 수수료）
+2. **AI 에이전트 위임**（임의 Sui 주소 인가, DLMM 수수료 및 보상 수령 시 프로토콜 수수료 0%）
+3. **리프쉽 프로토콜 관리**（자동 리밸런싱, DLMM 수령에 설정된 수수료율 적용. 초깃값 20%）
 
 유휴 자금은 Scallop / Kai SAV 렌딩에 자동 공급되며, 리밸런싱과 동일한 Sui PTB 내에서 원자적으로 실행됩니다.
+
+렌딩 상환 시 모든 호출자의 양의 이자에 `FeeHouse.fee_rate`가 적용됩니다.
 
 ### 7가지 전략 패밀리
 
@@ -380,11 +404,11 @@ buffer for emergency rebalancing until redemptions are unpaused.
 
 ### 권한 모델
 
-| 티어 | 리밸런싱 | 출금 | 프로토콜 수수료 |
+| 티어 | 리밸런싱 | 출금 | DLMM 수령 시 프로토콜 수수료 |
 |------|---------|------|--------------|
 | Owner（사용자 지갑） | O | O | 0% |
 | Agent（인가된 주소） | O | X | 0% |
-| Protocol（리프쉽, 에이전트 없음） | O | X | 20% |
+| Protocol（리프쉽, 에이전트 없음） | O | X | 20% (default) |
 
 ### 스킬 (개발자 SDK)
 
@@ -393,7 +417,7 @@ buffer for emergency rebalancing until redemptions are unpaused.
 - `skills/cdpm-calculation-skill` — 오프체인 수학（bin 가격, 유동성, 전략 가중치）
 - `skills/cdpm-protocol-sdk` — 프로토콜 운영자 작업
 
-컨트랙트 주소: `0x70bd7eee646217a77502985113eec7a1d9c02ce09a187e5e5f50078ad36a13dc`
+메인넷 v3 호출 패키지 `0xfd1832dffed42597f3237df3c43a1c88208ce6a65d8af7fc85c6df69229dcaae`
 
 ---
 
@@ -406,10 +430,12 @@ buffer for emergency rebalancing until redemptions are unpaused.
 Pengguna menyimpan posisi likuiditas Cetus DLMM ke dalam vault `PositionManager` dan memilih satu dari tiga mode pengelolaan:
 
 1. **Kelola sendiri**（owner key menandatangani setiap tx）
-2. **Delegasi ke AI agent**（otorisasi alamat Sui mana pun, biaya protokol 0%）
-3. **Layanan terkelola LeafSheep**（rebalancing otomatis, biaya 20% dari imbal hasil）
+2. **Delegasi ke AI agent**（otorisasi alamat Sui mana pun, biaya protokol 0% untuk pengambilan fee dan reward DLMM）
+3. **Layanan terkelola LeafSheep**（rebalancing otomatis, tarif terkonfigurasi pada pengambilan fee dan reward DLMM. Tarif awal 20%）
 
 Dana menganggur di luar rentang harga secara otomatis ditempatkan di Scallop / Kai SAV lending, dieksekusi secara atomik dalam satu PTB Sui bersama dengan rebalancing.
+
+Pada penebusan lending, `FeeHouse.fee_rate` berlaku atas bunga positif untuk semua pemanggil.
 
 ### 7 Keluarga Strategi
 
@@ -425,11 +451,11 @@ Dana menganggur di luar rentang harga secara otomatis ditempatkan di Scallop / K
 
 ### Model Izin
 
-| Tingkat | Rebalancing | Tarik dana | Biaya protokol |
+| Tingkat | Rebalancing | Tarik dana | Biaya protokol saat mengambil fee dan reward DLMM |
 |---------|------------|-----------|---------------|
 | Owner（dompet pengguna） | Ya | Ya | 0% |
 | Agent（alamat yang diotorisasi） | Ya | Tidak | 0% |
-| Protocol（LeafSheep, tanpa agent） | Ya | Tidak | 20% |
+| Protocol（LeafSheep, tanpa agent） | Ya | Tidak | 20% (default) |
 
 ### Skills (SDK Developer)
 
@@ -438,7 +464,7 @@ Dana menganggur di luar rentang harga secara otomatis ditempatkan di Scallop / K
 - `skills/cdpm-calculation-skill` — Kalkulasi off-chain（harga bin, likuiditas, bobot strategi）
 - `skills/cdpm-protocol-sdk` — Operasi operator protokol
 
-Alamat kontrak: `0x70bd7eee646217a77502985113eec7a1d9c02ce09a187e5e5f50078ad36a13dc`
+Paket panggilan mainnet v3 `0xfd1832dffed42597f3237df3c43a1c88208ce6a65d8af7fc85c6df69229dcaae`
 
 ---
 
@@ -451,10 +477,12 @@ Alamat kontrak: `0x70bd7eee646217a77502985113eec7a1d9c02ce09a187e5e5f50078ad36a1
 Người dùng gửi vị thế thanh khoản Cetus DLMM vào vault `PositionManager` và chọn một trong ba chế độ quản lý:
 
 1. **Tự quản lý**（khóa owner ký mọi giao dịch）
-2. **Ủy quyền cho AI agent**（ủy quyền bất kỳ địa chỉ Sui nào, phí giao thức 0%）
-3. **Dịch vụ quản lý LeafSheep**（tự động rebalancing, phí 20% trên lợi nhuận）
+2. **Ủy quyền cho AI agent**（ủy quyền bất kỳ địa chỉ Sui nào, phí giao thức 0% khi thu phí và phần thưởng DLMM）
+3. **Dịch vụ quản lý LeafSheep**（tự động rebalancing, áp dụng mức phí cấu hình khi thu phí và phần thưởng DLMM. Mức ban đầu 20%）
 
 Tiền nhàn rỗi ngoài vùng giá tự động gửi vào Scallop / Kai SAV lending, thực hiện nguyên tử trong cùng một Sui PTB với rebalancing.
+
+Khi tất toán khoản cho vay, mọi người gọi đều trả phí theo `FeeHouse.fee_rate` trên phần lãi dương.
 
 ### 7 Gia đình chiến lược
 
@@ -470,11 +498,11 @@ Tiền nhàn rỗi ngoài vùng giá tự động gửi vào Scallop / Kai SAV l
 
 ### Mô hình quyền hạn
 
-| Cấp | Rebalancing | Rút tiền | Phí giao thức |
+| Cấp | Rebalancing | Rút tiền | Phí giao thức khi thu phí và phần thưởng DLMM |
 |-----|------------|---------|--------------|
 | Owner（ví người dùng） | Có | Có | 0% |
 | Agent（địa chỉ được ủy quyền） | Có | Không | 0% |
-| Protocol（LeafSheep, không có agent） | Có | Không | 20% |
+| Protocol（LeafSheep, không có agent） | Có | Không | 20% (default) |
 
 ### Skills (SDK cho nhà phát triển)
 
@@ -483,4 +511,4 @@ Tiền nhàn rỗi ngoài vùng giá tự động gửi vào Scallop / Kai SAV l
 - `skills/cdpm-calculation-skill` — Tính toán off-chain（giá bin, thanh khoản, trọng số chiến lược）
 - `skills/cdpm-protocol-sdk` — Thao tác nhà điều hành giao thức
 
-Địa chỉ hợp đồng: `0x70bd7eee646217a77502985113eec7a1d9c02ce09a187e5e5f50078ad36a13dc`
+Gói gọi mainnet v3 `0xfd1832dffed42597f3237df3c43a1c88208ce6a65d8af7fc85c6df69229dcaae`

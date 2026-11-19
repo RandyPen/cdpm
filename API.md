@@ -6,6 +6,9 @@ This document is the canonical reference for the public functions in
 `sources/cdpm.move`. It is kept in lock-step with that file; if anything
 here disagrees with the source, the source wins.
 
+Use the mainnet v3 package for calls and the original package ID for struct
+and event type filters. [Mainnet package and type IDs](README.md#sui-mainnet)
+
 ## Permission Levels
 
 | Level | Identifier | Key Functions |
@@ -28,7 +31,12 @@ here disagrees with the source, the source wins.
 | 1006 | `ENoSuchBalance` | `withdraw_from_balance` / `withdraw_from_fee` for an absent type |
 | 1007 | `EPositionHasRewards` | `user_close_pm` called with unclaimed Cetus pool rewards |
 | 1008 | `EBalanceNotEmpty` | `user_close_pm` called with non-empty `balance` Bag |
-| 1009 | `EFeeNotEmpty` | `user_close_pm` called with non-empty `fee` Bag |
+| 1009 | `EFeeNotEmpty` | PM fee bag must be empty before closure |
+| 1010 | `EPositionAlreadyExists` | A position is already open when an agent attempts to open one |
+| 1011 | `ENoPosition` | The operation requires an open position |
+| 1012 | `EWrongPool` | The pool supplied to the operation differs from the PM's bound pool |
+| 1013 | `EPositionStillActive` | Admin closure requires the position to be removed first |
+| 1014 | `ENoSuchRecordEntry` | The PM ID is absent from the supplied Record |
 
 ---
 
@@ -67,6 +75,18 @@ public fun unregister_record(
 ```
 Emits `RecordDeleted`.
 
+### `user_remove_record_entry`
+
+A Record holder can remove a stale PM ID after an admin closes the PM.
+This updates the Record entry and emits `RecordEntryRemoved`.
+
+```move
+public fun user_remove_record_entry(
+    record: &mut Record,
+    pm_id: ID,
+);
+```
+
 ---
 
 ## User Functions (owner-only)
@@ -92,8 +112,7 @@ public fun user_deposit_liquidity<CoinTypeA, CoinTypeB>(
 Emits `PositionManagerCreated`.
 
 ### `user_deposit_position`
-Wraps an existing Cetus `Position` (e.g. produced by a previous extract)
-into a new PM.
+Wraps a caller-owned Cetus `Position` in a new PM bound to that position’s pool.
 
 ```move
 public fun user_deposit_position(
@@ -103,22 +122,6 @@ public fun user_deposit_position(
 );
 ```
 Emits `PositionManagerCreated`.
-
-### `user_get_and_return_position` / `user_get_position`
-Owner-only escape hatch for Cetus DLMM upgrades. Extracts the underlying
-`Position` out of the PM (`pm.position` becomes `None`). The PM shell can
-then be closed via `user_close_pm` (no position branch); a re-injection
-flow uses a fresh PM via `user_deposit_position`.
-
-```move
-public fun user_get_and_return_position(
-    pm: &mut PositionManager,
-    ctx: &TxContext,
-): Position;
-
-public fun user_get_position(pm: &mut PositionManager, ctx: &TxContext);
-```
-Emits `PositionExtract`.
 
 ### `user_add_liquidity_to_position`
 Adds liquidity from the caller's `Coin<CoinTypeA>` / `Coin<CoinTypeB>` into
@@ -356,20 +359,22 @@ Emits `FeeTransferredToBalance`.
 
 ## Agent Functions (`pm.agents` allow-list)
 
-Mirror of `protocol_*` minus the protocol-fee cut. Functionally same set
-of operations; income lands in `pm.fee` directly without the AccessList
-check.
+Agent functions require the caller to be in `pm.agents`. DLMM fee and reward
+collections credit the full amount to `pm.fee`. Agent lending redeems use the
+same interest fee described in the next section.
 
 | Function | Event |
 |----------|-------|
+| `agent_create_position` | `AgentPositionCreated` |
+| `agent_destroy_position` | `AgentPositionDestroyed` |
 | `agent_add_liquidity` | `AgentLiquidityAdded` |
 | `agent_remove_liquidity` | `AgentLiquidityRemoved` |
 | `agent_collect_fee` | `AgentFeeCollected` |
 | `agent_collect_reward` | `AgentRewardCollected` |
 | `agent_transfer_fee_to_balance` | `FeeTransferredToBalance` |
 
-Signatures match the corresponding `protocol_*` shape minus
-`access: &AccessList`. See `sources/cdpm.move:957-1107`.
+See the [agent operation guide](skills/cdpm-agent-sdk/reference/agent-operations.md)
+for call arguments, including opening and closing an agent-managed Cetus position.
 
 ---
 
@@ -500,12 +505,30 @@ public fun admin_remove_access_list(_: &AdminCap, access: &mut AccessList, bot: 
 ```
 Emit `AccessGranted` / `AccessRevoked`.
 
+### Emergency asset returns
+
+These functions require an `AdminCap`. Their recipients are fixed to `pm.owner`.
+
+| Function | Effect |
+|----------|--------|
+| `admin_force_return_balance<T>` | Transfer the full PM balance of type `T` to the owner |
+| `admin_force_return_fee<T>` | Transfer the full PM fee balance of type `T` to the owner |
+| `admin_force_return_position` | Transfer the raw Cetus position to the owner |
+| `admin_force_return_scallop<T>` | Redeem the full Scallop entry and transfer net underlying to the owner |
+| `admin_force_return_kai<T, ST, YT>` | Redeem the full Kai entry and transfer net underlying to the owner |
+| `admin_force_close_pm` | Destroy an empty PM after the position and all bag entries have been removed |
+
+The lending returns apply the configured rate to positive interest. After an
+admin closes a PM, the Record holder can remove its stale ID with
+`user_remove_record_entry`. [Admin operation signatures and order](skills/cdpm-protocol-sdk/reference/admin-operations.md)
+
 ---
 
 ## Events
 
-Position lifecycle: `PositionManagerCreated`, `PositionExtract`,
-`PositionManagerClosed`, `RecordCreated`, `RecordDeleted`.
+Position lifecycle includes `PositionManagerCreated`, `PositionManagerClosed`,
+`AgentPositionCreated`, `AgentPositionDestroyed`, `RecordCreated`, `RecordDeleted`,
+and `RecordEntryRemoved`.
 
 Liquidity: `LiquidityAdded`, `LiquidityRemoved`, `ProtocolLiquidityAdded`,
 `ProtocolLiquidityRemoved`, `AgentLiquidityAdded`, `AgentLiquidityRemoved`.
@@ -520,8 +543,8 @@ Agent: `AgentAdded`, `AgentRemoved`.
 
 Lending: `ScallopSupplied`, `ScallopRedeemed`, `KaiSupplied`, `KaiRedeemed`.
 
-Admin: `FeeRateUpdated`, `AccessGranted`, `AccessRevoked`,
-`AdminTransferred`.
+Admin events include `FeeRateUpdated`, `AccessGranted`, `AccessRevoked`,
+`AdminTransferred`, `AdminAssetReturned`, and `AdminPositionReturned`.
 
 Sender address is NOT a field on any event — the transaction's `sender`
 metadata is the canonical source.
@@ -542,5 +565,5 @@ metadata is the canonical source.
 
 - `DESIGN.md` — architecture, permission model, lending integration
 - `SPEC.md` — formal verification scope and reproducible spec run
-- `publish.md` — current deployment state and dep-upgrade procedure
-- `SECURITY.md` — security analysis (historical F-01..F-04 retained for record)
+- [Published.toml](Published.toml) — current mainnet publication metadata
+- [Mainnet constants](skills/cdpm-user-sdk/reference/constants.md) — package deployment, dependency linkage, and shared object IDs
