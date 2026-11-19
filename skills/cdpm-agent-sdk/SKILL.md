@@ -9,7 +9,7 @@ description: TypeScript SDK guide for AI agents managing CDPM positions. Defines
 
 This guide is for AI agents authorized to manage CDPM positions on behalf of users. Agents have limited permissions and operate within specific boundaries.
 
-**Latest Package Address (v2)**: `0x70bd7eee646217a77502985113eec7a1d9c02ce09a187e5e5f50078ad36a13dc`. Use this address for every `moveCall`. The original package/type address remains `0x612dfd45a2e350995d492a59b595e64ec07a2253912f9eb22c2fd5947c6135d6`; use it for object and event type filters. The v2 upgrade transaction is `Af6UArK3NcLXNWX5fNeitYBiAKdozHCuUh3qpMdUMevz` and links Cetus DLMM v10. The UpgradeCap retains the dependency-only policy (`192`). Full deployment details live in [`reference/constants.md`](reference/constants.md).
+**Latest Package Address (v3)**: `0xfd1832dffed42597f3237df3c43a1c88208ce6a65d8af7fc85c6df69229dcaae`. Use this address for every `moveCall`. The original package/type address remains `0x612dfd45a2e350995d492a59b595e64ec07a2253912f9eb22c2fd5947c6135d6`; use it for object and event type filters. The v3 upgrade transaction is `FsogpYwdxKERXMhF74HMhsGMtujND8PuR1cwza6z69ZA` and links Cetus DLMM v10, Scallop Lending v20, Kai SAV v17, and Kai Leverage v21. The UpgradeCap retains the dependency-only policy (`192`). Full deployment details live in [`reference/constants.md`](reference/constants.md).
 
 ```typescript
 import { Transaction } from '@mysten/sui/transactions';

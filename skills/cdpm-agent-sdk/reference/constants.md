@@ -1,12 +1,14 @@
 # Constants
 
+The [CDPM deployment reference](../../cdpm-user-sdk/reference/constants.md#cdpm-v3-dependency-linkage) lists the verified versions and package IDs used by CDPM v3.
+
 ```typescript
 const CDPM_AGENT_CONSTANTS = {
   // Use PACKAGE_ID for moveCall targets. Types remain anchored to ORIGINAL_PACKAGE_ID.
-  PACKAGE_ID: '0x70bd7eee646217a77502985113eec7a1d9c02ce09a187e5e5f50078ad36a13dc',
+  PACKAGE_ID: '0xfd1832dffed42597f3237df3c43a1c88208ce6a65d8af7fc85c6df69229dcaae',
   ORIGINAL_PACKAGE_ID: '0x612dfd45a2e350995d492a59b595e64ec07a2253912f9eb22c2fd5947c6135d6',
-  PACKAGE_VERSION: 2,
-  UPGRADE_TX_DIGEST: 'Af6UArK3NcLXNWX5fNeitYBiAKdozHCuUh3qpMdUMevz',
+  PACKAGE_VERSION: 3,
+  UPGRADE_TX_DIGEST: 'FsogpYwdxKERXMhF74HMhsGMtujND8PuR1cwza6z69ZA',
   
   // Default thresholds
   DEFAULT_AUTO_COMPOUND_THRESHOLD: 1000000n,  // Minimum fees to compound
@@ -20,9 +22,9 @@ const CDPM_AGENT_CONSTANTS = {
 
 // CDPM Object IDs (Mainnet)
 const CDPM_MAINNET = {
-  PACKAGE_ID:        '0x70bd7eee646217a77502985113eec7a1d9c02ce09a187e5e5f50078ad36a13dc',
+  PACKAGE_ID:        '0xfd1832dffed42597f3237df3c43a1c88208ce6a65d8af7fc85c6df69229dcaae',
   ORIGINAL_PACKAGE_ID: '0x612dfd45a2e350995d492a59b595e64ec07a2253912f9eb22c2fd5947c6135d6',
-  PACKAGE_VERSION:   2,
+  PACKAGE_VERSION:   3,
   UPGRADE_CAP_ID:    '0x1911fd176418f917d5f052f04e3dc5c8f4bca9aa8da60fe52001c8e4bb44b6b0',
   FEE_HOUSE_ID:      '0x6b0eee9fd3cc4ffbc9aaab3cbac7e0613314b13e3ca0aad20db90f61d157d43e',
   ACCESS_LIST_ID:    '0x07e2be66038a86dde7430e22f57c6d1e34ba3badd9323bd4bbec568554eb4fe0',

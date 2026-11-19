@@ -2,8 +2,9 @@
 
 ## Status
 
-**1 specification, passing** (`sui-prover` 2.8.5 bottle).
-`Verification successful`.
+The current mainnet dependency set passes `admin_set_fee_spec` with
+`sui-prover` 1.5.3. The verification runner resolves the two Wormhole
+packages separately and checks both original on-chain addresses.
 
 > **2026-08-18 security advisory:** the four lending-helper specs
 > (`spec_call_add_to_*_lending_spec` / `spec_call_pull_from_*_lending_spec`)
@@ -143,55 +144,29 @@ The `requires(...)` clauses encode assumptions the prover takes for granted.
 
 ## How to Reproduce
 
+From the repository root, with Bun, Sui CLI 1.84, and `sui-prover` installed:
+
 ```bash
-# One-time setup (Homebrew tap).
 brew install asymptotic-code/sui-prover/sui-prover
-
-# Run the prover.
-cd /path/to/cdpm/specs
-sui-prover --skip-fetch-latest-git-deps
+bun --no-env-file specs/verify.ts
 ```
 
-Expected last line:
+A successful run ends with `Verification successful`. The runner builds
+CDPM with the mainnet dependency graph in `Move.lock`, then stages the
+compiled source set and the specification in a temporary directory. It uses
+the source maps from that build to recover each package's original address.
 
-```
-Verification successful
-```
+The legacy prover resolver requires unique package and address names in its
+input. In the staged copies, the Pyth Pro branch uses `pyth_pro` and
+`wormhole_simple_majority`, retaining both original addresses alongside
+the Pyth core and token bridge references. The runner copies the upstream
+test modules required by dependency declarations and adapts two APIs for the
+older prover framework. It uses the original `dynamic_field::exists_`
+name and the same quotient-and-remainder expression for `div_ceil`.
 
-Regular `sui move build` of the production package still works and is
-unaffected by the spec scaffolding:
-
-```bash
-cd /path/to/cdpm
-sui move build
-```
-
-(The chain package contains **no** `#[spec_only]` items — no warnings. All
-spec support uses `#[test_only]` getters, which the compiler strips.)
-
-### Required upstream patches
-
-These patches are documented here so the verification chain is reproducible.
-
-1. **`CetusDlmm`** — vendored at `vendor/cetus-dlmm` from official
-   `mainnet-v0.9.0` commit `6667446c458506df0e63966477d73a29633a6867`,
-   with one missing `use sui::vec_map;` added in a `#[test_only]` helper.
-   The official `Published.toml` is retained so builds resolve mainnet v9.
-
-2. **`kai_sav`** — patched copy at
-   `../kai-contracts/kai/sav/core-prover-patched` that drops `rename-from`
-   on Scallop deps (sui-prover refuses `rename-from`). After the
-   direct-integration refactor, this patched copy also points `protocol`
-   at `../sui-lending-protocol/contracts/protocol` so the system has a
-   single on-chain Scallop package.
-
-3. **`kai_leverage` test helper** — sui-prover bundles an older Move stdlib
-   that lacks `std::u128::div_ceil`. The test file
-   `kai-contracts/kai/leverage/core/tests/position_core/macros/standard_flow.move:53`
-   uses `u128.div_ceil(...)`. A small inline helper
-   `fun u128_div_ceil(a, b) { (a + b - 1) / b }` is substituted for that
-   call to let sui-prover finish model building. Production `sui move build`
-   skips upstream `tests/` and is unaffected.
+The runner compiles the CDPM implementation and its current specification
+without editing either. Production builds use the root `Move.toml` and
+`Move.lock`.
 
 ## Spec Support in `cdpm.move`
 
@@ -225,12 +200,12 @@ One production-code change was carried over from the pre-refactor spec:
 
 ## Files
 
-- `specs/Move.toml` — spec package manifest (prover-only).
+- `specs/verify.ts` — builds and stages dependencies, then runs the proof.
+- `specs/Move.toml` — manifest copied into the temporary verification package.
 - `specs/sources/cdpm_spec.move` — 1 spec function targeting `cdpm::*`
   (admin fee-rate gate; lending-helper proofs removed 2026-08-18).
 - `sources/cdpm.move` — production source. No `#[spec_only]` items;
   spec support uses `#[test_only]` getters only.
 - `tests/cdpm_tests.move` — unit tests for the lending helpers
   (accumulation / conservation) via the `#[test_only]` wrappers.
-- `Move.toml` — production manifest. Deps use PascalCase + `rename-from`
-  for sui-prover compatibility (stricter than `sui` CLI on dep keys).
+- `Move.toml` and `Move.lock` — production dependency manifest and pins.

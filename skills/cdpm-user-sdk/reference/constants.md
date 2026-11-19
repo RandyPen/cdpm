@@ -4,10 +4,10 @@
 
 ```typescript
 // Latest package: use for every moveCall target.
-const CDPM_PACKAGE = '0x70bd7eee646217a77502985113eec7a1d9c02ce09a187e5e5f50078ad36a13dc';
+const CDPM_PACKAGE = '0xfd1832dffed42597f3237df3c43a1c88208ce6a65d8af7fc85c6df69229dcaae';
 // Original package: use for StructType, MoveEventType, and type-string matching.
 const CDPM_ORIGINAL_PACKAGE = '0x612dfd45a2e350995d492a59b595e64ec07a2253912f9eb22c2fd5947c6135d6';
-const CDPM_PACKAGE_VERSION = 2;
+const CDPM_PACKAGE_VERSION = 3;
 const FEE_DENOMINATOR = 10000;
 const DEFAULT_FEE_RATE = 2000; // 20%
 const MAX_FEE_RATE = 5000;     // 50% — enforced cap in admin_set_fee
@@ -17,31 +17,39 @@ Deployment references:
 
 - publish tx digest: `7EEna8x2u9HtcRXg66P2neDgwpugYEpGrykGHAgfVE92`
 - OnlyDep tx digest: `DUxRzUA7g5c8ahixdgXMhb3kSHfwvkUSZU8h7wcSAPUu`
-- v2 upgrade tx digest: `Af6UArK3NcLXNWX5fNeitYBiAKdozHCuUh3qpMdUMevz`
-- v2 Cetus DLMM dependency: `mainnet-v0.10.0`, published-at `0x6b989f9b05bd11a00f1c7779443d66802c5e71631f59e87be5d2a616991f151e`
+- v3 upgrade transaction on 2026-11-19 [FsogpYwdxKERXMhF74HMhsGMtujND8PuR1cwza6z69ZA](https://suiscan.xyz/mainnet/tx/FsogpYwdxKERXMhF74HMhsGMtujND8PuR1cwza6z69ZA)
 - upgrade policy: `OnlyDep` (policy `192`)
 
-The publish transaction created the following top-level objects:
+### CDPM v3 dependency linkage
+
+| Dependency | On-chain version | Published package ID |
+|---|---:|---|
+| Cetus DLMM core (`mainnet-v0.10.1` interface) | 10 | `0x6b989f9b05bd11a00f1c7779443d66802c5e71631f59e87be5d2a616991f151e` |
+| Scallop Lending | 20 | `0x560a9732944dbed51a46036558e452431c25392765e7e3da02506bc6a226c825` |
+| Kai SAV | 17 | `0xcf5d0f55b02304f03b99a89372567a4072c944ceb718764c502b34c7b8dfd6ae` |
+| Kai Leverage | 21 | `0xed2d91715c74fe7ec5a8d063cfe6bc21b90d9451c26eb90c03605b10fadd68dd` |
+
+### CDPM packages and objects
 
 | Object | ID | Ownership |
 |---|---|---|
 | Original package/type ID | `0x612dfd45a2e350995d492a59b595e64ec07a2253912f9eb22c2fd5947c6135d6` | Immutable; type origin for structs and events |
-| Latest package (v2) | `0x70bd7eee646217a77502985113eec7a1d9c02ce09a187e5e5f50078ad36a13dc` | Immutable; function-call target |
+| Latest package (v3) | `0xfd1832dffed42597f3237df3c43a1c88208ce6a65d8af7fc85c6df69229dcaae` | Immutable; function-call target |
 | UpgradeCap | `0x1911fd176418f917d5f052f04e3dc5c8f4bca9aa8da60fe52001c8e4bb44b6b0` | Address-owned; OnlyDep policy `192` |
 | AdminCap | `0xbd562a1faf253105f57fee2248c41c7117691b73e9be93c0fe7fc2b5be13d484` | Address-owned |
 | FeeHouse | `0x6b0eee9fd3cc4ffbc9aaab3cbac7e0613314b13e3ca0aad20db90f61d157d43e` | Shared; initial shared version `970148035` |
 | AccessList | `0x07e2be66038a86dde7430e22f57c6d1e34ba3badd9323bd4bbec568554eb4fe0` | Shared; initial shared version `970148035` |
 | GlobalRecord | `0xd084326ff85a03dac0de7316f7e4b56c26e80694a1908ed43336a19802681059` | Shared; initial shared version `970148035` |
 
-The transaction also created embedded `Bag` UIDs `0x517bb6a3f7cc9012d0ace21208086dd98c34acbdf4275062837a3698c5c50a38` (`FeeHouse.fee`) and `0xefad90a9675745d1cb4426a52dd126d4e1d7cd26ec592b5bffbe06480bc92142` (`GlobalRecord.record`). They are child UIDs, not standalone object arguments.
+The initial publish also created embedded UIDs `0x517bb6a3f7cc9012d0ace21208086dd98c34acbdf4275062837a3698c5c50a38` (`FeeHouse.fee`) and `0xefad90a9675745d1cb4426a52dd126d4e1d7cd26ec592b5bffbe06480bc92142` (`GlobalRecord.record`). Read them through their parent objects.
 
 ## CDPM Object IDs (Mainnet)
 
 ```typescript
 const CDPM_MAINNET = {
-  PACKAGE_ID:        '0x70bd7eee646217a77502985113eec7a1d9c02ce09a187e5e5f50078ad36a13dc',
+  PACKAGE_ID:        '0xfd1832dffed42597f3237df3c43a1c88208ce6a65d8af7fc85c6df69229dcaae',
   ORIGINAL_PACKAGE_ID: '0x612dfd45a2e350995d492a59b595e64ec07a2253912f9eb22c2fd5947c6135d6',
-  PACKAGE_VERSION:   2,
+  PACKAGE_VERSION:   3,
   UPGRADE_CAP_ID:    '0x1911fd176418f917d5f052f04e3dc5c8f4bca9aa8da60fe52001c8e4bb44b6b0',
   FEE_HOUSE_ID:      '0x6b0eee9fd3cc4ffbc9aaab3cbac7e0613314b13e3ca0aad20db90f61d157d43e',
   ACCESS_LIST_ID:    '0x07e2be66038a86dde7430e22f57c6d1e34ba3badd9323bd4bbec568554eb4fe0',

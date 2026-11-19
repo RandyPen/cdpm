@@ -9,7 +9,7 @@ description: TypeScript SDK guide for CDPM protocol integration and management. 
 
 CDPM (Cetus DLMM Position Manager) protocol layer provides managed liquidity services with fee extraction. This guide covers protocol integration, admin operations, and architecture details.
 
-**Latest Package Address (v2)**: `0x70bd7eee646217a77502985113eec7a1d9c02ce09a187e5e5f50078ad36a13dc`. Use it for `moveCall` targets. Use the original package/type address `0x612dfd45a2e350995d492a59b595e64ec07a2253912f9eb22c2fd5947c6135d6` for object and event type filters. Upgrade transaction `Af6UArK3NcLXNWX5fNeitYBiAKdozHCuUh3qpMdUMevz` links Cetus DLMM v10 and retains dependency-only policy `192`. Full deployment details live in [`../cdpm-user-sdk/reference/constants.md`](../cdpm-user-sdk/reference/constants.md).
+**Latest Package Address (v3)**: `0xfd1832dffed42597f3237df3c43a1c88208ce6a65d8af7fc85c6df69229dcaae`. Use it for `moveCall` targets. Use the original package/type address `0x612dfd45a2e350995d492a59b595e64ec07a2253912f9eb22c2fd5947c6135d6` for object and event type filters. Upgrade transaction `FsogpYwdxKERXMhF74HMhsGMtujND8PuR1cwza6z69ZA` links Cetus DLMM v10, Scallop Lending v20, Kai SAV v17, and Kai Leverage v21, and retains dependency-only policy `192`. Full deployment details live in [`../cdpm-user-sdk/reference/constants.md`](../cdpm-user-sdk/reference/constants.md).
 
 ```typescript
 import { Transaction } from '@mysten/sui/transactions';
@@ -54,21 +54,18 @@ See `cdpm-calculation` skill for complete reference with formulas and best pract
 
 ### Move.toml Configuration
 
+To depend on a sibling checkout of CDPM, use the modern Move package format. CDPM pins its own upstream dependencies.
+
 ```toml
 [package]
-name = "YourProtocol"
-version = "1.0.0"
-edition = "2024.beta"
+name = "your_protocol"
+edition = "2024"
 
 [dependencies]
-CetusDlmm = { git = "https://github.com/CetusProtocol/cetus-dlmm-interface.git", subdir = "packages/dlmm", rev = "mainnet-v0.10.0" }
-IntegerMate = { git = "https://github.com/CetusProtocol/integer-mate.git", rev = "mainnet-v1.3.0" }
-MoveSTL = { git = "https://github.com/CetusProtocol/move-stl.git", rev = "mainnet-v1.3.0" }
-CDPM = { git = "https://github.com/your-repo/cdpm.git", rev = "main" }
-
-[addresses]
-your_protocol = "0x0"
+cdpm = { local = "../cdpm" }
 ```
+
+When maintaining CDPM itself, confirm the publication in [Published.toml](../../Published.toml) and run the proof separately with `bun --no-env-file specs/verify.ts` from the repository root. Use the root Move package for production builds and run `bash scripts/check_no_spec_symbols.sh` to check for leaked proof or test helpers. [Formal verification instructions](../../SPEC.md#how-to-reproduce)
 
 ### Querying Protocol State
 

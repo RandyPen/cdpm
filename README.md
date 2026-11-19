@@ -576,7 +576,7 @@ cdpm/
 sui move build
 
 # Run tests (when implemented)
-sui move test
+sui move test --build-env mainnet --package-size 64
 ```
 
 ## Documentation

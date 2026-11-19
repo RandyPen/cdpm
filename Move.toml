@@ -1,31 +1,17 @@
 [package]
 name = "cdpm"
-edition = "2024"         # edition = "legacy" to use legacy (pre-2024) Move
-# license = ""           # e.g., "MIT", "GPL", "Apache 2.0"
-# authors = ["..."]      # e.g., ["Joe Smith (joesmith@noemail.com)", "John Snow (johnsnow@noemail.com)"]
+edition = "2024"
 
 [dependencies]
-# Dep keys match each upstream package's `[package].name` exactly.
-# `sui-prover` (asymptotic.tech) validates strict equality between the
-# dep key and the upstream `[package].name`; the upstream Move CLI
-# resolves the in-source `use <addr>::...` references via each dep's
-# own `[addresses]` section (e.g. `IntegerMate` package exports
-# `integer_mate = "0x..."`), so cdpm source can keep the lowercase
-# identifiers it already uses without an explicit `[addresses]` block
-# here.
-#
-# Vendored from CetusProtocol/cetus-dlmm-interface mainnet-v0.10.0 at commit
-# 25c24f091faf3de0b515a04b5f5af061ca364f89. The committed Published.toml
-# maps the stable original ID (0x5664...) to v10 (0x6b98...).
-CetusDlmm = { local = "vendor/cetus-dlmm", override = true }
-IntegerMate = { git = "https://github.com/CetusProtocol/integer-mate.git", rev = "mainnet-v1.3.0", override = true, rename-from = "integer_mate" }
-MoveSTL = { git = "https://github.com/CetusProtocol/move-stl.git", rev = "mainnet-v1.3.0", override = true, rename-from = "move_stl" }
-ScallopProtocol = { local = "../sui-lending-protocol/contracts/protocol", override = true, rename-from = "protocol" }
-X = { local = "../sui-lending-protocol/contracts/libs/x", override = true, rename-from = "x" }
-kai_sav = { local = "../kai-contracts/kai/sav/core-prover-patched" }
+# Cetus core v10, using the mainnet-v0.10.1 interface.
+cetusdlmm = { local = "vendor/cetus-dlmm", override = true }
+integer_mate = { git = "https://github.com/CetusProtocol/integer-mate.git", rev = "09a12d9b171122883d9350039d4ed6e8400033b9", override = true }
+MoveSTL = { git = "https://github.com/CetusProtocol/move-stl.git", rev = "0681fec63a310ae753d03a06f7c05d3e2925bb09", override = true, rename-from = "move_stl" }
 
-[addresses]
-# Named addresses required by the current old-style dependency graph.
-protocol = "0xefe8b36d5b2e43728cc323298626b83177803521d195cfb11e15b910e892fddf"
-x = "0x779b5c547976899f5474f3a5bc0db36ddf4697ad7e5a901db0415c2281d28162"
-integer_mate = "0x714a63a0dba6da4f017b42d5d0fb78867f18bcde904868e51d951a5a6f5b7f57"
+# Scallop lending v20 and its X v2 dependency.
+protocol = { local = "vendor/scallop/protocol", override = true }
+x = { local = "vendor/scallop/x", override = true }
+
+# Kai SAV v17 and Leverage v21. Both are used directly by CDPM.
+kai_sav = { git = "https://github.com/kunalabs-io/sui-smart-contracts.git", subdir = "kai/sav/core", rev = "ded11b33ee88cb6dcd4ea1b1b96c66e20d035ef4" }
+kai_leverage = { git = "https://github.com/kunalabs-io/sui-smart-contracts.git", subdir = "kai/leverage/core", rev = "ded11b33ee88cb6dcd4ea1b1b96c66e20d035ef4" }

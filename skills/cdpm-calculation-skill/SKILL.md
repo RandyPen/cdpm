@@ -7,7 +7,9 @@ description: CDPM calculation utilities using Cetus DLMM SDK plus the Scallop an
 
 ## Overview
 
-This skill provides calculation utilities for CDPM (Cetus DLMM Position Manager) using the **Cetus DLMM SDK**, plus off-chain twins of **both** lending integrations' upstream math — Scallop (`scallop_*`) and Kai SAV (`kai_*`). CDPM v2 (`0x70bd7eee646217a77502985113eec7a1d9c02ce09a187e5e5f50078ad36a13dc`) is built against Cetus DLMM v10 (`mainnet-v0.10.0`). All Cetus calculations should use the SDK for accuracy and to handle edge cases properly; the Scallop and Kai formulas mirror the upstream `protocol::mint` / `protocol::redeem` and `kai_vault::deposit` / `kai_vault::withdraw` math that cdpm composes into single-call entries. The two integrations share `pm.lending: Bag`, the same `fee_house.fee_rate` knob, and the same principal-amortization shape — only the predictors differ (Scallop reads `balance_sheet`, Kai reads `total_available_balance` + `total_yt_supply`).
+CDPM v3 (`0xfd1832dffed42597f3237df3c43a1c88208ce6a65d8af7fc85c6df69229dcaae`) links Cetus DLMM v10, Scallop Lending v20, Kai SAV v17, and Kai Leverage v21. [Mainnet dependency linkage](../cdpm-user-sdk/reference/constants.md#cdpm-v3-dependency-linkage)
+
+Use the Cetus DLMM SDK for liquidity and price calculations. The Scallop and Kai SAV references explain how to estimate the results of CDPM’s lending calls. Both integrations share `pm.lending: Bag`, `fee_house.fee_rate`, and the same principal amortization formula. Scallop estimates redemptions from `balance_sheet`. Kai SAV uses `total_available_balance` and `total_yt_supply`.
 
 ## Installation
 

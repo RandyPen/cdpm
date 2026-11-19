@@ -11,4 +11,6 @@ sui-prover.log.*
 .env
 .env.*
 /scripts/
-/vendor/
+/vendor/*
+!/vendor/scallop/
+!/vendor/scallop/README.md

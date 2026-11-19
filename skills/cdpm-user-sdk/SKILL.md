@@ -9,7 +9,7 @@ description: TypeScript SDK guide for CDPM (Cetus DLMM Position Manager) end-use
 
 CDPM (Cetus DLMM Position Manager) is a proxy contract for managing Cetus DLMM positions with support for user self-management, agent delegation, protocol-managed operations, and two optional lending integrations for idle funds: **Scallop** (single-generic `<T>` market coin) and **Kai SAV** (two-generic `<T, YT>` strategy-aggregating vault). Both integrations share `pm.lending: Bag` and a single `fee_house.fee_rate` knob.
 
-**Latest Package Address (v2)**: `0x70bd7eee646217a77502985113eec7a1d9c02ce09a187e5e5f50078ad36a13dc`. Use this address for `moveCall` targets. The original package/type address is `0x612dfd45a2e350995d492a59b595e64ec07a2253912f9eb22c2fd5947c6135d6` and remains required for object/event type filters. Upgrade transaction `Af6UArK3NcLXNWX5fNeitYBiAKdozHCuUh3qpMdUMevz` links Cetus DLMM v10. Full deployment details live in [`reference/constants.md`](reference/constants.md).
+**Latest Package Address (v3)**: `0xfd1832dffed42597f3237df3c43a1c88208ce6a65d8af7fc85c6df69229dcaae`. Use this address for `moveCall` targets. The original package/type address is `0x612dfd45a2e350995d492a59b595e64ec07a2253912f9eb22c2fd5947c6135d6` and remains required for object/event type filters. Upgrade transaction `FsogpYwdxKERXMhF74HMhsGMtujND8PuR1cwza6z69ZA` links Cetus DLMM v10, Scallop Lending v20, Kai SAV v17, and Kai Leverage v21. Full deployment details live in [`reference/constants.md`](reference/constants.md).
 
 > The `PositionManager` struct contains a `lending: Bag` holding both Scallop `ScallopVault<T>` entries (keyed by `type_name<T>`) and Kai SAV `KaiVault<T, YT>` entries (keyed by `type_name<YT>`) — both can coexist on a single PM. See [Scallop Lending](reference/scallop-lending.md) and [Kai SAV Lending](reference/kai-lending.md) for end-user PTB recipes.
 
@@ -32,7 +32,7 @@ const client = new SuiGrpcClient({
   network: 'mainnet',
 });
 // Function calls target the latest upgraded package.
-const CDPM_PACKAGE = '0x70bd7eee646217a77502985113eec7a1d9c02ce09a187e5e5f50078ad36a13dc';
+const CDPM_PACKAGE = '0xfd1832dffed42597f3237df3c43a1c88208ce6a65d8af7fc85c6df69229dcaae';
 // Struct and event types stay anchored to the original package.
 const CDPM_ORIGINAL_PACKAGE = '0x612dfd45a2e350995d492a59b595e64ec07a2253912f9eb22c2fd5947c6135d6';
 ```

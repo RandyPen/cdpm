@@ -1,9 +1,8 @@
 // CDPM Formal Verification Specs (sui-prover / asymptotic.tech).
 //
 // This module is compiled ONLY by `sui-prover`. Regular `sui move build`
-// must NOT see this package — its `Move.toml` is the verification toolchain
-// entry point. See ../../SPEC.md for property descriptions and reproduce
-// instructions.
+// must NOT see this package. Run `bun --no-env-file specs/verify.ts` from
+// the repository root. See ../../SPEC.md for the verified properties.
 //
 // All specs target functions in `cdpm::cdpm`. Private-field reads route
 // through `#[test_only]` accessors in `cdpm.move` — the official pattern
@@ -43,8 +42,8 @@ const SPEC_MAX_FEE_RATE: u128 = 5000;
 // ---------------------------------------------------------------------------
 // P-FeeRateBound + P-FeeCap
 //
-//   admin_set_fee aborts iff (fee_rate as u128) > 3000.
-//   On success, fee_house.fee_rate == fee_rate (and therefore <= 3000).
+//   admin_set_fee aborts iff (fee_rate as u128) > 5000.
+//   On success, fee_house.fee_rate == fee_rate (and therefore <= 5000).
 // ---------------------------------------------------------------------------
 #[spec(prove, target = cdpm::admin_set_fee)]
 public fun admin_set_fee_spec(
