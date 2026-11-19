@@ -1,9 +1,15 @@
 # CDPM - Cetus DLMM Position Manager
 
-contract address: `0x612dfd45a2e350995d492a59b595e64ec07a2253912f9eb22c2fd5947c6135d6`
-upgrade policy: `OnlyDep` (policy `192`; core bytecode permanently locked; tx digest `DUxRzUA7g5c8ahixdgXMhb3kSHfwvkUSZU8h7wcSAPUu`)
+## Sui Mainnet
 
-> Shared object IDs (`FeeHouse`, `AccessList`, `AdminCap`, `GlobalRecord`) and the `Record` object type live in each skill's `reference/constants.md` so SDK callers can import them directly. See `skills/cdpm-user-sdk/reference/constants.md` for the canonical list.
+| Package | Address | Use |
+|---|---|---|
+| CDPM v3 | `0xfd1832dffed42597f3237df3c43a1c88208ce6a65d8af7fc85c6df69229dcaae` | Move call targets |
+| Original CDPM package | `0x612dfd45a2e350995d492a59b595e64ec07a2253912f9eb22c2fd5947c6135d6` | Object and event type filters |
+
+CDPM v3 was deployed on November 19, 2026 under the dependency-only upgrade policy (`192`). [Mainnet upgrade transaction](https://suiscan.xyz/mainnet/tx/FsogpYwdxKERXMhF74HMhsGMtujND8PuR1cwza6z69ZA) · [Publication metadata](Published.toml)
+
+Find the shared object IDs, capability IDs, and dependency package addresses in the [mainnet constants reference](skills/cdpm-user-sdk/reference/constants.md).
 
 ## Overview
 
@@ -47,15 +53,21 @@ public struct PositionManager has key {
     id: UID,
     owner: address,             // Position owner
     agents: VecSet<address>,    // Authorized agents
-    position: Position,         // Cetus DLMM position
+    pool_id: ID,                // Cetus DLMM pool bound to this manager
+    position: Option<Position>, // Cetus DLMM position, when open
     balance: Bag,               // Token balances (String -> Balance<T>)
     fee: Bag,                   // Accumulated fees (String -> Balance<T>)
-    lending: Bag,               // Scallop sCoin holdings (String -> ScallopVault<T>)
+    lending: Bag,               // Scallop and Kai SAV vault entries
 }
 
 public struct ScallopVault<phantom T> has store {
     scoin: Balance<MarketCoin<T>>,   // Scallop sCoin (type-pinned to MarketCoin<T>)
     principal: u64,                  // Underlying principal supplied (net of redemptions)
+}
+
+public struct KaiVault<phantom T, phantom YT> has store {
+    yt_balance: Balance<YT>,
+    principal: u64,
 }
 ```
 
@@ -101,11 +113,15 @@ Four-tier permission model:
 - Move development environment
 - Access to Sui network (testnet/mainnet)
 
-### Deployment
+### Use the deployed package
+
+Build transactions targeting the v3 package above. The [CDPM User SDK guide](skills/cdpm-user-sdk/SKILL.md) covers position management, agent authorization, and lending.
+
+### Publish a separate deployment
 
 1. **Build the contract**:
    ```bash
-   sui move build
+   sui move build --build-env mainnet
    ```
 
 2. **Publish the package**:
@@ -558,26 +574,31 @@ cdpm/
 ├── sources/
 │   └── cdpm.move          # Main contract
 ├── tests/
-│   └── cdpm_tests.move    # Test suite (to be implemented)
+│   ├── cdpm_admin_tests.move
+│   └── cdpm_tests.move
+├── specs/                 # Formal verification runner and specifications
 ├── Move.toml              # Package configuration
-└── Move.lock             # Dependency lock
+├── Move.lock              # Dependency lock
+└── Published.toml         # Mainnet publication metadata
 ```
 
 ### Dependencies
-- **CetusDlmm**: Cetus DLMM interface (patched mainnet-v0.9.0 — see `Move.toml`)
-- **IntegerMate**: Integer utilities (mainnet-v1.3.0)
-- **MoveSTL**: Move standard template library (mainnet-v1.3.0)
-- **ScallopProtocol** / **X**: Scallop lending protocol (local sibling checkout — see `Move.toml`)
-- **kai_sav**: Kai Single-Asset Vault (patched local sibling — see `Move.toml`)
+- **Cetus DLMM core v10** uses the `mainnet-v0.10.1` interface and the pinned IntegerMate and MoveSTL libraries.
+- **Scallop Lending v20** uses the vendored Scallop interface and X v2.
+- **Kai SAV v17** and **Kai Leverage v21** use the same pinned upstream commit.
 
-### Building and Testing
+See the [dependency manifest](Move.toml) for source pins and the [v3 dependency linkage](skills/cdpm-user-sdk/reference/constants.md#cdpm-v3-dependency-linkage) for on-chain package addresses.
+
+### Build and verify
+
 ```bash
-# Build contract
-sui move build
-
-# Run tests (when implemented)
+sui move build --build-env mainnet
 sui move test --build-env mainnet --package-size 64
+bash scripts/check_no_spec_symbols.sh
+bun --no-env-file specs/verify.ts
 ```
+
+The formal verification command requires Bun and `sui-prover`. It verifies `admin_set_fee_spec` in a temporary directory. The bytecode check scans the production build for leaked verification and test helpers. [Formal verification setup and scope](SPEC.md#how-to-reproduce)
 
 ## Documentation
 
@@ -606,6 +627,5 @@ For issues, questions, or security concerns:
 
 ---
 
-*Last Updated: 2026-02-28*
-*Contract Version: As deployed*
+*Last updated November 19, 2026*
 *Documentation Version: 1.0*
